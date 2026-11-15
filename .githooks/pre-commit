@@ -1,0 +1,33 @@
+#!/bin/sh
+# Pre-commit hook. `pnpm install` wires it through the `prepare` script in package.json.
+#
+# Runs the format check, the linter and the type check, in that order, and stops at the
+# first one that fails. It checks the files on disk, staged or not. The slower checks
+# run in `pnpm check`, which CI runs. See the `check` script in package.json for the list.
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Runs one check. If it fails, says which check, how to reproduce it and what not to do.
+# Usage: check <name> <command...>
+check() {
+  name=$1
+  shift
+  "$@" && return 0
+  cat >&2 <<EOF
+
+pre-commit: the $name check failed, so nothing was committed.
+
+Reproduce it with:
+  $*
+
+Fix what it reports, then commit again. Do not get past this check another way:
+  - Do not pass --no-verify.
+  - Do not delete or change this hook.
+  - Do not add a suppression without a reason.
+EOF
+  exit 1
+}
+
+check format pnpm fmt:check
+check lint pnpm lint
+check type pnpm typecheck

@@ -1,0 +1,28 @@
+{
+  "name": "letterbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --ignore-pattern lint/fixtures",
+    "lint:selftest": "node lint/selftest.ts",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "scenarios": "node packages/harness/src/run.ts",
+    "check": "pnpm fmt:check && pnpm typecheck && pnpm lint && pnpm lint:selftest && pnpm selfcheck:sim-provider && pnpm scenarios && pnpm scenarios:selftest",
+    "selfcheck:sim-provider": "node packages/sim-provider/src/selfcheck.ts",
+    "scenarios:selftest": "node packages/harness/src/mutations.ts"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "^1.93.0",
+    "@types/node": "^24.19.2",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
+    "typescript": "~7.0.2"
+  },
+  "engines": {
+    "node": ">=24.11"
+  },
+  "packageManager": "pnpm@11.10.0"
+}

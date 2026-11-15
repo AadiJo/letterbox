@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "oxc", "unicorn", "import"],
+  "jsPlugins": ["./lint/index.ts"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "options": {
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "rules": {
+    "eslint/eqeqeq": "error",
+    "typescript/no-explicit-any": "error",
+    // Off on purpose. The core pushes changes one at a time so they reach the provider in the
+    // order the user made them, and it reads pages in order. Awaiting in a loop is how that is
+    // written. This rule's advice, Promise.all, would break both.
+    "eslint/no-await-in-loop": "off",
+    "letterbox/require-suppression-reason": "error",
+    "letterbox/no-cross-package-relative-import": "error"
+  },
+  // lint/fixtures is ignored by the `lint` script, not here. No command-line flag overrides
+  // this list, and `pnpm lint:selftest` has to lint the fixtures with this same file.
+  "ignorePatterns": ["node_modules", "artifacts", "data"],
+  // Rules that hold for some folders only. Each one also lists its own fixture folder, so
+  // `pnpm lint:selftest` checks the rule through this file, the way real code meets it.
+  "overrides": [
+    {
+      "files": ["packages/core/src/**", "packages/protocol/src/**", "lint/fixtures/no-provider-names/**"],
+      "rules": { "letterbox/no-provider-names": "error" }
+    },
+    {
+      "files": ["packages/core/src/**", "packages/protocol/src/**", "lint/fixtures/no-stdout-in-core/**"],
+      "rules": { "letterbox/no-stdout-in-core": "error" }
+    },
+    {
+      "files": ["packages/harness/scenarios/**", "lint/fixtures/scenario-threads-through-fixtures/**"],
+      "rules": { "letterbox/scenario-threads-through-fixtures": "error" }
+    },
+    {
+      "files": ["packages/core/src/**", "lint/fixtures/no-ambient-time-or-randomness/**"],
+      // The one place that may read the clock and make random ids, and its stand-in fixture.
+      "excludeFiles": ["packages/core/src/clock.ts", "lint/fixtures/no-ambient-time-or-randomness/clock.ts"],
+      "rules": { "letterbox/no-ambient-time-or-randomness": "error" }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@letterbox/sim-provider",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./server": "./src/server.ts",
+    "./client": "./src/client.ts"
+  },
+  "dependencies": {
+    "@letterbox/core": "workspace:*",
+    "@letterbox/protocol": "workspace:*"
+  }
+}

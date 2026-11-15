@@ -1,0 +1,12 @@
+{
+  "name": "@letterbox/protocol",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/protocol.ts",
+    "./parse": "./src/parse.ts"
+  },
+  "dependencies": {
+    "arktype": "^2.2.9"
+  }
+}

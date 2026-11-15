@@ -1,0 +1,11 @@
+{
+  "name": "@letterbox/lint",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@oxlint/plugins": "^1.93.0"
+  }
+}

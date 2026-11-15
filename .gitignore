@@ -1,0 +1,9 @@
+node_modules
+*.tsbuildinfo
+.DS_Store
+
+# Written by `pnpm scenarios`: one transcript per scenario run.
+artifacts
+
+# Local stores made by running the core by hand.
+data

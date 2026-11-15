@@ -1,0 +1,10 @@
+{
+  "name": "@letterbox/harness",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@letterbox/core": "workspace:*",
+    "@letterbox/protocol": "workspace:*",
+    "@letterbox/sim-provider": "workspace:*"
+  }
+}
