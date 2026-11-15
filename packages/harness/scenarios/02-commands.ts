@@ -1,7 +1,7 @@
 // Ways a user's action can be lost, doubled, applied out of order, or shown
 // wrongly while it is on its way to the provider. Each scenario is one of them.
 
-import type { BlobId, ChangeId } from '@letterbox/protocol'
+import type { BlobId, ChangeId, ThreadFilter, ThreadSummary } from '@letterbox/protocol'
 import { mailbox, standardSeed, start, sync, thread, threads, truthOf } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 
@@ -24,6 +24,58 @@ scenario('marking read shows at once and reaches the provider', async (t) => {
   )
   t.equal([row?.unread, row?.pending], [false, false], 'the row is read and no longer pending')
   t.equal(truthOf(box, 'review')?.unread, false, 'the provider holds it as read')
+})
+
+scenario('each list filter agrees with the rows, pending changes included', async (t) => {
+  const { core, box } = await start(t)
+  const mailboxes = await core.query({ view: 'mailboxes' })
+  const inbox = await mailbox(core, 'Inbox')
+  type Check = [name: string, filter: ThreadFilter, passes: (row: ThreadSummary) => boolean]
+  /** Asks for each filter and checks it lists exactly the rows of the whole list that pass it. */
+  const agree = async (when: string) => {
+    const all = await threads(core)
+    const checks: Check[] = [
+      ...mailboxes.map((each): Check => [
+        `in ${each.name}`,
+        { mailboxId: each.id },
+        (row) => row.mailboxIds.includes(each.id),
+      ]),
+      ['unread', { unread: true }, (row) => row.unread],
+      ['read', { unread: false }, (row) => !row.unread],
+      [
+        'unread in the inbox',
+        { unread: true, mailboxId: inbox.id },
+        (row) => row.unread && row.mailboxIds.includes(inbox.id),
+      ],
+      ['text "draft"', { text: 'draft' }, (row) => row.subject.toLowerCase().includes('draft')],
+    ]
+    for (const [name, filter, passes] of checks) {
+      const ids = (await threads(core, filter)).map((row) => row.id)
+      const expected = all.filter(passes).map((row) => row.id)
+      t.equal(ids, expected, `${when}: the ${name} filter lists the rows that pass it`)
+    }
+  }
+  await agree('synced')
+
+  // Offline, so the changes stay pending and each filter has to read them.
+  box.setOffline(true)
+  const target = await thread(core, SUBJECT)
+  const archive = await core.command({ kind: 'set-mailboxes', threadIds: [target.id], add: [], remove: [inbox.id] })
+  const other = (await threads(core)).find((row) => row.id !== target.id)
+  t.check(other !== undefined, 'there is a second conversation')
+  if (!other) return
+  const flip = await core.command({ kind: 'set-flags', threadIds: [other.id], unread: !other.unread })
+  t.check((await thread(core, SUBJECT)).pending, 'the archive is still pending')
+  await agree('with pending changes')
+
+  box.setOffline(false)
+  await sync(core)
+  t.equal(
+    [(await core.settled(archive.change)).result, (await core.settled(flip.change)).result],
+    ['done', 'done'],
+    'both changes settle',
+  )
+  await agree('settled')
 })
 
 scenario('archiving takes a conversation out of the inbox', async (t) => {

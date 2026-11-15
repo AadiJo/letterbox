@@ -20,6 +20,7 @@ publish = false
 [workspace.dependencies]
 letterbox-protocol = { path = "crates/protocol" }
 letterbox-core = { path = "crates/core" }
+foldhash = "0.2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 indexmap = { version = "2.14", features = ["serde"] }
 regex = "1.12"

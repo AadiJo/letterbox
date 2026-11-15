@@ -225,6 +225,7 @@ name = "letterbox-core"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "foldhash",
  "indexmap",
  "letterbox-protocol",
  "regex",

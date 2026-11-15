@@ -6,10 +6,12 @@
 //! When an Op is dropped, what the user sees falls back to the provider's state
 //! with no extra work. That is how a refused change is undone.
 
-use indexmap::IndexMap;
+use std::borrow::Cow;
+
 use letterbox_protocol::{AccountId, Command, MailboxId, MessageId, Refusal, Role, ThreadId};
 
 use crate::adapter::{MailboxRef, Mutation};
+use crate::maps::{HashMap, IndexMap};
 use crate::world::{MailboxMode, MessageRecord, MessageState, Op, World};
 
 /// Lays one Op over a message's state. Returns the state unchanged if the Op does not name the message.
@@ -55,21 +57,49 @@ pub fn overlay(state: &MessageState, op: &Op, id: &MessageId) -> MessageState {
     }
 }
 
-/// Every Op that has been accepted and not settled, oldest first.
-pub fn pending_ops(world: &World) -> Vec<&Op> {
-    world
-        .changes
-        .values()
-        .filter(|change| change.outcome.is_none())
-        .filter_map(|change| change.op.as_ref())
-        .collect()
+/// Every Op that has been accepted and not settled, indexed by the messages it names.
+/// Views build one per answer, so a message no change names costs one lookup and no copy.
+pub struct Pending<'a> {
+    /// For each message, the Ops that name it, oldest first.
+    by_message: HashMap<&'a MessageId, Vec<&'a Op>>,
 }
 
-/// What the user sees for one message: the provider's state with pending changes on top.
-pub fn view_state(record: &MessageRecord, pending: &[&Op]) -> MessageState {
-    pending
-        .iter()
-        .fold(record.server.clone(), |state, op| overlay(&state, op, &record.id))
+impl<'a> Pending<'a> {
+    pub fn of(world: &'a World) -> Self {
+        let mut by_message: HashMap<&MessageId, Vec<&Op>> = HashMap::default();
+        let ops = world
+            .changes
+            .values()
+            .filter(|change| change.outcome.is_none())
+            .filter_map(|change| change.op.as_ref());
+        for op in ops {
+            for id in op.message_ids() {
+                let named = by_message.entry(id).or_default();
+                // An Op that names a message twice is laid over it once, as overlay does.
+                if !named.last().is_some_and(|last| std::ptr::eq(*last, op)) {
+                    named.push(op);
+                }
+            }
+        }
+        Pending { by_message }
+    }
+
+    /// True when a change that has not settled names this message.
+    pub fn touches(&self, id: &MessageId) -> bool {
+        self.by_message.contains_key(id)
+    }
+
+    /// What the user sees for one message: the provider's state with pending changes on top.
+    /// Borrows the stored state when no change names the message.
+    pub fn view_state(&self, record: &'a MessageRecord) -> Cow<'a, MessageState> {
+        match self.by_message.get(&record.id) {
+            None => Cow::Borrowed(&record.server),
+            Some(ops) => Cow::Owned(
+                ops.iter()
+                    .fold(record.server.clone(), |state, op| overlay(&state, op, &record.id)),
+            ),
+        }
+    }
 }
 
 /// The threads a command names that exist, and the one account they belong to.
@@ -255,7 +285,7 @@ pub fn plan(world: &World, op: &Op) -> Option<Vec<Step>> {
             ..
         } => {
             // One move per folder the messages are leaving.
-            let mut by_source: IndexMap<&MailboxId, Vec<&MessageRecord>> = IndexMap::new();
+            let mut by_source: IndexMap<&MailboxId, Vec<&MessageRecord>> = IndexMap::default();
             for record in &records {
                 let source = record.server.mailboxes.iter().find(|mailbox| remove.contains(mailbox));
                 if let Some(source) = source

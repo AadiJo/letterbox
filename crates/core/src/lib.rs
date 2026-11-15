@@ -25,6 +25,7 @@
 pub mod adapter;
 mod changes;
 pub mod clock;
+mod maps;
 mod reconcile;
 mod store;
 mod turns;
@@ -32,12 +33,10 @@ mod views;
 mod world;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
 use letterbox_protocol::{
     AccountErrorReason, AccountId, AccountStatus, Answer, BlobError, Body, ChangeId, ChangeResult, ClientMessage,
     Command, CoreMessage, Empty, MessageId, PROTOCOL, PasswordInput, ProtocolErrorReason, Query, Refusal, Request,
@@ -52,6 +51,7 @@ use tokio_util::task::TaskTracker;
 use crate::adapter::{Adapter, AdapterFactory, AdapterFailure, ApplyResult, ChangesResult, LocalFuture, SignInInput};
 use crate::changes::{overlay, plan, resolve, targets};
 use crate::clock::Environment;
+use crate::maps::{HashMap, HashSet, IndexMap};
 use crate::reconcile::{Incoming, reconcile};
 pub use crate::store::StoreError;
 use crate::store::{Store, Transaction};
@@ -93,7 +93,7 @@ impl Core {
             .map(|factory| (factory.option().id.clone(), Rc::clone(factory)))
             .collect();
 
-        let mut adapters: HashMap<AccountId, Rc<dyn Adapter>> = HashMap::new();
+        let mut adapters: HashMap<AccountId, Rc<dyn Adapter>> = HashMap::default();
         for account in world.accounts.values() {
             if let Some(factory) = factories.get(&account.factory_id)
                 && !account.session.is_empty()
@@ -124,13 +124,13 @@ impl Core {
                 state: RefCell::new(State {
                     world,
                     adapters,
-                    subscriptions: IndexMap::new(),
-                    syncing: HashSet::new(),
-                    loading_bodies: HashSet::new(),
-                    unreachable_bodies: HashSet::new(),
-                    sign_ins: HashMap::new(),
+                    subscriptions: IndexMap::default(),
+                    syncing: HashSet::default(),
+                    loading_bodies: HashSet::default(),
+                    unreachable_bodies: HashSet::default(),
+                    sign_ins: HashMap::default(),
                 }),
-                queues: RefCell::new(HashMap::new()),
+                queues: RefCell::new(HashMap::default()),
                 work: TaskTracker::new(),
             }),
         })

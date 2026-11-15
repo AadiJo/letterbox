@@ -6,15 +6,13 @@
 //! so iteration follows insertion order. Pending changes are pushed in that
 //! order, and lists without a sort of their own are shown in it.
 
-use std::collections::HashMap;
-
-use indexmap::{IndexMap, IndexSet};
 use letterbox_protocol::{
     AccountId, BlobId, ChangeId, ChangeResult, MailboxId, MessageId, Rev, Role, ThreadId, Time, Turn,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::{AdapterCapabilities, AdapterFailure, BodyResult, Cursor, MailboxRef, MessageRef, RemoteFacts};
+use crate::maps::{HashMap, IndexMap, IndexSet};
 use crate::store::{Record, Store, Transaction};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -267,11 +265,11 @@ pub fn load_world(store: &Store) -> World {
         messages: by_id(store),
         threads: by_id(store),
         changes: by_id(store),
-        message_by_ref: HashMap::new(),
-        mailbox_by_ref: HashMap::new(),
-        messages_by_thread: HashMap::new(),
-        messages_by_message_id: HashMap::new(),
-        messages_by_reference: HashMap::new(),
+        message_by_ref: HashMap::default(),
+        mailbox_by_ref: HashMap::default(),
+        messages_by_thread: HashMap::default(),
+        messages_by_message_id: HashMap::default(),
+        messages_by_reference: HashMap::default(),
     };
     for record in world.mailboxes.values() {
         world

@@ -6,14 +6,13 @@
 //! report is matched by its fingerprint, so it keeps its id, its thread, its
 //! body and any turn the user set.
 
-use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use indexmap::{IndexMap, IndexSet};
 use letterbox_protocol::{AccountId, MailboxId, MessageId, ThreadId};
 use regex::Regex;
 
 use crate::adapter::{MessageRef, RemoteFacts, RemoteMailbox, RemoteMessage, RemoteState};
+use crate::maps::{HashMap, HashSet, IndexMap, IndexSet};
 use crate::store::Transaction;
 use crate::world::{
     MailboxRecord, MessageRecord, MessageState, ThreadRecord, World, messages_of, put_mailbox, put_message, put_thread,
@@ -64,8 +63,8 @@ fn oldest_in(world: &World, id: &ThreadId) -> String {
 /// they are copies with the same Message-ID, and their subjects match.
 fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, facts: &RemoteFacts) -> ThreadId {
     let subject = normalize_subject(&facts.subject);
-    let mut related: IndexSet<MessageId> = IndexSet::new();
-    let mut gather = |index: &std::collections::HashMap<String, IndexSet<MessageId>>, key: &str| {
+    let mut related: IndexSet<MessageId> = IndexSet::default();
+    let mut gather = |index: &HashMap<String, IndexSet<MessageId>>, key: &str| {
         if let Some(ids) = index.get(&scoped(account_id, key)) {
             related.extend(ids.iter().cloned());
         }
@@ -156,7 +155,7 @@ fn known(world: &World, account_id: &AccountId, r#ref: &MessageRef) -> Option<Me
 /// Applies one report from an adapter to the world, inside the caller's transaction.
 pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, incoming: Incoming) {
     if let Some(mailboxes) = incoming.mailboxes {
-        let mut seen: HashSet<MailboxId> = HashSet::new();
+        let mut seen: HashSet<MailboxId> = HashSet::default();
         for remote in mailboxes {
             let id = world
                 .mailbox_by_ref
@@ -189,7 +188,7 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
     }
 
     // Messages the provider no longer lists under their old ref. Some will turn out to have moved.
-    let mut vanished: IndexMap<MessageId, MessageRecord> = IndexMap::new();
+    let mut vanished: IndexMap<MessageId, MessageRecord> = IndexMap::default();
     if incoming.full {
         let listed: HashSet<&MessageRef> = incoming.added.iter().map(|remote| &remote.state.r#ref).collect();
         for record in world.messages.values() {

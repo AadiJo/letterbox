@@ -69,8 +69,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a pending change does not show until the provider has it',
     file: core('changes.rs'),
-    find: '    pending\n        .iter()\n        .fold(record.server.clone(), |state, op| overlay(&state, op, &record.id))',
-    replace: '    let _ = pending;\n    record.server.clone()',
+    find: 'match self.by_message.get(&record.id) {',
+    replace: 'match self.by_message.get(&record.id).filter(|_| false) {',
     scenarios: 'replay in order',
   },
   {
@@ -236,6 +236,13 @@ const MUTATIONS: Mutation[] = [
     find: '        self.inner.work.wait().await;\n',
     replace: '',
     scenarios: 'saved before it exits',
+  },
+  {
+    name: 'the mailbox filter reads what the provider holds and misses pending changes',
+    file: core('views.rs'),
+    find: 'records().any(|record| pending.view_state(record).mailboxes.contains(mailbox))',
+    replace: 'records().any(|record| record.server.mailboxes.contains(mailbox))',
+    scenarios: 'each list filter agrees',
   },
   {
     name: 'a provider ref reaches the UI',
