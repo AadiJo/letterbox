@@ -24,9 +24,9 @@
   // `pnpm lint:selftest` checks the rule through this file, the way real code meets it.
   "overrides": [
     {
-      // Scenarios and the sim self-check act one step at a time, each waiting for the answer
+      // Scenarios and the self-checks act one step at a time, each waiting for the answer
       // before the next, so a run is the same every time. Awaiting in a loop is how that is written.
-      "files": ["packages/harness/**", "packages/sim-provider/src/selfcheck.ts"],
+      "files": ["packages/harness/**", "packages/sim-provider/src/selfcheck.ts", "packages/client/src/selfcheck.ts"],
       "rules": { "eslint/no-await-in-loop": "off" }
     },
     {
@@ -44,6 +44,95 @@
     {
       "files": ["packages/harness/scenarios/**", "lint/fixtures/scenario-waits-on-events/**"],
       "rules": { "letterbox/scenario-waits-on-events": "error" }
+    },
+    {
+      // The shared client runs in a browser renderer and in React Native's Hermes, where Node
+      // modules and globals do not exist. Code that needs Node goes in the transport that uses it.
+      "files": ["packages/client/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "node:*",
+                  "assert",
+                  "buffer",
+                  "child_process",
+                  "crypto",
+                  "dns",
+                  "events",
+                  "fs",
+                  "fs/*",
+                  "http",
+                  "https",
+                  "module",
+                  "net",
+                  "os",
+                  "path",
+                  "process",
+                  "readline",
+                  "stream",
+                  "stream/*",
+                  "timers",
+                  "timers/*",
+                  "tls",
+                  "url",
+                  "util",
+                  "worker_threads",
+                  "zlib"
+                ],
+                "message": "@letterbox/client runs in a browser renderer and in Hermes, which have no Node modules. Put code that needs Node in the transport that uses it, as packages/harness/src/client.ts does with its child process, and pass it in through the Transport type."
+              }
+            ]
+          }
+        ],
+        "eslint/no-restricted-globals": [
+          "error",
+          {
+            "checkGlobalObject": true,
+            "globals": [
+              {
+                "name": "process",
+                "message": "process is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "Buffer",
+                "message": "Buffer is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "setImmediate",
+                "message": "setImmediate is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "clearImmediate",
+                "message": "clearImmediate is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "global",
+                "message": "global is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "require",
+                "message": "require is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "module",
+                "message": "module is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "__dirname",
+                "message": "__dirname is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              },
+              {
+                "name": "__filename",
+                "message": "__filename is a Node global, and @letterbox/client must run unchanged in a browser renderer and in Hermes. Use what both have, such as Promise or setTimeout, or put the code that needs Node in the transport that uses it, as packages/harness/src/client.ts does, and pass it in through the Transport type."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

@@ -1,0 +1,11 @@
+{
+  "name": "@letterbox/client",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/client.ts"
+  },
+  "dependencies": {
+    "@letterbox/protocol": "workspace:*"
+  }
+}

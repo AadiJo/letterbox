@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { Dialect, SimMailbox, SimProvider, Seed } from '@letterbox/sim-provider/contract'
 import { startSimProvider } from '@letterbox/sim-provider/server'
+import type { Options } from '@letterbox/client'
 import { type CoreClient, startCore, type TranscriptEntry } from './client.ts'
 import { type Edge, leaks, lifecycle } from './invariants.ts'
 
@@ -66,6 +67,12 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
   const passwords: string[] = []
   let failure: string | null = null
 
+  // One count for the whole run, across core restarts: the core keeps every change id it
+  // has seen, so a restarted core must never be sent an id from before. Counting keeps
+  // transcripts the same from run to run.
+  let ids = 0
+  const newId: Options['newId'] = (kind) => `${kind}_${++ids}`
+
   const t: Scenario = {
     dialect,
     provider,
@@ -75,7 +82,7 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
     },
     startCore: () => {
       record({ from: 'scenario', note: 'core starts' })
-      const core = startCore(join(folder, 'data'), provider.socketPath, record)
+      const core = startCore(join(folder, 'data'), provider.socketPath, record, newId)
       cores.push(core)
       return core
     },

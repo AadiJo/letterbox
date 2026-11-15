@@ -274,6 +274,13 @@ const MUTATIONS: Mutation[] = [
     replace: 'pub enum ChangeResult {\n    #[serde(rename = "finished")]\n    Done,',
     scenarios: 'marking read',
   },
+  {
+    name: 'the client hands a wait for one change the settled of another',
+    file: 'packages/client/src/client.ts',
+    find: "message.kind === 'settled' && message.change === change",
+    replace: "message.kind === 'settled'",
+    scenarios: 'replay in order',
+  },
 ]
 
 const ROOT = join(import.meta.dirname, '..', '..', '..')

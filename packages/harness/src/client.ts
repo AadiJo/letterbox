@@ -1,25 +1,18 @@
-// A client for the core process, as a scenario uses it. It speaks only the
-// protocol, so it would drive a core written in any language the same way.
+// The core process as a scenario drives it: core-sim behind the shared client from
+// @letterbox/client. This file adds only what a test needs. It checks every core
+// message against the protocol, records a transcript, hands the client one message per
+// turn of the event loop, puts a time limit on every wait, and starts and stops the
+// process. It speaks only the protocol, so it would drive a core written in any
+// language the same way.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import type {
-  ChangeId,
-  ClientMessage,
-  Command,
-  CoreMessage,
-  Queries,
-  Query,
-  Request,
-  RequestId,
-  Requests,
-  Response,
-  Rev,
-  SubscriptionId,
-} from '@letterbox/protocol'
-import { PROTOCOL } from '@letterbox/protocol'
+import { createClient, type KeepingClient, type Listener, type Options, type Subscription } from '@letterbox/client'
+import type { CoreMessage } from '@letterbox/protocol'
 import { coreMessageProblem } from '@letterbox/protocol/parse'
+
+export type { Subscription }
 
 /** One line of a scenario's transcript. */
 export type TranscriptEntry =
@@ -28,38 +21,8 @@ export type TranscriptEntry =
   | { from: 'provider'; did: string; with: unknown[] }
   | { from: 'scenario'; note: string }
 
-type Of<Kind extends CoreMessage['kind']> = Extract<CoreMessage, { kind: Kind }>
-type View = keyof Queries
-type Method = keyof Requests
-
-export type Subscription<V extends View> = {
-  /** The newest data, or undefined before the first update. */
-  latest(): Queries[V]['result'] | undefined
-  /** The store revision of the newest update. */
-  rev(): Rev
-  /** How many updates have arrived. */
-  count(): number
-  /** Resolves with the next update that arrives after this call. */
-  next(): Promise<Queries[V]['result']>
-  close(): void
-}
-
-export type CoreClient = {
-  hello(): Promise<Of<'welcome'>>
-  subscribe<V extends View>(query: Extract<Query, { view: V }>): Subscription<V>
-  /** Asks once: subscribes, takes the first update and unsubscribes. */
-  query<V extends View>(query: Extract<Query, { view: V }>): Promise<Queries[V]['result']>
-  /** Sends a command and resolves with the core's first answer to it. */
-  command(command: Command, change?: ChangeId): Promise<Of<'accepted'> | Of<'rejected'>>
-  /** Resolves with the `settled` for a change. */
-  settled(change: ChangeId): Promise<Of<'settled'>>
-  request<M extends Method>(request: Extract<Request, { method: M }>): Promise<Extract<Response, { method: M }>>
-  /** Starts a request without waiting, for scenarios that need two in flight. */
-  begin<M extends Method>(
-    request: Extract<Request, { method: M }>,
-  ): { id: RequestId; done: Promise<Extract<Response, { method: M }>> }
-  /** Resolves with the next message of this kind that no one has taken yet. */
-  take<Kind extends CoreMessage['kind']>(kind: Kind): Promise<Of<Kind>>
+/** The shared client, where every wait fails after WAIT_MS, plus what only a test does to a core. */
+export type CoreClient = KeepingClient & {
   /** Resolves once the core has read the end of its input, after `stop` closes it. */
   inputClosed(): Promise<void>
   /** Sends anything at all, for scenarios about bad input. */
@@ -72,6 +35,11 @@ export type CoreClient = {
 
 /** The core program the scenarios run: crates/sim-client/src/main.rs, built by `buildCore`. */
 const CORE_PROGRAM = fileURLToPath(new URL('../../../target/debug/core-sim', import.meta.url))
+
+/**
+ * How long any wait in a scenario may take. A UI waits as long as the core takes, so the
+ * limit lives here and not in @letterbox/client: a scenario must fail, not hang.
+ */
 const WAIT_MS = 5000
 
 /** The line core-sim writes to stderr once its input closes. crates/sim-client/src/main.rs writes it. */
@@ -86,8 +54,29 @@ export function buildCore(): boolean {
   return spawnSync('cargo', ['build', '--quiet', '--bin', 'core-sim'], { cwd: root, stdio: 'inherit' }).status === 0
 }
 
+/** Rejects with a timeout unless `promise` settles within WAIT_MS. `what` names what was awaited. */
+const within = <T>(what: string, promise: Promise<T>): Promise<T> =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${WAIT_MS} ms waiting for ${what}`)), WAIT_MS)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+
 /** Starts a core process over `dataDir` that reaches the sim provider at `socketPath`. */
-export function startCore(dataDir: string, socketPath: string, record: (entry: TranscriptEntry) => void): CoreClient {
+export function startCore(
+  dataDir: string,
+  socketPath: string,
+  record: (entry: TranscriptEntry) => void,
+  newId: Options['newId'],
+): CoreClient {
   const child = spawn(CORE_PROGRAM, ['--data', dataDir, '--sim', socketPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -98,23 +87,19 @@ export function startCore(dataDir: string, socketPath: string, record: (entry: T
     for (const check of onStderr.splice(0)) check()
   })
 
-  const unclaimed: CoreMessage[] = []
-  const waiters: {
-    matches: (message: CoreMessage) => boolean
-    resolve: (message: CoreMessage) => void
-    reject: (error: Error) => void
-  }[] = []
-  const subscriptions = new Map<SubscriptionId, { updates: Of<'update'>[]; onUpdate: (() => void)[] }>()
-  let ended: Error | null = null
-  let counter = 0
+  const sendRaw = (value: unknown) => {
+    record({ from: 'ui', message: value })
+    child.stdin.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
+  }
+  let listener: Listener | undefined
+  // Held messages serve `take` and `settled`.
+  const client = createClient(
+    { send: sendRaw, listen: (given) => void (listener = given) },
+    { newId, unclaimed: 'keep' },
+  )
   const violations: string[] = []
 
-  const fail = (error: Error) => {
-    ended = error
-    for (const waiter of waiters.splice(0)) waiter.reject(error)
-  }
-
-  /** Handles one line from the core: checks it against the protocol, records it, and hands it on. */
+  /** Handles one line from the core: checks it against the protocol, hands it to the client, and records it. */
   const handle = (line: string) => {
     let value: unknown
     try {
@@ -127,24 +112,13 @@ export function startCore(dataDir: string, socketPath: string, record: (entry: T
       const violation = `the core sent a message outside the protocol (${problem}): ${line}`
       violations.push(violation)
       record({ from: 'scenario', note: violation })
-      return fail(new Error(violation))
+      return listener?.end(new Error(violation))
     }
     // coreMessageProblem accepted every field, so this value is a CoreMessage.
     const message = value as CoreMessage
-    if (message.kind === 'update') {
-      // An update for a subscription this client already closed is dropped without a record.
-      // Whether one arrives depends on timing between the two processes, and both orders are valid.
-      const subscription = subscriptions.get(message.sub)
-      if (!subscription) return
-      record({ from: 'core', message })
-      subscription.updates.push(message)
-      for (const notify of subscription.onUpdate.splice(0)) notify()
-      return
-    }
-    record({ from: 'core', message })
-    const index = waiters.findIndex((waiter) => waiter.matches(message))
-    if (index === -1) unclaimed.push(message)
-    else waiters.splice(index, 1)[0]?.resolve(message)
+    // An update the client dropped is not recorded. Whether one arrives after its
+    // subscription closed depends on timing between the two processes.
+    if (listener?.receive(message)) record({ from: 'core', message })
   }
 
   // Lines are handled one per turn of the event loop. The scenario code that was
@@ -168,121 +142,28 @@ export function startCore(dataDir: string, socketPath: string, record: (entry: T
     child.on('exit', (code) => {
       const finish = () => {
         if (draining) return void setImmediate(finish)
-        fail(new Error(`the core exited with code ${code}. stderr:\n${stderr}`))
+        listener?.end(new Error(`the core exited with code ${code}. stderr:\n${stderr}`))
         resolve()
       }
       finish()
     })
   })
 
-  const send = (message: ClientMessage) => sendRaw(message)
-  const sendRaw = (value: unknown) => {
-    record({ from: 'ui', message: value })
-    child.stdin.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
-  }
-
-  /** Waits for a message that passes `matches`, taking an unclaimed one first. */
-  const waitFor = <Message extends CoreMessage>(what: string, matches: (message: CoreMessage) => message is Message) =>
-    new Promise<Message>((resolve, reject) => {
-      const index = unclaimed.findIndex(matches)
-      const found = index === -1 ? undefined : unclaimed.splice(index, 1)[0]
-      if (found && matches(found)) return resolve(found)
-      if (ended) return reject(ended)
-      const timer = setTimeout(() => {
-        const at = waiters.indexOf(waiter)
-        if (at !== -1) waiters.splice(at, 1)
-        reject(new Error(`timed out after ${WAIT_MS} ms waiting for ${what}`))
-      }, WAIT_MS)
-      const waiter = {
-        matches,
-        resolve: (message: CoreMessage) => {
-          clearTimeout(timer)
-          if (matches(message)) resolve(message)
-        },
-        reject: (error: Error) => {
-          clearTimeout(timer)
-          reject(error)
-        },
-      }
-      waiters.push(waiter)
-    })
-
-  const take: CoreClient['take'] = (kind) =>
-    waitFor(
-      `a ${kind} message`,
-      (message): message is Extract<CoreMessage, { kind: typeof kind }> => message.kind === kind,
-    )
-
-  const subscribe = <V extends View>(query: Extract<Query, { view: V }>): Subscription<V> => {
-    const sub = `sub_${++counter}` as SubscriptionId
-    const state: { updates: Of<'update'>[]; onUpdate: (() => void)[] } = { updates: [], onUpdate: [] }
-    subscriptions.set(sub, state)
-    send({ kind: 'subscribe', sub, query })
-    // Updates on this subscription carry the data for the view it asked for.
-    const dataOf = (update: Of<'update'>) => update.data as Queries[V]['result']
-    return {
-      latest: () => {
-        const last = state.updates.at(-1)
-        return last ? dataOf(last) : undefined
-      },
-      rev: () => state.updates.at(-1)?.rev ?? -1,
-      count: () => state.updates.length,
-      next: () =>
-        new Promise((resolve, reject) => {
-          const before = state.updates.length
-          const timer = setTimeout(() => reject(new Error(`timed out waiting for an update to ${query.view}`)), WAIT_MS)
-          state.onUpdate.push(() => {
-            clearTimeout(timer)
-            const update = state.updates[before]
-            if (update) resolve(dataOf(update))
-          })
-        }),
-      close: () => {
-        subscriptions.delete(sub)
-        send({ kind: 'unsubscribe', sub })
-      },
-    }
-  }
-
-  const begin: CoreClient['begin'] = (request) => {
-    const id = `req_${++counter}` as RequestId
-    send({ kind: 'request', id, request })
-    const done = waitFor(
-      `the response to ${request.method}`,
-      (message): message is Of<'response'> => message.kind === 'response' && message.id === id,
-    )
-    // The core answers a request with the response for the same method.
-    return { id, done: done as Promise<Of<'response'> & Extract<Response, { method: typeof request.method }>> }
-  }
-
   return {
-    hello: () => {
-      send({ kind: 'hello', protocol: PROTOCOL })
-      return take('welcome')
+    hello: () => within('a welcome message', client.hello()),
+    subscribe: (query) => {
+      const subscription = client.subscribe(query)
+      return { ...subscription, next: () => within(`an update to ${query.view}`, subscription.next()) }
     },
-    subscribe,
-    query: async (query) => {
-      const subscription = subscribe(query)
-      const data = subscription.latest() ?? (await subscription.next())
-      subscription.close()
-      return data
+    query: (query) => within(`an update to ${query.view}`, client.query(query)),
+    command: (command, change) => within(`an answer to ${command.kind}`, client.command(command, change)),
+    settled: (change) => within(`settled for ${change}`, client.settled(change)),
+    request: (request) => within(`the response to ${request.method}`, client.request(request)),
+    begin: (request) => {
+      const started = client.begin(request)
+      return { id: started.id, done: within(`the response to ${request.method}`, started.done) }
     },
-    command: (command, change = `change_${++counter}` as ChangeId) => {
-      send({ kind: 'command', change, command })
-      return waitFor(
-        `an answer to ${command.kind}`,
-        (message): message is Of<'accepted'> | Of<'rejected'> =>
-          (message.kind === 'accepted' || message.kind === 'rejected') && message.change === change,
-      )
-    },
-    settled: (change) =>
-      waitFor(
-        `settled for ${change}`,
-        (message): message is Of<'settled'> => message.kind === 'settled' && message.change === change,
-      ),
-    request: (request) => begin(request).done,
-    begin,
-    take,
+    take: (kind) => within(`a ${kind} message`, client.take(kind)),
     sendRaw,
     violations: () => [...violations],
     inputClosed: () =>

@@ -1,5 +1,5 @@
-// Times a core program through the protocol, the way a UI uses it, against a large
-// mailbox at the sim provider.
+// Times a core program through the shared client in @letterbox/client, the way a UI
+// uses it, against a large mailbox at the sim provider.
 //
 //   pnpm bench                                     the Rust core, release build
 //   pnpm bench --sizes 1000,10000 --runs 3         mailbox sizes and runs per size
@@ -20,7 +20,8 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import type { CoreMessage, ThreadId, ThreadSummary } from '@letterbox/protocol'
+import { createClient, type KeepingClient } from '@letterbox/client'
+import type { CoreMessage, ThreadId } from '@letterbox/protocol'
 import type { Seed, SeedMailbox, SeedMessage, SimMailbox } from '@letterbox/sim-provider/contract'
 import { startSimProvider } from '@letterbox/sim-provider/server'
 import { ME, PASSWORD } from './fixtures.ts'
@@ -106,27 +107,29 @@ function benchSeed(size: number): { seed: Seed; conversations: number } {
 
 // ---------------------------------------------------------------- a lean client
 
-type Of<Kind extends CoreMessage['kind']> = Extract<CoreMessage, { kind: Kind }>
-
-/** A core process. It checks nothing and records nothing, so the client costs little and the same for every core. */
+/**
+ * A core process behind the shared client. Unlike the scenarios' client it checks nothing,
+ * records nothing and hands each message on as it arrives, so it costs little and the
+ * same for every core.
+ */
 function startCore(data: string, socket: string) {
   const [program = '', ...args] = command
   const child = spawn(program, [...args, '--data', data, '--sim', socket], { stdio: ['pipe', 'pipe', 'inherit'] })
-  const waiters: { match: (message: CoreMessage) => boolean; resolve: (message: CoreMessage) => void }[] = []
-  createInterface({ input: child.stdout }).on('line', (line) => {
-    // The core under test sends protocol messages. The scenarios check their shapes.
-    const message = JSON.parse(line) as CoreMessage
-    const at = waiters.findIndex((waiter) => waiter.match(message))
-    if (at !== -1) waiters.splice(at, 1)[0]?.resolve(message)
-  })
-  const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
   let counter = 0
+  const client = createClient(
+    {
+      send: (message) => void child.stdin.write(`${JSON.stringify(message)}\n`),
+      listen: (listener) => {
+        // The core under test sends protocol messages. The scenarios check their shapes.
+        createInterface({ input: child.stdout }).on('line', (line) => listener.receive(JSON.parse(line) as CoreMessage))
+        child.on('exit', (code) => listener.end(new Error(`the core exited with code ${code}`)))
+      },
+    },
+    { newId: (kind) => `${kind}_${++counter}`, unclaimed: 'keep' },
+  )
+  const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
   return {
-    send: (message: unknown) => void child.stdin.write(`${JSON.stringify(message)}\n`),
-    id: (prefix: string) => `${prefix}_${++counter}`,
-    /** Resolves with the next message that passes `match`. Register it before sending what causes it. */
-    next: <Message extends CoreMessage>(match: (message: CoreMessage) => message is Message) =>
-      new Promise<Message>((resolve) => waiters.push({ match, resolve: (message) => resolve(message as Message) })),
+    ...client,
     /** Peak resident memory in megabytes, from /proc. */
     peakMegabytes: () => {
       const status = readFileSync(`/proc/${child.pid}/status`, 'utf8')
@@ -139,27 +142,11 @@ function startCore(data: string, socket: string) {
   }
 }
 
-type Core = ReturnType<typeof startCore>
-
-const isKind =
-  <Kind extends CoreMessage['kind']>(kind: Kind) =>
-  (message: CoreMessage): message is Of<Kind> =>
-    message.kind === kind
-
-/** Waits for the answer to one request. */
-async function request(core: Core, body: Record<string, unknown>): Promise<Of<'response'>> {
-  const id = core.id('req')
-  const answer = core.next((message): message is Of<'response'> => message.kind === 'response' && message.id === id)
-  core.send({ kind: 'request', id, request: body })
-  return answer
-}
-
-/** Subscribes and resolves with the first update. */
-async function subscribe(core: Core, query: Record<string, unknown>): Promise<{ sub: string; first: Of<'update'> }> {
-  const sub = core.id('sub')
-  const first = core.next((message): message is Of<'update'> => message.kind === 'update' && message.sub === sub)
-  core.send({ kind: 'subscribe', sub, query })
-  return { sub, first: await first }
+/** Sends a command and waits for it to settle. */
+async function settle(core: KeepingClient, threadId: ThreadId, flags: { unread?: boolean; flagged?: boolean }) {
+  const answer = await core.command({ kind: 'set-flags', threadIds: [threadId], ...flags })
+  if (answer.kind === 'rejected') throw new Error(`the core rejected a command: ${answer.reason}`)
+  await core.settled(answer.change)
 }
 
 const now = () => performance.now()
@@ -178,85 +165,65 @@ async function run(size: number): Promise<Phases> {
   try {
     let at = now()
     let core = startCore(data, provider.socketPath)
-    const welcome = core.next(isKind('welcome'))
-    core.send({ kind: 'hello', protocol: 0 })
-    await welcome
+    await core.hello()
     phases['start (ms)'] = now() - at
 
     // What a UI keeps open: the accounts, the mailbox list and the first page of the inbox.
-    await subscribe(core, { view: 'accounts' })
-    await subscribe(core, { view: 'mailboxes' })
-    const list = await subscribe(core, { view: 'threads', filter: {}, offset: 0, limit: 50 })
+    const accounts = core.subscribe({ view: 'accounts' })
+    await accounts.next()
+    const mailboxes = core.subscribe({ view: 'mailboxes' })
+    await mailboxes.next()
+    const list = core.subscribe({ view: 'threads', filter: {}, offset: 0, limit: 50 })
+    await list.next()
 
+    const options = await core.query({ view: 'sign-in-options' })
+    const password = options.find((option) => option.method === 'password')
+    if (!password) throw new Error('the core lists no password sign-in option')
     at = now()
-    await request(core, { method: 'sign-in', option: 'sim-password', password: { username: ME, password: PASSWORD } })
-    const synced = await request(core, { method: 'sync-now' })
+    await core.request({ method: 'sign-in', option: password.id, password: { username: ME, password: PASSWORD } })
+    const synced = await core.request({ method: 'sync-now' })
     phases['sign-in and first sync (ms)'] = now() - at
     if (!synced.ok) throw new Error('the first sync failed')
 
-    const all = await subscribe(core, { view: 'threads', filter: {}, offset: 0, limit: COMMANDS * 2 })
-    const page = all.first.data as { total: number; threads: ThreadSummary[] }
+    const page = await core.query({ view: 'threads', filter: {}, offset: 0, limit: COMMANDS * 2 })
     if (page.total !== conversations) throw new Error(`expected ${conversations} threads, the core lists ${page.total}`)
     const threadIds: ThreadId[] = page.threads.map((thread) => thread.id)
-    core.send({ kind: 'unsubscribe', sub: all.sub })
+    const [first] = threadIds
+    if (!first) throw new Error('the core lists no threads')
 
     at = now()
-    const thread = core.id('sub')
-    const ready = core.next(
-      (message): message is Of<'update'> =>
-        message.kind === 'update' &&
-        message.sub === thread &&
-        message.view === 'thread' &&
-        message.data !== null &&
-        message.data.messages.every((item) => item.body.state === 'ready'),
-    )
-    core.send({ kind: 'subscribe', sub: thread, query: { view: 'thread', threadId: threadIds[0] } })
-    await ready
+    const open = core.subscribe({ view: 'thread', threadId: first })
+    // Read the newest update before each wait, so no update between two waits is missed.
+    while (!open.latest()?.messages.every((item) => item.body.state === 'ready')) await open.next()
     phases['open a conversation (ms)'] = now() - at
 
     // One command at a time, as a person clicks: wait for each to settle before the next.
     at = now()
-    for (const threadId of threadIds.slice(0, COMMANDS)) {
-      const change = core.id('change')
-      const settled = core.next(
-        (message): message is Of<'settled'> => message.kind === 'settled' && message.change === change,
-      )
-      core.send({ kind: 'command', change, command: { kind: 'set-flags', threadIds: [threadId], unread: false } })
-      await settled
-    }
+    for (const threadId of threadIds.slice(0, COMMANDS)) await settle(core, threadId, { unread: false })
     phases[`${COMMANDS} commands one by one, per command (ms)`] = (now() - at) / COMMANDS
 
     // A burst, as a select-all would send: all at once, then wait for the last to settle.
     at = now()
-    const changes = threadIds.slice(COMMANDS, COMMANDS * 2).map((threadId) => ({ change: core.id('change'), threadId }))
-    const settledAll = Promise.all(
-      changes.map(({ change }) =>
-        core.next((message): message is Of<'settled'> => message.kind === 'settled' && message.change === change),
-      ),
+    await Promise.all(
+      threadIds.slice(COMMANDS, COMMANDS * 2).map((threadId) => settle(core, threadId, { flagged: true })),
     )
-    for (const { change, threadId } of changes) {
-      core.send({ kind: 'command', change, command: { kind: 'set-flags', threadIds: [threadId], flagged: true } })
-    }
-    await settledAll
     phases[`${COMMANDS} commands at once, total (ms)`] = now() - at
 
     for (let index = 0; index < DELIVERED; index += 1) box.deliver(benchMessage(size + index, conversations + index, 0))
     at = now()
-    await request(core, { method: 'sync-now' })
+    await core.request({ method: 'sync-now' })
     phases[`sync after ${DELIVERED} new messages (ms)`] = now() - at
 
     phases['peak memory (MB)'] = core.peakMegabytes()
-    core.send({ kind: 'unsubscribe', sub: list.sub })
+    list.close()
     at = now()
     await core.stop()
     phases['stop (ms)'] = now() - at
 
     at = now()
     core = startCore(data, provider.socketPath)
-    const again = core.next(isKind('welcome'))
-    core.send({ kind: 'hello', protocol: 0 })
-    await again
-    await subscribe(core, { view: 'threads', filter: {}, offset: 0, limit: 50 })
+    await core.hello()
+    await core.query({ view: 'threads', filter: {}, offset: 0, limit: 50 })
     phases['restart to first list (ms)'] = now() - at
     await core.stop()
 
