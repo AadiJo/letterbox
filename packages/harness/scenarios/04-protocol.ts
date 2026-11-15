@@ -12,6 +12,7 @@ import {
   sync,
   thread,
   threads,
+  watchThread,
 } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 
@@ -93,6 +94,19 @@ scenario('a sign-in still waiting for the user is answered cancelled when the co
   const answer = await attempt.done
   t.equal(answer.ok === false && answer.error, 'cancelled', 'the waiting sign-in is told it was cancelled')
   await stopped
+})
+
+scenario('a sign-out is answered while a provider call is still in flight', async (t) => {
+  const { core, box, accountId } = await start(t)
+  const photos = await thread(core, 'Trip photos')
+  box.holdBodies()
+  const open = watchThread(core, photos.id)
+  t.equal((await open.next())?.messages[0]?.body.state, 'loading', 'the body is loading while the provider holds it')
+  const signedOut = await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })
+  t.check(signedOut.ok, 'the sign-out does not wait for the provider to answer')
+  box.releaseBodies()
+  const account = (await core.query({ view: 'accounts' }))[0]
+  t.equal(account?.status.state, 'needs-sign-in', 'the account waits for a new sign-in')
 })
 
 scenario('a body loads when a conversation is opened, once', async (t) => {

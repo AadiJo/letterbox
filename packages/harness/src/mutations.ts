@@ -215,6 +215,13 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'answered cancelled when the core stops',
   },
   {
+    name: 'a sign-out waits for a provider call in flight instead of ending it',
+    file: core('lib.rs'),
+    find: '            self.work.spawn_local(async move { adapter.close().await });',
+    replace: '            self.background(&account_id, async move { adapter.close().await });',
+    scenarios: 'sign-out is answered while',
+  },
+  {
     name: 'closing the core does not wait for the work in flight',
     file: core('lib.rs'),
     find: '        self.inner.work.wait().await;\n',

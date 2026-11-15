@@ -49,7 +49,9 @@ use tokio::task::spawn_local;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::adapter::{Adapter, AdapterFactory, AdapterFailure, ApplyResult, ChangesResult, LocalFuture, SignInInput};
+use crate::adapter::{
+    Adapter, AdapterFactory, AdapterFailure, ApplyResult, ChangesResult, Connection, LocalFuture, SignInInput,
+};
 use crate::changes::{overlay, plan, resolve, targets};
 use crate::clock::Environment;
 use crate::reconcile::{Incoming, reconcile};
@@ -797,17 +799,38 @@ impl Inner {
             Err(failure) => return self.respond(id, Response::SignIn(Answer(Err(failure.into())))),
         };
 
+        // A sign-out of this account may still wait in its queue. The account is set up after
+        // it, so a queued delete cannot remove the account this sign-in answers with.
         let factory_id = factory.option().id.clone();
-        let existing = self
-            .state
-            .borrow()
+        let queued = self
+            .account_for(&factory_id, &connection.address)
+            .map(|account| account.id);
+        let install = Rc::clone(self).install(id, factory_id, connection);
+        match queued {
+            Some(account_id) => self
+                .enqueue(&account_id, install)
+                .await
+                .expect("a queued job runs to its end, since a panic ends the program"),
+            None => install.await,
+        }
+    }
+
+    /// The account this sign-in option made for this address, if there is one.
+    fn account_for(&self, factory_id: &str, address: &str) -> Option<AccountRecord> {
+        let address = address.to_lowercase();
+        let state = self.state.borrow();
+        let found = state
             .world
             .accounts
             .values()
-            .find(|account| {
-                account.factory_id == factory_id && account.address.to_lowercase() == connection.address.to_lowercase()
-            })
-            .cloned();
+            .find(|account| account.factory_id == factory_id && account.address.to_lowercase() == address);
+        found.cloned()
+    }
+
+    /// Adds the account a sign-in reached, or takes it over if this address signed in
+    /// before, then answers the sign-in and starts its first sync.
+    async fn install(self: Rc<Self>, id: RequestId, factory_id: String, connection: Connection) {
+        let existing = self.account_for(&factory_id, &connection.address);
         let account_id = existing
             .as_ref()
             .map_or_else(|| self.store.next_id(), |account| account.id.clone());
@@ -841,20 +864,21 @@ impl Inner {
             account_id: account_id.clone(),
         };
         self.respond(id, Response::SignIn(Answer(Ok(signed_in))));
-        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), true));
+        self.background(&account_id, Rc::clone(&self).pass(account_id.clone(), true));
     }
 
-    /// Removes the adapter at once, so no new work starts for the account. The rest
-    /// waits its turn in the account's queue, so a pass already running finishes
-    /// first and cannot write the account's records back after they are deleted.
+    /// Removes and closes the adapter at once, so no new work starts for the account
+    /// and a provider call in flight ends. The records change in the account's queue,
+    /// after the work already there, so a pass that was running cannot write them back
+    /// after a delete.
     fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {
         let adapter = self.state.borrow_mut().adapters.remove(&account_id);
+        if let Some(adapter) = adapter {
+            self.work.spawn_local(async move { adapter.close().await });
+        }
         let core = Rc::clone(self);
         let queue = account_id.clone();
         self.background(&queue, async move {
-            if let Some(adapter) = adapter {
-                adapter.close().await;
-            }
             core.commit(|world, tx, _| {
                 let Some(account) = world.accounts.get(&account_id).cloned() else {
                     return;
