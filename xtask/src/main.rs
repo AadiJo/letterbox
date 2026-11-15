@@ -1,19 +1,29 @@
 //! The repo's own tasks, in Rust. Run them through the cargo alias in .cargo/config.toml:
 //!
 //!   cargo xtask provider-names [path...]
+//!   cargo xtask protocol-ts [--check]
+//!   cargo xtask file-size [root]
 //!
 //! provider-names keeps provider vocabulary out of the core and the protocol. Both
 //! must behave the same for every provider, so neither may name one in code or in a
 //! string. Comments may. With no paths it checks crates/core/src and crates/protocol/src.
 //! The words are in lint/provider-terms.txt. xtask/tests runs it over xtask/fixtures.
+//!
+//! protocol-ts writes packages/protocol/src/generated.ts from crates/protocol.
+//!
+//! file-size keeps every hand-written .rs and .ts file git tracks at or under a line
+//! limit, so none grows into a file nobody can read whole. See file_size.rs. With no
+//! root it checks the workspace.
 
+mod file_size;
 mod protocol_ts;
 mod provider_names;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: cargo xtask provider-names [path...]\n       cargo xtask protocol-ts [--check]";
+const USAGE: &str = "usage: cargo xtask provider-names [path...]\n       cargo xtask protocol-ts [--check]\n       \
+                     cargo xtask file-size [root]";
 
 /// What provider-names checks when it is given no paths.
 const CHECKED: [&str; 2] = ["crates/core/src", "crates/protocol/src"];
@@ -30,6 +40,7 @@ fn main() -> ExitCode {
     match args.next().as_deref() {
         Some("provider-names") => {}
         Some("protocol-ts") => return protocol_ts(workspace, args.next().as_deref() == Some("--check")),
+        Some("file-size") => return file_size(&args.next().map_or_else(|| workspace.to_owned(), PathBuf::from)),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -96,6 +107,27 @@ fn protocol_ts(workspace: &Path, check: bool) -> ExitCode {
         protocol_ts::PATH
     );
     ExitCode::FAILURE
+}
+
+/// Reports every file under `root` that breaks the file-size rule, one per line.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "a command-line tool reports on stdout and stderr"
+)]
+fn file_size(root: &Path) -> ExitCode {
+    match file_size::check(root) {
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+        Ok(problems) if problems.is_empty() => ExitCode::SUCCESS,
+        Ok(problems) => {
+            for problem in problems {
+                println!("{problem}");
+            }
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `path` if it is a file, else every .rs file under it, sorted.

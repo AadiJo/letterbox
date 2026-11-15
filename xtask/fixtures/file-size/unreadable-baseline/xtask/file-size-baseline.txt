@@ -1,0 +1,4 @@
+# A baseline with a line the check cannot read. The check must fail and name the
+# baseline, not pass with the line ignored. Ways it could fail on it:
+#   - it skips a line it cannot read, so a typo quietly drops a file from the baseline
+many crates/core/src/lib.rs

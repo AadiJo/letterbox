@@ -1,0 +1,3 @@
+// Over the limit, but neither .rs nor .ts. The check must skip it. Ways it could fail:
+//   - it checks every tracked file, not only hand-written source
+// pad to 501 lines
