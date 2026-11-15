@@ -19,13 +19,6 @@ use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, Profile}
 const PAGE_SIZE: &str = "100";
 /// "There is a limit of 1000 ids per request." (users.messages.batchModify)
 const BATCH_LIMIT: usize = 1000;
-/// 403 reasons that mean "too many requests", which is worth retrying, not "not allowed".
-const RATE_LIMITS: [&str; 4] = [
-    "rateLimitExceeded",
-    "userRateLimitExceeded",
-    "dailyLimitExceeded",
-    "quotaExceeded",
-];
 
 /// What a cursor holds: the history id to resume from, and a digest of the mailbox list
 /// the core has, since history.list does not report label changes.
@@ -276,13 +269,12 @@ impl GmailAdapter {
             Ok(0) => refused(ProviderRefusal::UnknownTarget),
             Ok(_) => Ok(ApplyResult::Applied { moved: Vec::new() }),
             Err(CallError::Failure(failure)) => Err(failure),
-            Err(CallError::Status { status, reason }) => match status {
+            Err(error) if error.is_rate_limit() => Err(AdapterFailure::ProviderError),
+            Err(CallError::Status { status, .. }) => match status {
                 StatusCode::NOT_FOUND => refused(ProviderRefusal::UnknownTarget),
                 StatusCode::BAD_REQUEST => refused(ProviderRefusal::RefusedByProvider),
                 StatusCode::CONFLICT => refused(ProviderRefusal::Conflict),
-                StatusCode::FORBIDDEN if !RATE_LIMITS.contains(&reason.as_str()) => {
-                    refused(ProviderRefusal::NotPermitted)
-                }
+                StatusCode::FORBIDDEN => refused(ProviderRefusal::NotPermitted),
                 _ => Err(AdapterFailure::ProviderError),
             },
         }
@@ -315,7 +307,9 @@ impl Adapter for GmailAdapter {
     }
 
     fn close(&self) -> LocalFuture<'_, ()> {
-        // Requests in flight finish on their own. The client's connections close when it drops.
+        // A call waiting out a rate limit ends now, as offline. Other requests in flight finish
+        // on their own. The client's connections close when it drops.
+        self.api.close();
         Box::pin(async {})
     }
 }

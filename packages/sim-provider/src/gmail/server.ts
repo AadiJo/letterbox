@@ -9,7 +9,8 @@
 // applies, refusing the next apply, going offline and the call counts all work as
 // they do over the sim socket. The counts read in Gmail terms: one snapshot per
 // messages.list page, one changes per history.list, one body per format=full get,
-// and one apply per modify or batchModify that changes labels.
+// and one apply per modify or batchModify that changes labels. `setQuota` adds Gmail's
+// per-user rate limit (quota.ts).
 //
 // Where Gmail's behaviour is not documented, the fake picks the strict reading:
 //   - batchModify answers 404 and changes nothing if any id is unknown.
@@ -27,6 +28,7 @@ import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { ask, modify, parse, strings } from './modify.ts'
 import { MODIFY_SCOPE, READONLY_SCOPE, createOauth } from './oauth.ts'
+import { type Quota, RATE_LIMITED, createQuotas, unitsOf } from './quota.ts'
 import {
   cursorOf,
   fullOf,
@@ -57,6 +59,10 @@ export interface GmailFake {
   revokeAccess(address: string): void
   /** How many times the token endpoint refreshed an access token for `address`. */
   refreshes(address: string): number
+  /** Limits the units `address` may spend per window, or lifts the limit. See quota.ts. */
+  setQuota(address: string, quota: Quota | null): void
+  /** How many calls the rate limit refused for `address`. */
+  refusals(address: string): number
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
   /** Every refresh and access token this fake issued. None may reach the core's store. */
@@ -99,6 +105,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   const remember = (value: string): string => (handedOut.add(value), value)
   const oauth = createOauth(redirects, remember)
   const sockets = new Set<Socket>()
+  const quotas = createQuotas()
 
   /** Answers one API call for the account `address`. */
   const api = async (
@@ -229,7 +236,14 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       const entry = address === null ? undefined : mailboxes.get(address)
       if (entry?.isOffline()) return void request.socket.destroy()
       if (!entry) return fail(response, 401, 'Request had invalid authentication credentials.')
-      await api(entry, request.method ?? 'GET', path, url.searchParams, response, body)
+      const method = request.method ?? 'GET'
+      const refused = quotas.charge(entry.control.address, unitsOf(method, path, url.searchParams))
+      if (refused) {
+        const wait = refused.retryAfter === undefined ? {} : { 'Retry-After': String(refused.retryAfter) }
+        response.writeHead(403, { 'Content-Type': 'application/json; charset=UTF-8', ...wait })
+        return void response.end(JSON.stringify(RATE_LIMITED))
+      }
+      await api(entry, method, path, url.searchParams, response, body)
     })
   })
   server.on('connection', (socket) => {
@@ -255,6 +269,8 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     expireAccessTokens: () => oauth.expireAccessTokens(),
     revokeAccess: (address) => oauth.revoke(address),
     refreshes: (address) => oauth.refreshes(address),
+    setQuota: (address, quota) => quotas.set(address, quota),
+    refusals: (address) => quotas.refusals(address),
     handedOut: () => handedOut,
     secrets: () => oauth.secrets(),
     close: () => {

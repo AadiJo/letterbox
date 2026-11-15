@@ -76,7 +76,7 @@ export type Result = { name: string; dialect: Run; passed: boolean; failure: str
 export const ARTIFACTS = process.env['LETTERBOX_ARTIFACTS'] ?? join(process.cwd(), 'artifacts', 'scenarios')
 
 /** Methods that only read, and so stay out of the transcript. */
-const READS = new Set<string | symbol>(['truth', 'calls', 'refreshes', 'handedOut', 'url'])
+const READS = new Set<string | symbol>(['truth', 'calls', 'refreshes', 'refusals', 'handedOut', 'url'])
 
 /** Wraps a mailbox or the fake Gmail so every call a scenario makes on it lands in the transcript under `who`. */
 const recorded = <Target extends object>(

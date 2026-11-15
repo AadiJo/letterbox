@@ -18,8 +18,9 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::time::Duration;
 
-use letterbox_core::adapter::AdapterFactory;
+use letterbox_core::adapter::{AdapterFactory, LocalFuture};
 use letterbox_core::clock::FixedEnvironment;
 use letterbox_core::{Core, CoreOptions};
 use letterbox_gmail::{GmailConfig, Loopback, gmail_factory};
@@ -37,6 +38,13 @@ const INPUT_CLOSED: &str = "core-sim: input closed, finishing the work in flight
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
 const KEYCHAIN_FILE: &str = "sim-keychain.json";
+
+/// A rate-limit wait this long or longer holds until the adapter closes. Shorter ones end at
+/// once. A scenario reaches a held wait by having the fake send a Retry-After of an hour.
+const HELD_WAIT: Duration = Duration::from_secs(3600);
+
+/// Written to stderr when a wait starts to hold, so a scenario knows the adapter is waiting.
+const WAIT_HELD: &str = "core-sim: holding a gmail rate-limit wait until the adapter closes";
 
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
@@ -80,7 +88,8 @@ fn parse_args() -> Option<Args> {
 }
 
 /// The Gmail option, pointed at the fake server. Nothing here is a real client: the fake
-/// accepts any client id, as long as the code exchange names the one consent did.
+/// accepts any client id, as long as the code exchange names the one consent did. No wait
+/// takes real time, so a run repeats and its transcript holds nothing about time.
 fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
     // Each draw is 32 copies of the next number, so every attempt has its own verifier and state.
     let draws = Cell::new(0u8);
@@ -113,7 +122,21 @@ fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
             draws.set(draws.get().wrapping_add(1));
             [draws.get(); 32]
         }),
+        pause: Rc::new(pause),
     })
+}
+
+/// core-sim's rate-limit wait. It takes no real time: it ends at once, or holds for good.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "core-sim owns stderr for its log, which the harness reads"
+)]
+fn pause(wait: Duration) -> LocalFuture<'static, ()> {
+    if wait < HELD_WAIT {
+        return Box::pin(std::future::ready(()));
+    }
+    eprintln!("{WAIT_HELD}");
+    Box::pin(std::future::pending())
 }
 
 #[expect(

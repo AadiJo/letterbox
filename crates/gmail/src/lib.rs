@@ -14,6 +14,9 @@
 //!   apply         users.messages.modify for one message, batchModify for several.
 //!                 Trash adds the TRASH label.
 //!
+//! Rate limits: a call Gmail refuses as over its rate limit waits and tries again, up to
+//! a limit (api.rs). The wait comes from `GmailConfig::pause`, and `close` ends it.
+//!
 //! Tokens: the refresh token goes in the session string. The access token stays in memory
 //! and is refreshed when a call is refused with 401, so nothing reads a clock. A refresh
 //! refused with `invalid_grant` answers `needs-sign-in`.
@@ -37,10 +40,11 @@ use std::rc::Rc;
 
 use letterbox_core::adapter::AdapterFactory;
 
-pub use crate::config::{CLIENT_ID_VAR, CLIENT_SECRET_VAR, GmailConfig, Loopback, Random};
+pub use crate::config::{CLIENT_ID_VAR, CLIENT_SECRET_VAR, GmailConfig, Loopback, Pause, Random};
 
 /// The Gmail sign-in option: id "gmail", label "Gmail", method oauth. The host's tokio
-/// runtime must have `enable_time` on, for the HTTP client (see `GmailFactory::new`).
+/// runtime must have `enable_time` on, for the HTTP client (see `GmailFactory::new`) and
+/// for `GmailConfig::google`'s pause.
 pub fn gmail_factory(config: GmailConfig) -> Rc<dyn AdapterFactory> {
     Rc::new(factory::GmailFactory::new(config))
 }

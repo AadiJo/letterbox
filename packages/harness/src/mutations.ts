@@ -379,6 +379,34 @@ const MUTATIONS: Mutation[] = [
     replace: '                Err(error) if error.is_not_found() && false => {\n                    for id in chunk {',
     scenarios: 'remain after one is deleted',
   },
+  {
+    name: 'gmail: a rate-limited call fails at once instead of waiting and trying again',
+    file: gmail('api.rs'),
+    find: 'if !error.is_rate_limit() || refused == RATE_LIMIT_TRIES {',
+    replace: 'if !error.is_rate_limit() || refused >= 1 {',
+    scenarios: 'far larger than one minute of quota',
+  },
+  {
+    name: 'gmail: a call Gmail keeps refusing is retried forever',
+    file: gmail('api.rs'),
+    find: 'if !error.is_rate_limit() || refused == RATE_LIMIT_TRIES {',
+    replace: 'if !error.is_rate_limit() {',
+    scenarios: 'refused again and again',
+  },
+  {
+    name: 'gmail: a Retry-After from Gmail is ignored for the usual backoff',
+    file: gmail('api.rs'),
+    find: '            let wait = retry_after.unwrap_or(backoff);\n',
+    replace: '            let wait = retry_after.map_or(backoff, |_| backoff);\n',
+    scenarios: 'during a rate-limit wait',
+  },
+  {
+    name: 'gmail: a sign-out leaves a sync waiting out a rate limit, so the core never stops',
+    file: gmail('adapter.rs'),
+    find: '        self.api.close();\n',
+    replace: '',
+    scenarios: 'during a rate-limit wait',
+  },
 ]
 
 const ROOT = join(import.meta.dirname, '..', '..', '..')
