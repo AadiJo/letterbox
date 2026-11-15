@@ -161,9 +161,16 @@ export async function sync(core: CoreClient) {
   if (!response.ok) throw new Error(`sync failed: ${response.error}`)
 }
 
-/** Waits until the accounts view passes `ready`, and returns it. Scenarios wait on what the core reports, never on time. */
-export async function untilAccounts(core: CoreClient, ready: (accounts: Account[]) => boolean): Promise<Account[]> {
-  const view = core.subscribe({ view: 'accounts' })
+/**
+ * Waits until an open accounts view passes `ready`, closes it, and returns what it shows.
+ * Scenarios wait on what the core reports, never on time. Open the view before the step
+ * whose effect it waits for: a view opened while that effect is on its way may or may not
+ * get an update from before it, so the transcript would change from run to run.
+ */
+export async function untilAccounts(
+  view: Subscription<'accounts'>,
+  ready: (accounts: Account[]) => boolean,
+): Promise<Account[]> {
   for (;;) {
     const accounts = view.latest()
     if (accounts && ready(accounts)) {
