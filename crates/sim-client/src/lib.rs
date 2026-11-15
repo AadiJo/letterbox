@@ -8,6 +8,7 @@
 //! client lets a request it sent complete, so a scenario can race a sign-out
 //! against a call in flight.
 
+mod keychain;
 mod wire;
 
 use std::cell::{Cell, RefCell};
@@ -29,6 +30,7 @@ use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+pub use crate::keychain::FileKeychain;
 use crate::wire::{Call, CallResult, Dialect, Reply, RequestBody, Session, encode, outcome, sign_in_result};
 
 /// One open socket to the server. Cloning shares the socket.

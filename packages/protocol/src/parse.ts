@@ -106,7 +106,7 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
   .or({
     method: "'sign-in'",
     ok: 'false',
-    error: "'cancelled' | 'denied' | 'timed-out' | 'superseded' | 'wrong-password' | 'offline'",
+    error: "'cancelled' | 'denied' | 'timed-out' | 'superseded' | 'wrong-password' | 'offline' | 'keychain'",
   })
   .or({ method: "'sign-out'", ok: 'true', result: { '[string]': 'never' } })
   .or({ method: "'sign-out'", ok: 'false', error: 'never' })

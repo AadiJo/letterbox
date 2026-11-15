@@ -4,6 +4,7 @@
 #   crates/core        the headless core: store, sync, threads, turns
 #   crates/sim-client  adapters that reach the sim provider (packages/sim-provider) over its socket,
 #                      and the `core-sim` program every scenario runs
+#   crates/keychain    the system keychain as the core's secret store, for the desktop and mobile apps
 #
 # `pnpm scenarios` builds `core-sim` and runs every scenario against it.
 

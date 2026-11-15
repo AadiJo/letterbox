@@ -30,6 +30,7 @@ mod dispatch;
 mod maps;
 mod queue;
 mod reconcile;
+pub mod secrets;
 mod sign_in;
 mod store;
 mod subscriptions;
@@ -50,15 +51,18 @@ use crate::adapter::{Adapter, AdapterFactory};
 use crate::clock::Environment;
 use crate::maps::{HashMap, HashSet, IndexMap};
 use crate::queue::Job;
+use crate::secrets::Secrets;
 use crate::sign_in::Attempts;
 use crate::store::Store;
 pub use crate::store::StoreError;
-use crate::world::{World, load_world};
+use crate::world::{AccountRecord, Health, World, load_world, put_account};
 
 pub struct CoreOptions {
     /// The folder that holds the store.
     pub data_path: PathBuf,
     pub env: Box<dyn Environment>,
+    /// Holds each signed-in account's session. An app passes the system keychain.
+    pub secrets: Box<dyn Secrets>,
     /// One per way to add an account.
     pub factories: Vec<Rc<dyn AdapterFactory>>,
     /// Takes every message for the client. It must not call `Core::receive`: the core
@@ -75,7 +79,9 @@ pub struct Core {
 }
 
 impl Core {
-    /// Opens the store and resumes every account that is still signed in.
+    /// Opens the store and resumes every account that is still signed in. A signed-in
+    /// account whose session the secret store cannot give back is marked as needing a
+    /// sign-in, which saves a session again.
     /// Call this, and `receive`, inside a tokio LocalSet: the core spawns its work there.
     pub fn new(options: CoreOptions) -> Result<Core, StoreError> {
         if cfg!(panic = "unwind") {
@@ -86,7 +92,7 @@ impl Core {
             );
         }
         let store = Store::open(&options.data_path)?;
-        let world = load_world(&store);
+        let mut world = load_world(&store);
         let factories: IndexMap<String, Rc<dyn AdapterFactory>> = options
             .factories
             .iter()
@@ -95,14 +101,31 @@ impl Core {
 
         let mut adapters: HashMap<AccountId, Linked> = HashMap::default();
         let mut links = 0;
-        for account in world.accounts.values() {
-            if let Some(factory) = factories.get(&account.factory_id)
-                && !account.session.is_empty()
-            {
-                links += 1;
-                let adapter = factory.resume(&account.session);
-                adapters.insert(account.id.clone(), Linked { adapter, link: links });
+        let mut lost: Vec<AccountRecord> = Vec::new();
+        for account in world.accounts.values().filter(|account| account.signed_in) {
+            let Some(factory) = factories.get(&account.factory_id) else {
+                continue;
+            };
+            match options.secrets.read(&account.id) {
+                Ok(Some(session)) => {
+                    links += 1;
+                    let adapter = factory.resume(&session);
+                    adapters.insert(account.id.clone(), Linked { adapter, link: links });
+                }
+                // The keychain is locked or lost the entry. The account stays signed in, so
+                // the next start tries again, but shows it needs a sign-in until then.
+                Ok(None) | Err(_) => lost.push(AccountRecord {
+                    health: Health::NeedsSignIn,
+                    ..account.clone()
+                }),
             }
+        }
+        if !lost.is_empty() {
+            store.write(|tx, _| {
+                for account in lost {
+                    put_account(&mut world, tx, account);
+                }
+            });
         }
         #[expect(clippy::disallowed_methods, reason = "a sign-in option's id is its factory's id")]
         let options_list = options
@@ -122,6 +145,7 @@ impl Core {
             inner: Rc::new(Inner {
                 store,
                 env: options.env,
+                secrets: options.secrets,
                 factories,
                 options: options_list,
                 send: options.send,
@@ -169,6 +193,7 @@ impl Core {
 struct Inner {
     store: Store,
     env: Box<dyn Environment>,
+    secrets: Box<dyn Secrets>,
     factories: IndexMap<String, Rc<dyn AdapterFactory>>,
     options: Vec<SignInOption>,
     send: Box<dyn Fn(CoreMessage)>,

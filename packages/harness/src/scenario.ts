@@ -3,7 +3,7 @@
 // the core says. Every run writes a transcript of each message to
 // artifacts/scenarios/, so a person can read what happened.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -11,7 +11,7 @@ import type { Dialect, SimMailbox, SimProvider, Seed } from '@letterbox/sim-prov
 import { startSimProvider } from '@letterbox/sim-provider/server'
 import type { Options } from '@letterbox/client'
 import { type CoreClient, startCore, type TranscriptEntry } from './client.ts'
-import { type Edge, leaks, lifecycle } from './invariants.ts'
+import { type Edge, leaks, lifecycle, SIM_KEYCHAIN, storeLeaks } from './invariants.ts'
 
 export type Scenario = {
   dialect: Dialect
@@ -20,6 +20,10 @@ export type Scenario = {
   mailbox(seed: Seed): SimMailbox
   /** Starts the core. Call `stop` on it and call this again to restart over the same store. */
   startCore(): CoreClient
+  /** The account ids core-sim's stand-in keychain holds a session for, in order. */
+  keychain(): string[]
+  /** Locks or unlocks core-sim's stand-in keychain. While locked, every call to it fails, and what it held is kept for the unlock. */
+  lockKeychain(locked: boolean): void
   /** Fails the scenario unless `ok` is true. `what` says what should hold. */
   check(ok: boolean, what: string): void
   /** Fails the scenario unless the two values are deeply equal. */
@@ -60,12 +64,14 @@ const recorded = (mailbox: SimMailbox, record: (entry: TranscriptEntry) => void)
 /** Runs one scenario against one dialect and writes its transcript. */
 export async function runOne(definition: Definition, dialect: Dialect): Promise<Result> {
   const folder = mkdtempSync(join(tmpdir(), 'letterbox-'))
+  const data = join(folder, 'data')
   const transcript: TranscriptEntry[] = []
   const record = (entry: TranscriptEntry) => void transcript.push(entry)
   const provider = await startSimProvider(join(folder, 'provider.sock'))
   const cores: CoreClient[] = []
   const passwords: string[] = []
   let failure: string | null = null
+  let leftInStore: string[] = []
 
   // One count for the whole run, across core restarts: the core keeps every change id it
   // has seen, so a restarted core must never be sent an id from before. Counting keeps
@@ -82,9 +88,27 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
     },
     startCore: () => {
       record({ from: 'scenario', note: 'core starts' })
-      const core = startCore(join(folder, 'data'), provider.socketPath, record, newId)
+      const core = startCore(data, provider.socketPath, record, newId)
       cores.push(core)
       return core
+    },
+    keychain: () => {
+      const path = join(data, SIM_KEYCHAIN)
+      const entries: unknown = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+      return typeof entries === 'object' && entries !== null ? Object.keys(entries).toSorted() : []
+    },
+    lockKeychain: (locked) => {
+      // A folder where the file should be makes every read and write of it fail.
+      const path = join(data, SIM_KEYCHAIN)
+      const kept = join(folder, 'keychain-while-locked')
+      if (locked) {
+        if (existsSync(path)) renameSync(path, kept)
+        mkdirSync(path, { recursive: true })
+      } else {
+        rmSync(path, { recursive: true, force: true })
+        if (existsSync(kept)) renameSync(kept, path)
+      }
+      record({ from: 'scenario', note: `the keychain is ${locked ? 'locked' : 'unlocked'}` })
     },
     check: (ok, what) => {
       record({ from: 'scenario', note: `${ok ? 'ok' : 'FAILED'}: ${what}` })
@@ -106,6 +130,8 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
   } finally {
     await Promise.all(cores.map((core) => core.stop().catch(() => undefined)))
     await provider.close()
+    // Read before the folder goes, once every core has written its last.
+    leftInStore = storeLeaks(data, provider.sessions())
     rmSync(folder, { recursive: true, force: true })
   }
 
@@ -114,6 +140,7 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
   const broken = [
     ...cores.flatMap((core) => core.violations()),
     ...leaks(transcript, new Set([...provider.handedOut(), ...passwords])),
+    ...leftInStore,
     ...cycle.problems,
   ]
   if (broken.length > 0) {

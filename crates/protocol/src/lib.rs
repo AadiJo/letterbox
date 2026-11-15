@@ -335,7 +335,6 @@ pub enum Query {
     Mailboxes {
         #[serde(default, deserialize_with = "present")]
         #[ts(optional)]
-        #[ts(optional)]
         account_id: Option<AccountId>,
     },
     Threads {
@@ -382,10 +381,8 @@ pub enum Command {
         thread_ids: Vec<ThreadId>,
         #[serde(default, deserialize_with = "present")]
         #[ts(optional)]
-        #[ts(optional)]
         unread: Option<bool>,
         #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
         #[ts(optional)]
         flagged: Option<bool>,
     },
@@ -494,7 +491,6 @@ pub enum Request {
         option: SignInOptionId,
         #[serde(default, deserialize_with = "present")]
         #[ts(optional)]
-        #[ts(optional)]
         password: Option<PasswordInput>,
     },
     SignOut {
@@ -503,7 +499,6 @@ pub enum Request {
     },
     SyncNow {
         #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
         #[ts(optional)]
         account_id: Option<AccountId>,
     },
@@ -594,6 +589,9 @@ pub enum SignInError {
     Superseded,
     WrongPassword,
     Offline,
+    /// The provider let the user in, but the system keychain would not save the login,
+    /// for example because it is locked. No account was added. Unlock it and sign in again.
+    Keychain,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]

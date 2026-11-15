@@ -1,7 +1,9 @@
-// Rules every scenario run must keep, checked on its whole transcript after the
-// run ends. A scenario does not have to ask for them. The runner fails any run
-// that breaks one.
+// Rules every scenario run must keep, checked on its whole transcript and the
+// core's data folder after the run ends. A scenario does not have to ask for
+// them. The runner fails any run that breaks one.
 
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import type { CoreMessage, Refusal } from '@letterbox/protocol'
 import type { TranscriptEntry } from './client.ts'
 
@@ -29,6 +31,35 @@ export function leaks(transcript: TranscriptEntry[], secrets: ReadonlySet<string
         (value) => `the core's ${message.kind} message carries the provider's opaque string ${JSON.stringify(value)}`,
       ),
   )
+}
+
+/**
+ * The file core-sim keeps its stand-in keychain in, inside the data folder. Its name is
+ * set in crates/sim-client/src/main.rs. It is the one file there allowed to hold a session.
+ */
+export const SIM_KEYCHAIN = 'sim-keychain.json'
+
+/** Every file under `folder`, with its path relative to it. Empty when the folder does not exist. */
+const filesIn = (folder: string): string[] =>
+  existsSync(folder)
+    ? readdirSync(folder, { recursive: true, encoding: 'utf8' }).filter((path) => statSync(join(folder, path)).isFile())
+    : []
+
+/**
+ * Session strings stay out of the core's store: they belong in the secret store the host
+ * gives the core. Reads the raw bytes of every file in `dataPath` but the sim keychain,
+ * the sqlite file and its journals included, so a session left in a freed page or a WAL
+ * frame counts too. A session is looked for as it is and as it reads inside a JSON string,
+ * since the store keeps each record as JSON.
+ */
+export function storeLeaks(dataPath: string, sessions: ReadonlySet<string>): string[] {
+  const files = filesIn(dataPath).filter((path) => path !== SIM_KEYCHAIN)
+  return files.flatMap((path) => {
+    const bytes = readFileSync(join(dataPath, path))
+    return [...sessions]
+      .filter((session) => [session, JSON.stringify(session).slice(1, -1)].some((form) => bytes.includes(form)))
+      .map((session) => `the core's store file ${path} holds the session string ${JSON.stringify(session)}`)
+  })
 }
 
 /** One arrow in the change lifecycle: the state before, the state after, and why. */

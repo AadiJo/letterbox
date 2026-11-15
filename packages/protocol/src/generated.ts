@@ -213,7 +213,7 @@ export type Never = never;
 
 export type SignedIn = { accountId: AccountId, };
 
-export type SignInError = "cancelled" | "denied" | "timed-out" | "superseded" | "wrong-password" | "offline";
+export type SignInError = "cancelled" | "denied" | "timed-out" | "superseded" | "wrong-password" | "offline" | "keychain";
 
 export type SyncNowError = "offline";
 
