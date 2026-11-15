@@ -10,6 +10,7 @@
 //   C04 a `next` waiting when the view closes or the core goes away never settles, nor does one made after
 //   C05 an answer sent from inside `send` arrives before its wait exists and is lost
 //   C06 with 'keep', a message that arrived before its wait is lost
+//   C07 a `send` that throws escapes as a throw, or leaves its wait behind to take a later message
 
 import type { ClientMessage, CoreMessage, RequestId, SubscriptionId } from '@letterbox/protocol'
 import { createClient, type Listener, type Options } from './client.ts'
@@ -138,6 +139,42 @@ const checks: [string, () => Promise<void>][] = [
       wire.deliver({ kind: 'open-url', id: 'req_1' as RequestId, url: 'sim://sign-in/1' })
       if ((await client.settled('change_1' as never)).rev !== 2) fail('the settled was lost')
       if ((await client.take('open-url')).url !== 'sim://sign-in/1') fail('the open-url was lost')
+    },
+  ],
+  [
+    'C07 a send that throws rejects the promise and leaves no wait behind',
+    async () => {
+      const broken = new Error('the bridge is down')
+      let listener: Listener | undefined
+      const transport = {
+        send: () => {
+          throw broken
+        },
+        listen: (given: Listener) => void (listener = given),
+      }
+      const handed: CoreMessage[] = []
+      const client = createClient(transport, { newId: ids(), unclaimed: (message) => handed.push(message) })
+      const calls = [
+        () => client.hello(),
+        () => client.command({ kind: 'trash', threadIds: [] }),
+        () => client.request({ method: 'blob', blobId: 'blob_1' as never }),
+      ]
+      for (const call of calls) {
+        let promise: Promise<unknown>
+        try {
+          promise = call()
+        } catch {
+          return fail('a send error escaped as a throw instead of a rejection')
+        }
+        const error = await promise.then(
+          () => null,
+          (reason: unknown) => reason,
+        )
+        if (error !== broken) fail(`rejected with ${String(error)} instead of the send error`)
+      }
+      // A wait left behind would take this welcome before `unclaimed` sees it.
+      listener?.receive({ kind: 'welcome', protocol: 0, rev: 1 })
+      if (handed.length !== 1) fail('a failed hello left its wait behind')
     },
   ],
 ]

@@ -171,6 +171,25 @@ export function createClient(transport: Transport, options: Options): KeepingCli
       })
     })
 
+  /**
+   * Waits for the answer to `message`, then sends it. If `send` throws, the wait is dropped
+   * and the returned promise rejects with that error, so nothing rejects later unseen.
+   */
+  const ask = <Message extends CoreMessage>(
+    message: ClientMessage,
+    matches: (message: CoreMessage) => message is Message,
+  ) => {
+    const answer = waitFor(matches)
+    try {
+      transport.send(message)
+    } catch (error) {
+      const index = waiters.findIndex((waiter) => waiter.matches === matches)
+      if (index !== -1) waiters.splice(index, 1)
+      return Promise.reject<Message>(error)
+    }
+    return answer
+  }
+
   const take: KeepingClient['take'] = (kind) => waitFor((message): message is Of<typeof kind> => message.kind === kind)
 
   const subscribe = <V extends View>(query: QueryFor<V>): Subscription<V> => {
@@ -203,18 +222,17 @@ export function createClient(transport: Transport, options: Options): KeepingCli
 
   const begin: Client['begin'] = (request) => {
     const id = options.newId('req') as RequestId
-    const done = waitFor((message): message is Of<'response'> => message.kind === 'response' && message.id === id)
-    transport.send({ kind: 'request', id, request })
+    const done = ask(
+      { kind: 'request', id, request },
+      (message): message is Of<'response'> => message.kind === 'response' && message.id === id,
+    )
     // The core answers a request with the response for the same method.
     return { id, done: done as Promise<Of<'response'> & ResponseFor<typeof request.method>> }
   }
 
   return {
-    hello: () => {
-      const welcome = take('welcome')
-      transport.send({ kind: 'hello', protocol: PROTOCOL })
-      return welcome
-    },
+    hello: () =>
+      ask({ kind: 'hello', protocol: PROTOCOL }, (message): message is Of<'welcome'> => message.kind === 'welcome'),
     subscribe,
     query: async (query) => {
       const subscription = subscribe(query)
@@ -222,14 +240,12 @@ export function createClient(transport: Transport, options: Options): KeepingCli
       subscription.close()
       return data
     },
-    command: (command, change = options.newId('change') as ChangeId) => {
-      const answer = waitFor(
+    command: (command, change = options.newId('change') as ChangeId) =>
+      ask(
+        { kind: 'command', change, command },
         (message): message is Of<'accepted'> | Of<'rejected'> =>
           (message.kind === 'accepted' || message.kind === 'rejected') && message.change === change,
-      )
-      transport.send({ kind: 'command', change, command })
-      return answer
-    },
+      ),
     settled: (change) =>
       waitFor((message): message is Of<'settled'> => message.kind === 'settled' && message.change === change),
     request: (request) => begin(request).done,
