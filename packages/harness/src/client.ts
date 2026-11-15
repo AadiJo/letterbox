@@ -62,7 +62,7 @@ export type CoreClient = {
   take<Kind extends CoreMessage['kind']>(kind: Kind): Promise<Of<Kind>>
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
-  /** Closes the core's input and waits for the process to end. */
+  /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
   stop(): Promise<void>
   /** Every message the core sent that broke the protocol's shapes. A scenario fails if there is one. */
   violations(): string[]
@@ -278,7 +278,15 @@ export function startCore(dataDir: string, socketPath: string, record: (entry: T
     violations: () => [...violations],
     stop: async () => {
       child.stdin.end()
+      // A core that never exits would hang the whole run. It gets as long as any answer does.
+      let killed = false
+      const timer = setTimeout(() => {
+        killed = true
+        child.kill()
+      }, WAIT_MS)
       await exited
+      clearTimeout(timer)
+      if (killed) throw new Error(`the core did not exit within ${WAIT_MS} ms of its input closing`)
     },
   }
 }

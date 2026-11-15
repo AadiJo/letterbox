@@ -80,6 +80,21 @@ scenario('a second sign-in ends the first one, and each gets its own answer', as
   t.equal(thirdAnswer.ok === false && thirdAnswer.error, 'denied', 'a refused consent is answered as denied')
 })
 
+scenario('a sign-in still waiting for the user is answered cancelled when the core stops', async (t) => {
+  t.mailbox(standardSeed(t.dialect))
+  const core = t.startCore()
+  await core.hello()
+  const option = (await core.query({ view: 'sign-in-options' })).find((candidate) => candidate.method === 'oauth')
+  t.check(option !== undefined, 'the core lists an oauth option')
+  if (!option) return
+  const attempt = core.begin({ method: 'sign-in', option: option.id })
+  await core.take('open-url')
+  const stopped = core.stop()
+  const answer = await attempt.done
+  t.equal(answer.ok === false && answer.error, 'cancelled', 'the waiting sign-in is told it was cancelled')
+  await stopped
+})
+
 scenario('a body loads when a conversation is opened, once', async (t) => {
   const { core, box } = await start(t)
   const photos = await thread(core, 'Trip photos')

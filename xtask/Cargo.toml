@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 # Lexes Rust the way macros see it. span-locations gives each token its line.
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+# Decodes string, byte and char literals, so escapes cannot hide a name.
+syn = { version = "2", default-features = false, features = ["parsing"] }
 
 [lints]
 workspace = true

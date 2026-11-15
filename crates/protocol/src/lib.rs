@@ -404,8 +404,11 @@ pub struct Draft {
     pub bcc: Vec<String>,
     pub subject: String,
     pub text: String,
+    /// Required, but may be null. `Option::deserialize` stops serde from reading a missing field as null.
+    #[serde(deserialize_with = "Option::deserialize")]
     pub html: Option<String>,
-    /// The core writes Message-ID, In-Reply-To and References from this.
+    /// The core writes Message-ID, In-Reply-To and References from this. Required, but may be null.
+    #[serde(deserialize_with = "Option::deserialize")]
     pub in_reply_to: Option<MessageId>,
 }
 

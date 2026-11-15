@@ -3,8 +3,10 @@
 //! The source is lexed with proc-macro2, the lexer macros use, so plain comments
 //! are dropped and strings, raw strings and macro bodies arrive as tokens. Doc
 //! comments arrive as `#[doc = "..."]` attributes, which are skipped like comments.
+//! Literals are checked for the text they stand for, so escapes cannot hide a name.
 
-use proc_macro2::{Delimiter, Group, LexError, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, LexError, Literal, Span, TokenStream, TokenTree};
+use syn::Lit;
 
 /// The words, one per line. lint/rules/no-provider-names.ts reads the same file.
 const TERMS: &str = include_str!("../../lint/provider-terms.txt");
@@ -39,9 +41,20 @@ fn walk(tokens: TokenStream, found: &mut Vec<Finding>) {
             }
             TokenTree::Group(group) => walk(group.stream(), found),
             TokenTree::Ident(ident) => check(&ident.to_string(), ident.span(), found),
-            TokenTree::Literal(literal) => check(&literal.to_string(), literal.span(), found),
+            TokenTree::Literal(literal) => check(&decoded(&literal), literal.span(), found),
             TokenTree::Punct(_) => {}
         }
+    }
+}
+
+/// The text a literal stands for: "\x69map" stands for "imap". A number stays as written.
+fn decoded(literal: &Literal) -> String {
+    match Lit::new(literal.clone()) {
+        Lit::Str(text) => text.value(),
+        Lit::ByteStr(bytes) => String::from_utf8_lossy(&bytes.value()).into_owned(),
+        Lit::CStr(text) => text.value().to_string_lossy().into_owned(),
+        Lit::Char(char) => char.value().to_string(),
+        _ => literal.to_string(),
     }
 }
 

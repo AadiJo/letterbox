@@ -17,6 +17,10 @@
 //! The core runs on one thread, inside a tokio `LocalSet`, so its state needs no
 //! locks and its steps run in the order above. A host that wants it on another
 //! thread gives it a thread of its own and passes messages across.
+//!
+//! A panic in the core is a bug that can leave its memory out of step with the
+//! store. Build the host with `panic = "abort"`, as this workspace does, so a
+//! panic ends the program instead of leaving a broken core running.
 
 pub mod adapter;
 mod changes;
@@ -64,10 +68,9 @@ pub struct CoreOptions {
     pub env: Box<dyn Environment>,
     /// One per way to add an account.
     pub factories: Vec<Rc<dyn AdapterFactory>>,
-    /// Takes every message for the client. It must not call `Core::receive` itself.
+    /// Takes every message for the client. It must not call `Core::receive`: the core
+    /// sends updates while it holds its state, and a call back in would panic.
     pub send: Box<dyn Fn(CoreMessage)>,
-    /// Diagnostics for a person debugging the core. Never part of the protocol.
-    pub log: Box<dyn Fn(&str)>,
 }
 
 /// The running core. `close` stops it once its work is done. Dropping it, and
@@ -118,7 +121,6 @@ impl Core {
                 factories,
                 options: options_list,
                 send: options.send,
-                log: options.log,
                 state: RefCell::new(State {
                     world,
                     adapters,
@@ -143,8 +145,12 @@ impl Core {
 
     /// Lets work in flight finish, including the work it starts, then releases the
     /// adapters and the store. Idle accounts are not work: an adapter waiting for
-    /// nothing does not hold this up. A sign-in still waiting for the user does.
+    /// nothing does not hold this up. A sign-in still waiting for the user is
+    /// cancelled first, so it is answered `cancelled` instead of holding up the close.
     pub async fn close(self) {
+        for attempt in self.inner.state.borrow().sign_ins.values() {
+            attempt.signal.cancel();
+        }
         self.inner.work.close();
         self.inner.work.wait().await;
         let adapters: Vec<_> = self.inner.state.borrow_mut().adapters.drain().collect();
@@ -165,7 +171,6 @@ struct Inner {
     factories: IndexMap<String, Rc<dyn AdapterFactory>>,
     options: Vec<SignInOption>,
     send: Box<dyn Fn(CoreMessage)>,
-    log: Box<dyn Fn(&str)>,
     state: RefCell<State>,
     /// One queue per account. Each has a task that runs its jobs one at a time.
     queues: RefCell<HashMap<AccountId, mpsc::UnboundedSender<Job>>>,
@@ -365,7 +370,6 @@ impl Inner {
     }
 
     /// Runs `task` after everything already queued for this account, and hands back its result.
-    /// The receiver errs only if the task panicked.
     fn enqueue<T: 'static>(
         self: &Rc<Self>,
         account_id: &AccountId,
@@ -381,32 +385,23 @@ impl Inner {
             drop(in_flight);
         });
         let mut queues = self.queues.borrow_mut();
-        let queue = queues
-            .entry(account_id.clone())
-            .or_insert_with(|| self.start_queue(account_id));
+        let queue = queues.entry(account_id.clone()).or_insert_with(|| self.start_queue());
         assert!(queue.send(job).is_ok(), "a queue's task lives as long as the core");
         receiver
     }
 
-    /// Queues a task nobody waits for. A panic in it is logged by the queue.
+    /// Queues a task nobody waits for.
     fn background<T: 'static>(self: &Rc<Self>, account_id: &AccountId, task: impl Future<Output = T> + 'static) {
         drop(self.enqueue(account_id, task));
     }
 
     /// Starts the task that runs one account's jobs in order.
-    fn start_queue(self: &Rc<Self>, account_id: &AccountId) -> mpsc::UnboundedSender<Job> {
+    /// The task holds only the receiver, so it ends when the core drops its sender.
+    fn start_queue(&self) -> mpsc::UnboundedSender<Job> {
         let (sender, mut jobs) = mpsc::unbounded_channel::<Job>();
-        // Weak, so the queue does not keep the core alive.
-        let core = Rc::downgrade(self);
-        let account_id = account_id.clone();
         spawn_local(async move {
             while let Some(job) = jobs.recv().await {
-                // Each job is its own task, so a panic in one is logged and the queue goes on.
-                if let Err(error) = spawn_local(job).await
-                    && let Some(core) = core.upgrade()
-                {
-                    (core.log)(&format!("a task for {account_id} failed: {error}"));
-                }
+                job.await;
             }
         });
         sender
@@ -849,10 +844,14 @@ impl Inner {
         self.background(&account_id, Rc::clone(self).pass(account_id.clone(), true));
     }
 
+    /// Removes the adapter at once, so no new work starts for the account. The rest
+    /// waits its turn in the account's queue, so a pass already running finishes
+    /// first and cannot write the account's records back after they are deleted.
     fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {
         let adapter = self.state.borrow_mut().adapters.remove(&account_id);
         let core = Rc::clone(self);
-        self.work.spawn_local(async move {
+        let queue = account_id.clone();
+        self.background(&queue, async move {
             if let Some(adapter) = adapter {
                 adapter.close().await;
             }
@@ -932,9 +931,9 @@ impl Inner {
         self.work.spawn_local(async move {
             let mut offline = false;
             while let Some(pass) = next {
-                let Ok(result) = pass.await else {
-                    return (core.log)(&format!("request {id} failed: its sync pass panicked"));
-                };
+                let result = pass
+                    .await
+                    .expect("a queued pass runs to its end, since a panic ends the program");
                 offline |= result == Err(AdapterFailure::Offline);
                 next = accounts.next().map(|account_id| start(&core, account_id));
             }

@@ -208,6 +208,13 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'saved before it exits',
   },
   {
+    name: 'closing the core waits forever on a sign-in the user never finishes',
+    file: core('lib.rs'),
+    find: '        for attempt in self.inner.state.borrow().sign_ins.values() {\n            attempt.signal.cancel();\n        }\n',
+    replace: '',
+    scenarios: 'answered cancelled when the core stops',
+  },
+  {
     name: 'closing the core does not wait for the work in flight',
     file: core('lib.rs'),
     find: '        self.inner.work.wait().await;\n',

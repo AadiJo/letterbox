@@ -15,7 +15,8 @@ use serde::de::DeserializeOwned;
 const TABLES: [&str; 5] = ["accounts", "mailboxes", "messages", "threads", "changes"];
 
 /// The core has no answer yet for a failed write (AccountStatus has an `error`
-/// state with reason `storage` for that). Until it does, a failed write ends the core.
+/// state with reason `storage` for that). Until it does, a failed write panics,
+/// which ends the program (see the crate docs in lib.rs).
 const WRITE_FAILED: &str = "the store could not write";
 
 /// A kind of record the store keeps, one table per kind.

@@ -79,7 +79,6 @@ fn main() -> ExitCode {
                 serde_json::to_writer(&mut out, &message).expect("core messages are plain data");
                 out.write_all(b"\n").expect("stdout is open while the core runs");
             }),
-            log: Box::new(|line| eprintln!("{line}")),
         };
         let core = match Core::new(options) {
             Ok(core) => core,
