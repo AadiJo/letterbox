@@ -137,6 +137,8 @@ export interface SimProvider {
   denySignIn(url: string): void
   /** Every ref, cursor, page token and session string this provider gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
+  /** The session strings among `handedOut`. The core keeps these in its secret store, never in its own store. */
+  sessions(): ReadonlySet<string>
   close(): Promise<void>
 }
 

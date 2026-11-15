@@ -66,6 +66,14 @@ impl Inner {
 
     /// Links the account a sign-in reached, or relinks it if this address signed in before,
     /// answers the sign-in and starts its first sync. The adapter it replaces closes after.
+    ///
+    /// The session goes to the secret store before the commit that marks the account signed
+    /// in, so the store never names a signed-in account without a session to resume. A crash
+    /// between the two leaves a new account's session under an id the store does not have,
+    /// which nothing resumes and a later sign-in given that id overwrites, or an account that
+    /// signed in before with its newer session in place of the old one. If the secret store
+    /// refuses the session, the sign-in fails with `keychain` and nothing is linked: an
+    /// account that would be signed out at the next start is worse than asking again now.
     fn install(self: &Rc<Self>, id: RequestId, factory_id: &str, connection: Connection) {
         let address = connection.address.to_lowercase();
         let existing = self
@@ -79,6 +87,11 @@ impl Inner {
         let account_id = existing
             .as_ref()
             .map_or_else(|| self.store.next_id(), |account| account.id.clone());
+        if self.secrets.write(&account_id, &connection.session).is_err() {
+            self.respond(id, Response::SignIn(Answer::from(Err(SignInError::Keychain))));
+            self.work.spawn_local(async move { connection.adapter.close().await });
+            return;
+        }
         let capabilities = connection.adapter.capabilities();
         let replaced = {
             let mut state = self.state.borrow_mut();
@@ -98,7 +111,7 @@ impl Inner {
                     address: connection.address,
                     provider_label: connection.provider_label,
                     factory_id: factory_id.to_owned(),
-                    session: connection.session,
+                    signed_in: true,
                     capabilities,
                     cursor: existing.as_ref().and_then(|account| account.cursor.clone()),
                     last_synced_at: existing.and_then(|account| account.last_synced_at),
@@ -121,6 +134,11 @@ impl Inner {
     /// A pass still running for the account sees its adapter is gone and writes nothing
     /// more (see `still_current`). Deleting the mail settles the account's waiting changes
     /// as failed, since each accepted change gets exactly one `settled` (guarantee 2).
+    ///
+    /// The commit comes first and the session is deleted after it, so a crash between the
+    /// two leaves a session the store no longer counts as signed in, and nothing resumes it.
+    /// A failed delete leaves the same state, so the sign-out still succeeds. The session
+    /// stays in the secret store unread until a sign-in to the same account id overwrites it.
     pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {
         let unlinked = self.state.borrow_mut().adapters.remove(&account_id);
         let waiting: Vec<ChangeId> = if delete_local_mail {
@@ -138,13 +156,12 @@ impl Inner {
                 return;
             };
             if !delete_local_mail {
-                let session = String::new();
                 let health = Health::NeedsSignIn;
                 return put_account(
                     world,
                     tx,
                     AccountRecord {
-                        session,
+                        signed_in: false,
                         health,
                         ..account
                     },
@@ -188,6 +205,7 @@ impl Inner {
             }
             remove_account(world, tx, &account_id);
         });
+        let _ = self.secrets.delete(&account_id);
         let result = ChangeResult::Failed(Refusal::UnknownTarget);
         for change in waiting {
             self.send(CoreMessage::Settled { change, rev, result });

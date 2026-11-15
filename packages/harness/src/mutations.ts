@@ -1,5 +1,5 @@
 // Proves the checks catch real mistakes. Each entry breaks the code one way, runs
-// the scenarios that should notice, and puts the file back. Run it with
+// the scenarios that should notice, and puts the files back. Run it with
 // `pnpm scenarios:selftest`. It fails if any break goes unnoticed.
 //
 // Most entries are mistakes an agent made, or nearly made, while this repo was built.
@@ -17,15 +17,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CORE_DID_NOT_BUILD } from './client.ts'
 
-type Mutation = {
-  /** What goes wrong, in a user's or a reviewer's words. */
-  name: string
+type Edit = {
   file: string
   /** Text that must appear exactly once in the file. */
   find: string
   replace: string
+}
+
+type Mutation = Edit & {
+  /** What goes wrong, in a user's or a reviewer's words. */
+  name: string
   /** Runs only the scenarios whose name contains this. */
   scenarios: string
+  /** More edits, for a break that needs more than one place changed. Applied in order after the first. */
+  also?: Edit[]
 }
 
 const core = (file: string) => `crates/core/src/${file}`
@@ -261,6 +266,55 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'each list filter agrees',
   },
   {
+    name: 'the session goes back into the account record',
+    file: core('world.rs'),
+    find: '    pub signed_in: bool,\n',
+    replace: '    pub signed_in: bool,\n    pub session: String,\n',
+    also: [
+      {
+        file: core('accounts.rs'),
+        find: '                    signed_in: true,\n',
+        replace: '                    signed_in: true,\n                    session: connection.session.clone(),\n',
+      },
+    ],
+    scenarios: 'first sync shows',
+  },
+  {
+    // SQLite's checkpoint at close overwrites the page, so only a check made while the core runs sees it.
+    name: 'the session sits in the account record until the first sync overwrites it',
+    file: core('world.rs'),
+    find: '    pub signed_in: bool,\n',
+    replace: '    pub signed_in: bool,\n    pub session: String,\n',
+    also: [
+      {
+        file: core('accounts.rs'),
+        find: '                    signed_in: true,\n',
+        replace: '                    signed_in: true,\n                    session: connection.session.clone(),\n',
+      },
+      {
+        file: core('sync.rs'),
+        find: '                        health,\n                        last_synced_at,\n                        ..account\n',
+        replace:
+          '                        health,\n                        last_synced_at,\n                        session: String::new(),\n                        ..account\n',
+      },
+    ],
+    scenarios: 'first sync shows',
+  },
+  {
+    name: 'a sign-out leaves the session in the keychain',
+    file: core('accounts.rs'),
+    find: '        let _ = self.secrets.delete(&account_id);\n',
+    replace: '',
+    scenarios: 'until a sign-out deletes it',
+  },
+  {
+    name: 'a sign-in links the account when the keychain refuses its session',
+    file: core('accounts.rs'),
+    find: 'if self.secrets.write(&account_id, &connection.session).is_err() {',
+    replace: 'if self.secrets.write(&account_id, &connection.session).is_err() && false {',
+    scenarios: 'locked keychain',
+  },
+  {
     name: 'a provider ref reaches the UI',
     file: core('views.rs'),
     find: 'snippet: last.facts.preview.clone(),',
@@ -286,17 +340,27 @@ const MUTATIONS: Mutation[] = [
 const ROOT = join(import.meta.dirname, '..', '..', '..')
 const SCRATCH = mkdtempSync(join(tmpdir(), 'letterbox-mutations-'))
 
-/** Applies one mutation, runs its scenarios, restores the file. True when the scenarios failed, as they should. */
+/** Applies one mutation, runs its scenarios, restores the files. True when the scenarios failed, as they should. */
 function caught(mutation: Mutation): { ok: boolean; why: string } {
-  const path = join(ROOT, mutation.file)
-  const original = readFileSync(path, 'utf8')
-  const count = original.split(mutation.find).length - 1
-  if (count !== 1)
-    return {
-      ok: false,
-      why: `its text appears ${count} times in ${mutation.file}. Update the entry to match the code.`,
+  // Each file's text before the first edit to it, to put back afterwards.
+  const originals = new Map<string, string>()
+  const restore = () => {
+    for (const [path, text] of originals) writeFileSync(path, text)
+  }
+  for (const edit of [mutation, ...(mutation.also ?? [])]) {
+    const path = join(ROOT, edit.file)
+    const text = readFileSync(path, 'utf8')
+    if (!originals.has(path)) originals.set(path, text)
+    const count = text.split(edit.find).length - 1
+    if (count !== 1) {
+      restore()
+      return {
+        ok: false,
+        why: `its text appears ${count} times in ${edit.file}. Update the entry to match the code.`,
+      }
     }
-  writeFileSync(path, original.replace(mutation.find, mutation.replace))
+    writeFileSync(path, text.replace(edit.find, edit.replace))
+  }
   try {
     const run = spawnSync(process.execPath, ['packages/harness/src/run.ts', mutation.scenarios], {
       cwd: ROOT,
@@ -310,7 +374,7 @@ function caught(mutation: Mutation): { ok: boolean; why: string } {
       return { ok: false, why: `the broken code does not compile. Update the entry so it builds.\n${run.stderr}` }
     return run.status === 0 ? { ok: false, why: `the scenarios still pass: ${summary}` } : { ok: true, why: summary }
   } finally {
-    writeFileSync(path, original)
+    restore()
   }
 }
 

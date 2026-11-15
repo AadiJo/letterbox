@@ -320,9 +320,9 @@ pub struct Connection {
     /// Shown next to the account. The only provider name the UI ever sees.
     pub provider_label: String,
     pub adapter: Rc<dyn Adapter>,
-    /// Whatever the adapter needs to reconnect after a restart. The core stores it
-    /// and hands it to `resume`. Real adapters put tokens here, so the core must
-    /// move this into the system keychain before any of them ships.
+    /// Whatever the adapter needs to reconnect after a restart, tokens included. The
+    /// core keeps it in the secret store the host gives it (see secrets.rs), never in
+    /// its own store, and hands it to `resume`.
     pub session: String,
 }
 

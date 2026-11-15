@@ -45,12 +45,16 @@ export const startSimProvider: StartSimProvider = (socketPath) => {
   const attempts = new Map<string, { socket: Socket; id: number }>()
   let issued = 0
   const handedOut = new Set<string>()
+  const sessions = new Set<string>()
   let closing: Promise<void> | null = null
 
   /** Sends a sign-in result and remembers the session string the client will make from it. */
   const sendSignedIn = (socket: Socket, id: number, result: SignInResult): void => {
     // Both clients turn the session into its string this same way, so the leak check knows it.
-    if (result.ok) handedOut.add(JSON.stringify(result.session))
+    if (result.ok) {
+      handedOut.add(JSON.stringify(result.session))
+      sessions.add(JSON.stringify(result.session))
+    }
     send(socket, { id, kind: 'signed-in', result })
   }
 
@@ -130,6 +134,7 @@ export const startSimProvider: StartSimProvider = (socketPath) => {
     },
     denySignIn: (url) => finish(url, { ok: false, failure: 'denied' }),
     handedOut: () => handedOut,
+    sessions: () => sessions,
     close: () => {
       closing ??= new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy()

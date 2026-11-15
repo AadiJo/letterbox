@@ -5,7 +5,7 @@
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! A real app gets its own entry point with real adapters. Nothing here is test
-//! logic inside the core: this file only chooses which factories and clock it gets.
+//! logic inside the core: this file only chooses which factories, clock and secret store it gets.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use letterbox_core::clock::FixedEnvironment;
 use letterbox_core::{Core, CoreOptions};
-use letterbox_sim_client::sim_adapter_factories;
+use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::task::LocalSet;
@@ -22,6 +22,10 @@ const USAGE: &str = "usage: core-sim --data <folder> --sim <socket> [--now <time
 
 /// Written to stderr once stdin closes, before the core finishes its work and exits.
 const INPUT_CLOSED: &str = "core-sim: input closed, finishing the work in flight";
+
+/// The file in the data folder that stands in for the keychain. The harness reads it by
+/// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
+const KEYCHAIN_FILE: &str = "sim-keychain.json";
 
 struct Args {
     data: PathBuf,
@@ -74,6 +78,7 @@ fn main() -> ExitCode {
 
     LocalSet::new().block_on(&runtime, async move {
         let options = CoreOptions {
+            secrets: Box::new(FileKeychain::new(args.data.join(KEYCHAIN_FILE))),
             data_path: args.data,
             env: Box::new(env),
             factories: sim_adapter_factories(&args.sim),

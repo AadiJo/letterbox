@@ -23,8 +23,11 @@ pub struct AccountRecord {
     pub provider_label: String,
     /// Which sign-in option made this account, so the right factory can resume it.
     pub factory_id: String,
-    /// Empty after a sign-out that kept the mail.
-    pub session: String,
+    /// True from a sign-in until a sign-out. Only a signed-in account resumes on start.
+    /// The session itself lives in the host's secret store (see secrets.rs). This flag,
+    /// not whether a secret exists, decides: a sign-out commits before it deletes the
+    /// secret, so one left by a crash or a failed delete must not sign the account back in.
+    pub signed_in: bool,
     pub capabilities: AdapterCapabilities,
     /// None until the first sync finishes.
     pub cursor: Option<Cursor>,
