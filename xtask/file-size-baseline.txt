@@ -1,6 +1,6 @@
 # Hand-written files that were over the file-size limit when `cargo xtask file-size`
-# arrived, each with its length then, as `<lines> <path>`. A listed file may shrink but
-# not grow past its number. Once it is within the limit, delete its line. Never add a
+# arrived, as `<lines> <path>`. Each number must equal its file's length: when a file
+# shrinks, lower its number. Once it is within the limit, delete its line. Never add a
 # line or raise a number: split the file by responsibility instead.
 697 crates/protocol/src/lib.rs
 1202 packages/sim-provider/src/selfcheck.ts

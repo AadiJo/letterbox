@@ -1,0 +1,6 @@
+# The baseline the case commits: the accepted one. The test then writes next-baseline.txt
+# over it, as an agent editing the baseline would. Ways the check could fail on it:
+#   - it reads only the working tree, so a file is excused by adding it to the baseline
+#   - it lets a recorded number go up when the file grows with it
+#   - it ignores FILE_SIZE_BASE, so CI compares the baseline with itself
+505 kept.ts

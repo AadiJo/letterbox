@@ -2,6 +2,7 @@
 # Ways the check could fail on it:
 #   - it skips a line whose file was deleted, so the line stays forever
 #   - it reports a problem more than once, or exits with success after reporting
+520 shrank.rs
 510 grew.rs
 600 dropped.ts
 700 gone.rs
