@@ -1,11 +1,14 @@
-# Runs every check on each push and pull request: format, types, lint, the lint
+# Runs every check on each pull request and on main: format, types, lint, the lint
 # self-test, the scenarios and the break test. `pnpm check` is the same command a
 # person runs locally. The runner's preinstalled Rust toolchain builds the core.
 
 name: check
 
+# Pull requests, plus main after each merge. Not every branch push: a push run reports a
+# `check` on the same commit as the PR run, and could stand in for a failing one.
 on:
   push:
+    branches: [main]
   pull_request:
     # `edited` reruns the title check below when only the title changes.
     types: [opened, edited, synchronize, reopened]
@@ -39,7 +42,14 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
         run: node lint/commit-title.ts --title "$TITLE"
 
+      # On a pull request, the file-size check compares the baseline with the base commit's,
+      # so the baseline can only shrink. A shallow checkout lacks that commit, so fetch it.
+      - if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
+
       - run: pnpm check
+        env:
+          FILE_SIZE_BASE: ${{ github.event.pull_request.base.sha }}
 
       # One transcript per scenario run. Uploaded on failure too, when it matters most.
       - uses: actions/upload-artifact@v7

@@ -75,7 +75,7 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'offline changes reach the provider newest first',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: '        for change in waiting {\n            if !self.still_current(account_id, linked) {',
     replace:
       '        for change in waiting.into_iter().rev() {\n            if !self.still_current(account_id, linked) {',
@@ -83,7 +83,7 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'settled is sent before the refused change is undone',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: '        let id = change.id.clone();\n        let rev = self.commit(',
     replace:
       '        let id = change.id.clone();\n        let early = self.store.rev() + 1;\n        self.send(CoreMessage::Settled { change: id.clone(), rev: early, result });\n        let rev = self.commit(',
@@ -91,14 +91,14 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a refused change is reported as done',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: 'refused.map_or(ChangeResult::Done, |reason| ChangeResult::Failed(reason.into()))',
     replace: 'refused.map_or(ChangeResult::Done, |_| ChangeResult::Done)',
     scenarios: 'refuses is undone',
   },
   {
     name: 'the same change sent twice is applied twice',
-    file: core('lib.rs'),
+    file: core('dispatch.rs'),
     find: '        if let Some(earlier) = earlier {',
     replace: '        if let Some(earlier) = earlier.filter(|_| false) {',
     scenarios: 'same change twice',
@@ -140,21 +140,21 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a turn correction is never settled',
-    file: core('lib.rs'),
+    file: core('dispatch.rs'),
     find: '            return self.send(CoreMessage::Settled {\n                change,\n                rev,\n                result: ChangeResult::Done,\n            });',
     replace: '            return drop((change, rev));',
     scenarios: 'correction to a turn',
   },
   {
     name: 'the snapshot cursor is not saved, so every sync starts over',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: '                        cursor: result.cursor,',
     replace: '                        cursor: result.cursor.filter(|_| false),',
     scenarios: 'resumes with one cheap call',
   },
   {
     name: 'a second change uses the ref the first change replaced',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: '.find(|pair| pair.from == record.r#ref)',
     replace: '.find(|_| false)',
     scenarios: 'second change follows',
@@ -169,14 +169,14 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a client on another protocol version is welcomed',
-    file: core('lib.rs'),
+    file: core('dispatch.rs'),
     find: 'if protocol != f64::from(PROTOCOL) {',
     replace: 'if protocol.is_nan() {',
     scenarios: 'refuses a different protocol',
   },
   {
     name: 'a body is fetched again every time the conversation opens',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: [
       '            Ok(body) => {',
       '                self.commit(|world, tx, _| {',
@@ -197,7 +197,7 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a late body for a deleted message is shown as loading forever',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: '            Ok(body) => {\n',
     replace: '            Ok(crate::adapter::BodyResult::Gone) => {}\n            Ok(body) => {\n',
     scenarios: 'deleted while its body loads',
@@ -211,14 +211,14 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a push that outlives its sign-out still writes what it learned',
-    file: core('lib.rs'),
+    file: core('sync.rs'),
     find: '.is_some_and(|current| current.link == linked.link)',
     replace: '.is_some_and(|current| current.link == linked.link) || linked.link > 0',
     scenarios: 'a sign-out that',
   },
   {
     name: 'a sign-out that deletes mail leaves its waiting changes unsettled',
-    file: core('lib.rs'),
+    file: core('accounts.rs'),
     find: '            self.send(CoreMessage::Settled { change, rev, result });\n',
     replace: '            drop((change, rev, result));\n',
     scenarios: 'deletes mail settles',
@@ -232,10 +232,10 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a sign-out waits behind the work already queued for the account',
-    file: core('lib.rs'),
-    find: '    fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {\n',
+    file: core('accounts.rs'),
+    find: '    pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {\n',
     replace: [
-      '    fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {',
+      '    pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {',
       '        let core = Rc::clone(self);',
       '        let queue = account_id.clone();',
       '        self.background(&queue, async move { core.sign_out_now(id, account_id, delete_local_mail) });',

@@ -1,0 +1,200 @@
+//! Linking and unlinking accounts. A sign-in request runs one attempt (see sign_in.rs),
+//! then installs the adapter it reached and starts the first sync. A sign-out unlinks
+//! the adapter at once and keeps or deletes the account's mail.
+
+use std::rc::Rc;
+
+use letterbox_protocol::{
+    AccountId, Answer, ChangeId, ChangeResult, CoreMessage, Empty, PasswordInput, Refusal, RequestId, Response,
+    SignInError, SignInOptionId, SignedIn,
+};
+
+use crate::adapter::{Connection, SignInInput};
+use crate::sign_in::{Outcome, outcome};
+use crate::world::{
+    AccountRecord, Health, put_account, remove_account, remove_change, remove_mailbox, remove_message, remove_thread,
+};
+use crate::{Inner, Linked};
+
+impl Inner {
+    pub(crate) fn sign_in(self: &Rc<Self>, id: RequestId, option: SignInOptionId, password: Option<PasswordInput>) {
+        let Some(factory) = self.factories.get(option.as_str()).cloned() else {
+            return self.respond(id, Response::SignIn(Answer::from(Err(SignInError::Denied))));
+        };
+        let (attempt, prior) = self.state.borrow_mut().attempts.start(&option);
+        let core = Rc::clone(self);
+        self.work.spawn_local(async move {
+            if let Some(prior) = prior {
+                prior.answered.cancelled().await;
+            }
+            let newest = || core.state.borrow().attempts.is_newest(&option, &attempt);
+            let ended = if newest() {
+                let open_url = {
+                    let core = Rc::clone(&core);
+                    let id = id.clone();
+                    Box::new(move |url| core.send(CoreMessage::OpenUrl { id: id.clone(), url }))
+                };
+                let input = SignInInput {
+                    password,
+                    open_url,
+                    signal: attempt.signal.clone(),
+                };
+                let answer = factory.connect(input).await;
+                outcome(newest(), answer)
+            } else {
+                Outcome::Superseded(None)
+            };
+            core.end_sign_in(id, &factory.option().id, ended);
+            core.state.borrow_mut().attempts.answered(&option, &attempt);
+        });
+    }
+
+    /// Answers a sign-in attempt from how it ended. Each arm answers once, and none of them
+    /// awaits, so no other sign-in or sign-out can land between the decision and the answer.
+    fn end_sign_in(self: &Rc<Self>, id: RequestId, factory_id: &str, ended: Outcome) {
+        match ended {
+            Outcome::Superseded(unused) => {
+                self.respond(id, Response::SignIn(Answer::from(Err(SignInError::Superseded))));
+                if let Some(connection) = unused {
+                    self.work.spawn_local(async move { connection.adapter.close().await });
+                }
+            }
+            Outcome::Failed(failure) => self.respond(id, Response::SignIn(Answer::from(Err(failure.into())))),
+            Outcome::SignedIn(connection) => self.install(id, factory_id, connection),
+        }
+    }
+
+    /// Links the account a sign-in reached, or relinks it if this address signed in before,
+    /// answers the sign-in and starts its first sync. The adapter it replaces closes after.
+    fn install(self: &Rc<Self>, id: RequestId, factory_id: &str, connection: Connection) {
+        let address = connection.address.to_lowercase();
+        let existing = self
+            .state
+            .borrow()
+            .world
+            .accounts
+            .values()
+            .find(|account| account.factory_id == factory_id && account.address.to_lowercase() == address)
+            .cloned();
+        let account_id = existing
+            .as_ref()
+            .map_or_else(|| self.store.next_id(), |account| account.id.clone());
+        let capabilities = connection.adapter.capabilities();
+        let replaced = {
+            let mut state = self.state.borrow_mut();
+            state.links += 1;
+            let linked = Linked {
+                adapter: connection.adapter,
+                link: state.links,
+            };
+            state.adapters.insert(account_id.clone(), linked)
+        };
+        self.commit(|world, tx, _| {
+            put_account(
+                world,
+                tx,
+                AccountRecord {
+                    id: account_id.clone(),
+                    address: connection.address,
+                    provider_label: connection.provider_label,
+                    factory_id: factory_id.to_owned(),
+                    session: connection.session,
+                    capabilities,
+                    cursor: existing.as_ref().and_then(|account| account.cursor.clone()),
+                    last_synced_at: existing.and_then(|account| account.last_synced_at),
+                    health: Health::Ok,
+                },
+            );
+        });
+        let signed_in = SignedIn {
+            account_id: account_id.clone(),
+        };
+        self.respond(id, Response::SignIn(Answer::from(Ok(signed_in))));
+        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), true));
+        if let Some(replaced) = replaced {
+            self.work.spawn_local(async move { replaced.adapter.close().await });
+        }
+    }
+
+    /// Signs the account out at once. No await stands between taking the adapter and
+    /// changing the records, so no sign-in can land in between. The adapter closes after.
+    /// A pass still running for the account sees its adapter is gone and writes nothing
+    /// more (see `still_current`). Deleting the mail settles the account's waiting changes
+    /// as failed, since each accepted change gets exactly one `settled` (guarantee 2).
+    pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {
+        let unlinked = self.state.borrow_mut().adapters.remove(&account_id);
+        let waiting: Vec<ChangeId> = if delete_local_mail {
+            let state = self.state.borrow();
+            let changes = state.world.changes.values();
+            changes
+                .filter(|change| change.account_id == account_id && change.outcome.is_none())
+                .map(|change| change.id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let rev = self.commit(|world, tx, _| {
+            let Some(account) = world.accounts.get(&account_id).cloned() else {
+                return;
+            };
+            if !delete_local_mail {
+                let session = String::new();
+                let health = Health::NeedsSignIn;
+                return put_account(
+                    world,
+                    tx,
+                    AccountRecord {
+                        session,
+                        health,
+                        ..account
+                    },
+                );
+            }
+            let messages: Vec<_> = world
+                .messages
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &messages {
+                remove_message(world, tx, id);
+            }
+            let threads: Vec<_> = world
+                .threads
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &threads {
+                remove_thread(world, tx, id);
+            }
+            let mailboxes: Vec<_> = world
+                .mailboxes
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &mailboxes {
+                remove_mailbox(world, tx, id);
+            }
+            let changes: Vec<_> = world
+                .changes
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &changes {
+                remove_change(world, tx, id);
+            }
+            remove_account(world, tx, &account_id);
+        });
+        let result = ChangeResult::Failed(Refusal::UnknownTarget);
+        for change in waiting {
+            self.send(CoreMessage::Settled { change, rev, result });
+        }
+        self.respond(id, Response::SignOut(Answer::from(Ok(Empty {}))));
+        if let Some(unlinked) = unlinked {
+            self.work.spawn_local(async move { unlinked.adapter.close().await });
+        }
+    }
+}
