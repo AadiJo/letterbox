@@ -51,7 +51,11 @@ export const definitions: Definition[] = []
 /**
  * Labels scenarios that do not run as gmail, and why. Gmail has no password sign-in.
  */
-const NOT_GMAIL = new Set(['a wrong password ends the sign-in with an answer and no account'])
+const NOT_GMAIL = new Set([
+  'a wrong password ends the sign-in with an answer and no account',
+  // Signs in by password. What a locked keychain does is the core's, whatever the adapter.
+  'a locked keychain fails the sign-in, and at start leaves the account waiting for one',
+])
 
 /**
  * Registers a scenario. It runs once per dialect unless `only` narrows it, and as gmail
