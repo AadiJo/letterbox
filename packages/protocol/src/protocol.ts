@@ -5,6 +5,9 @@
 // client that speaks only this protocol. Messages are JSON. The transport is
 // not decided here: a local socket, stdio or in-process calls all work.
 //
+// crates/protocol is the Rust copy the core uses. Keep the two in step: the harness
+// checks every core message against parse.ts, and scenarios send client messages typed here.
+//
 // Three kinds of traffic:
 //   subscribe  the UI asks for a live view and gets an update each time it changes
 //   command    the UI states a user intent. The core applies it locally first, then syncs it

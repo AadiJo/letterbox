@@ -1,7 +1,7 @@
 // A client for the core process, as a scenario uses it. It speaks only the
 // protocol, so it would drive a core written in any language the same way.
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import type {
@@ -68,12 +68,22 @@ export type CoreClient = {
   violations(): string[]
 }
 
-const CORE_MAIN = fileURLToPath(new URL('./core-main.ts', import.meta.url))
+/** The core program the scenarios run: crates/sim-client/src/main.rs, built by `buildCore`. */
+const CORE_PROGRAM = fileURLToPath(new URL('../../../target/debug/core-sim', import.meta.url))
 const WAIT_MS = 5000
+
+/** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
+export const CORE_DID_NOT_BUILD = 2
+
+/** Builds the core program from the current source. Returns false, after cargo has printed why, if it does not build. */
+export function buildCore(): boolean {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  return spawnSync('cargo', ['build', '--quiet', '--bin', 'core-sim'], { cwd: root, stdio: 'inherit' }).status === 0
+}
 
 /** Starts a core process over `dataDir` that reaches the sim provider at `socketPath`. */
 export function startCore(dataDir: string, socketPath: string, record: (entry: TranscriptEntry) => void): CoreClient {
-  const child = spawn(process.execPath, [CORE_MAIN, '--data', dataDir, '--sim', socketPath], {
+  const child = spawn(CORE_PROGRAM, ['--data', dataDir, '--sim', socketPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   let stderr = ''

@@ -15,7 +15,7 @@ import type {
   RemoteMailbox,
   RemoteMessage,
   RemoteState,
-} from '@letterbox/core/adapter'
+} from './adapter.ts'
 import type { Mailbox } from '@letterbox/protocol'
 import type { SeedAddress, SeedMessage } from './contract.ts'
 

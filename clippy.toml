@@ -1,0 +1,20 @@
+# Calls the Rust crates may not make. Time comes into the core through
+# clock::Environment, so a run can be repeated. Stdout carries the protocol, so a
+# stray print corrupts it for every client. A crate that has a reason to make one
+# says so with #[expect(..., reason = "...")].
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "std::time::Instant::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "chrono::Utc::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "chrono::Local::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "std::io::stdout", reason = "the core talks only through CoreOptions::send. The program that runs it owns stdout" },
+  { path = "std::io::stderr", reason = "diagnostics go through CoreOptions::log" },
+]
+disallowed-macros = [
+  { path = "std::println", reason = "the core talks only through CoreOptions::send" },
+  { path = "std::print", reason = "the core talks only through CoreOptions::send" },
+  { path = "std::eprintln", reason = "diagnostics go through CoreOptions::log" },
+  { path = "std::eprint", reason = "diagnostics go through CoreOptions::log" },
+  { path = "std::dbg", reason = "diagnostics go through CoreOptions::log" },
+]

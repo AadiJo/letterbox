@@ -11,7 +11,7 @@ import type {
   Outcome,
   PageToken,
   SnapshotPage,
-} from '@letterbox/core/adapter'
+} from './adapter.ts'
 import type { CallCounts, Dialect, SimMailbox, Seed, SeedMailbox, SeedMessage } from './contract.ts'
 import { foldersEngine } from './folders.ts'
 import { labelsEngine } from './labels.ts'

@@ -191,6 +191,24 @@ scenario('a restart keeps the mail and resumes with one cheap call', async (t) =
   )
 })
 
+scenario('a body still loading when the core stops is saved before it exits', async (t) => {
+  const first = await start(t)
+  const photos = await thread(first.core, 'Trip photos')
+  first.box.holdBodies()
+  const open = watchThread(first.core, photos.id)
+  t.equal((await open.next())?.messages[0]?.body.state, 'loading', 'the body is loading while the provider holds it')
+  const stopped = first.core.stop()
+  // A core that wrongly stops at once gets this long to do so. A correct core waits for the body either way.
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  first.box.releaseBodies()
+  await stopped
+
+  const core = t.startCore()
+  await core.hello()
+  t.equal((await openWithBody(core, photos.id)).body.state, 'ready', 'the body is there after the restart')
+  t.equal(first.box.calls().body, 1, 'the provider was asked for it once, before the stop')
+})
+
 scenario('two accounts share one list', async (t) => {
   const { core, accountId } = await start(t)
   const other = standardSeed(t.dialect, { address: 'second@sim.test' })

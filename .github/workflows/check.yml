@@ -1,5 +1,6 @@
 # Runs every check on each push and pull request: format, types, lint, the lint
-# self-test and the scenarios. `pnpm check` is the same command a person runs locally.
+# self-test, the scenarios and the break test. `pnpm check` is the same command a
+# person runs locally. The runner's preinstalled Rust toolchain builds the core.
 
 name: check
 
@@ -23,6 +24,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      # Keeps Cargo's registry and target folder between runs. SQLite compiles from source on a cold cache.
+      - uses: Swatinem/rust-cache@v2
 
       - run: pnpm install --frozen-lockfile
 

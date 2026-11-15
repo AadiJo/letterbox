@@ -3,14 +3,21 @@
 //   node packages/harness/src/run.ts            all scenarios
 //   node packages/harness/src/run.ts archive    only scenarios whose name contains "archive"
 //
+// Builds the Rust core first, so the scenarios always run the source as it is.
 // Writes one transcript per run and a summary to artifacts/scenarios/.
-// Exits 1 if any scenario fails.
+// Exits 1 if any scenario fails, and 2 if the core does not build.
 
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { buildCore, CORE_DID_NOT_BUILD } from './client.ts'
 import { lifecycleChart } from './invariants.ts'
 import { ARTIFACTS, definitions, type Result, runOne } from './scenario.ts'
+
+if (!buildCore()) {
+  console.log('The core did not build, so no scenario ran.')
+  process.exit(CORE_DID_NOT_BUILD)
+}
 
 const scenarioFolder = fileURLToPath(new URL('../scenarios/', import.meta.url))
 for (const file of readdirSync(scenarioFolder).toSorted()) {
@@ -40,6 +47,6 @@ writeFileSync(
   `${JSON.stringify({ total: results.length, failed: failed.length, results: results.map(({ edges: _edges, ...result }) => result) }, null, 2)}\n`,
 )
 console.log(
-  `\n${results.length - failed.length} of ${results.length} runs passed. Transcripts and the change lifecycle chart are in artifacts/scenarios/.`,
+  `\n${results.length - failed.length} of ${results.length} runs passed. Transcripts and the change lifecycle chart are in ${relative(process.cwd(), artifacts)}/.`,
 )
 process.exit(failed.length === 0 && results.length > 0 ? 0 : 1)

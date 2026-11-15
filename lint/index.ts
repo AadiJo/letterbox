@@ -5,7 +5,6 @@
 // lint/fixtures/<rule>/, and `pnpm lint:selftest` fails if a rule has none.
 
 import type { Plugin } from '@oxlint/plugins'
-import noAmbientTimeOrRandomness from './rules/no-ambient-time-or-randomness.ts'
 import noCrossPackageRelativeImport from './rules/no-cross-package-relative-import.ts'
 import noProviderNames from './rules/no-provider-names.ts'
 import noStdoutInCore from './rules/no-stdout-in-core.ts'
@@ -16,7 +15,6 @@ import scenarioThreadsThroughFixtures from './rules/scenario-threads-through-fix
 export default {
   meta: { name: 'letterbox' },
   rules: {
-    'no-ambient-time-or-randomness': noAmbientTimeOrRandomness,
     'no-cross-package-relative-import': noCrossPackageRelativeImport,
     'no-provider-names': noProviderNames,
     'no-stdout-in-core': noStdoutInCore,

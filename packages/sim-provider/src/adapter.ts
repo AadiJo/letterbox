@@ -1,5 +1,9 @@
 // The adapter contract: everything the core asks of one mail provider.
 //
+// The core's own definition is crates/core/src/adapter.rs. This TypeScript copy types
+// what the sim server answers and the client the self-check drives. The scenarios run
+// the Rust core against the sim server, so a shape that drifts between the two fails them.
+//
 // An adapter speaks one provider's protocol and reports that mailbox in the
 // shapes below. It holds no mail and makes no decisions. The core owns the
 // store, the threads, the turn rule and the queue of pending changes.

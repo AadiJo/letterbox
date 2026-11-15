@@ -1,7 +1,7 @@
 // The folders dialect: a ref names a mailbox, its epoch and a number inside it.
 // There is no change log. The cursor holds what the adapter saw in each mailbox.
 
-import type { ChangesResult, Cursor, MessageRef } from '@letterbox/core/adapter'
+import type { ChangesResult, Cursor, MessageRef } from './adapter.ts'
 import { boxOf, remoteMailboxes, remoteMessage, stateOf } from './store.ts'
 import type { Box, Engine, Store, Stored } from './store.ts'
 import { isRecord } from './wire.ts'

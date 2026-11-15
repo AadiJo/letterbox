@@ -83,7 +83,7 @@ import type {
   RemoteMailbox,
   RemoteMessage,
   RemoteState,
-} from '@letterbox/core/adapter'
+} from './adapter.ts'
 import { simAdapterFactories } from './client.ts'
 import type { Dialect, SimProvider, Seed, SeedMailbox, SeedMessage } from './contract.ts'
 import { startSimProvider } from './server.ts'
