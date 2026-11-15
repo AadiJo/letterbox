@@ -13,6 +13,9 @@
 //!     describe, so a client that has one has already seen its effects.
 //!   - Work for one account runs in a queue, one task at a time, so changes
 //!     reach the provider in the order the user made them.
+//!   - A snapshot lists one page per task and queues the next page behind whatever
+//!     is queued by then, so a change made during a backfill reaches the provider
+//!     between pages, not after the whole snapshot (see snapshot.rs).
 //!
 //! The core runs on one thread, inside a tokio `LocalSet`, so its state needs no
 //! locks and its steps run in the order above. A host that wants it on another
@@ -32,6 +35,7 @@ mod queue;
 mod reconcile;
 pub mod secrets;
 mod sign_in;
+mod snapshot;
 mod store;
 mod subscriptions;
 mod sync;
@@ -53,6 +57,7 @@ use crate::maps::{HashMap, HashSet, IndexMap};
 use crate::queue::Job;
 use crate::secrets::Secrets;
 use crate::sign_in::Attempts;
+use crate::snapshot::Backfill;
 use crate::store::Store;
 pub use crate::store::StoreError;
 use crate::world::{AccountRecord, Health, World, load_world, put_account};
@@ -157,6 +162,7 @@ impl Core {
                     loading_bodies: HashSet::default(),
                     unreachable_bodies: HashSet::default(),
                     attempts: Attempts::default(),
+                    backfills: HashMap::default(),
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -174,7 +180,8 @@ impl Core {
 
     /// Lets work in flight finish, including the work it starts, then releases the
     /// adapters and the store. Idle accounts are not work: an adapter waiting for
-    /// nothing does not hold this up. A sign-in still waiting for the user is
+    /// nothing does not hold this up. A backfill stops after the page in flight, and the
+    /// account's next sync pass resumes it from the saved page. A sign-in still waiting for the user is
     /// cancelled first, so it is answered `cancelled` instead of holding up the close.
     pub async fn close(self) {
         self.inner.state.borrow().attempts.cancel_all();
@@ -215,6 +222,8 @@ struct State {
     loading_bodies: HashSet<MessageId>,
     unreachable_bodies: HashSet<MessageId>,
     attempts: Attempts,
+    /// The accounts with a snapshot page job queued (see snapshot.rs).
+    backfills: HashMap<AccountId, Backfill>,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }

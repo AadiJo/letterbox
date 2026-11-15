@@ -1,7 +1,8 @@
 //! The sync pass. A pass pushes an account's pending changes to the provider, pulls
-//! what changed there, and records how it went. It runs in the account's queue, and
-//! stops writing once a sign-out or a new sign-in takes the account (`still_current`).
-//! Bodies load here too, one fetch per message someone is looking at.
+//! what changed there, or one snapshot page (see snapshot.rs), and records how it went.
+//! It runs in the account's queue, and stops writing once a sign-out or a new sign-in
+//! takes the account (`still_current`). Bodies load here too, one fetch per message
+//! someone is looking at.
 
 use std::rc::Rc;
 
@@ -9,15 +10,22 @@ use letterbox_protocol::{
     AccountId, Answer, ChangeResult, CoreMessage, Empty, MessageId, Refusal, RequestId, Response, SyncNowError,
 };
 
+use tokio::sync::oneshot;
+
 use crate::adapter::{AdapterFailure, ApplyResult, ChangesResult};
 use crate::changes::{overlay, plan};
 use crate::reconcile::{Incoming, reconcile};
+use crate::snapshot::Pulled;
 use crate::world::{
     AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, put_account, put_change, put_message,
 };
 use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
+
+/// What a sync-now's pass hands back from the queue: how the pass ended (None when a
+/// backfill held the pull), and the wait for the backfill it left or found running.
+type Joined = (Option<PassResult>, Option<oneshot::Receiver<PassResult>>);
 
 impl Inner {
     pub(crate) async fn fetch_body(self: Rc<Self>, id: MessageId) {
@@ -82,7 +90,7 @@ impl Inner {
     /// links another. A pass checks this after every provider call and writes nothing once
     /// it is false, so it cannot bring back records a sign-out deleted, or overwrite the
     /// status a sign-out or sign-in set.
-    fn still_current(&self, account_id: &AccountId, linked: &Linked) -> bool {
+    pub(crate) fn still_current(&self, account_id: &AccountId, linked: &Linked) -> bool {
         let state = self.state.borrow();
         state
             .adapters
@@ -155,8 +163,9 @@ impl Inner {
         Ok(())
     }
 
-    /// Fetches what changed at the provider. Falls back to a full snapshot when there is no cursor or it expired.
-    async fn pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
+    /// Fetches what changed at the provider. Lists one snapshot page instead while a snapshot
+    /// is under way, or when there is no cursor or it expired.
+    async fn pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> Result<Pulled, AdapterFailure> {
         let adapter = &linked.adapter;
         let cursor = self
             .state
@@ -164,19 +173,20 @@ impl Inner {
             .world
             .accounts
             .get(account_id)
+            .filter(|account| account.snapshot.is_none())
             .and_then(|account| account.cursor.clone());
         if let Some(cursor) = cursor
             && let ChangesResult::Changes(set) = adapter.changes(cursor).await?
         {
             if !self.still_current(account_id, linked) {
-                return Ok(());
+                return Ok(Pulled::Done);
             }
             self.commit(|world, tx, _| {
                 let Some(account) = world.accounts.get(account_id).cloned() else {
                     return;
                 };
                 let incoming = Incoming {
-                    full: false,
+                    page_of: None,
                     mailboxes: set.mailboxes,
                     added: set.added,
                     updated: set.updated,
@@ -186,61 +196,42 @@ impl Inner {
                 let cursor = Some(set.cursor);
                 put_account(world, tx, AccountRecord { cursor, ..account });
             });
-            return Ok(());
+            return Ok(Pulled::Done);
         }
-
-        let mut messages = Vec::new();
-        let mut page = None;
-        loop {
-            let result = adapter.snapshot(page.take()).await?;
-            if !self.still_current(account_id, linked) {
-                return Ok(());
-            }
-            messages.extend(result.messages);
-            if let Some(next) = result.next {
-                page = Some(next);
-                continue;
-            }
-            self.commit(|world, tx, _| {
-                let Some(account) = world.accounts.get(account_id).cloned() else {
-                    return;
-                };
-                let incoming = Incoming {
-                    full: true,
-                    mailboxes: Some(result.mailboxes),
-                    added: messages,
-                    updated: Vec::new(),
-                    removed: Vec::new(),
-                };
-                reconcile(world, tx, account_id, incoming);
-                put_account(
-                    world,
-                    tx,
-                    AccountRecord {
-                        cursor: result.cursor,
-                        ..account
-                    },
-                );
-            });
-            return Ok(());
+        if !self.still_current(account_id, linked) {
+            return Ok(Pulled::Done);
         }
+        self.snapshot_page(account_id, linked).await
     }
 
     /// One sync pass: push what is pending, then pull when asked, then record how it went.
-    pub(crate) async fn pass(self: Rc<Self>, account_id: AccountId, with_pull: bool) -> PassResult {
+    /// None when it was asked to pull while a backfill is queued: the backfill's pages do the
+    /// pulling, and the pass leaves no trace, so a sync-now that waits for the backfill and
+    /// runs again does the same work whether it was queued before a page job or after it.
+    pub(crate) async fn pass(self: Rc<Self>, account_id: AccountId, with_pull: bool) -> Option<PassResult> {
         let adapter = {
             let state = self.state.borrow();
             let known = state.world.accounts.contains_key(&account_id);
             state.adapters.get(&account_id).filter(|_| known).cloned()
         };
-        let Some(linked) = adapter else { return Ok(()) };
+        let Some(linked) = adapter else {
+            return Some(Ok(()));
+        };
+        if with_pull && self.backfilling(&account_id) {
+            return None;
+        }
         if with_pull {
             self.state.borrow_mut().syncing.insert(account_id.clone());
             self.commit(|_, _, _| {});
         }
         let mut result = self.push(&account_id, &linked).await;
+        // Synced once the core is in step with the provider, which a backfill is only at its last page.
+        let mut synced = false;
         if result.is_ok() && with_pull {
-            result = self.pull(&account_id, &linked).await;
+            match self.pull(&account_id, &linked).await {
+                Ok(pulled) => synced = matches!(pulled, Pulled::Done),
+                Err(failure) => result = Err(failure),
+            }
         }
         self.state.borrow_mut().syncing.remove(&account_id);
         if !self.still_current(&account_id, &linked) {
@@ -249,12 +240,13 @@ impl Inner {
             if with_pull {
                 self.commit(|_, _, _| {});
             }
-            return result;
+            return Some(result);
         }
 
         let account = self.state.borrow().world.accounts.get(&account_id).cloned();
-        let Some(account) = account else { return result };
-        let synced = result.is_ok() && with_pull;
+        let Some(account) = account else {
+            return Some(result);
+        };
         if synced {
             let mut state = self.state.borrow_mut();
             let State {
@@ -288,11 +280,18 @@ impl Inner {
                 );
             });
         }
-        result
+        Some(result)
     }
 
-    /// Syncs each account in turn and answers once all have finished. The first
-    /// pass is queued before this returns, so it runs ahead of anything the
+    /// A sync-now's pass. It joins the backfill the pass left or found running while it is
+    /// still in the queue, so the backfill cannot end unseen.
+    async fn sync_pass(self: Rc<Self>, account_id: AccountId) -> Joined {
+        let ran = Rc::clone(&self).pass(account_id.clone(), true).await;
+        (ran, self.join_backfill(&account_id))
+    }
+
+    /// Syncs each account in turn and answers once all have finished, a backfill included.
+    /// The first pass is queued before this returns, so it runs ahead of anything the
     /// client sends after this request.
     pub(crate) fn sync_now(self: &Rc<Self>, id: RequestId, account_id: Option<AccountId>) {
         let accounts: Vec<AccountId> = match account_id {
@@ -301,16 +300,28 @@ impl Inner {
         };
         let mut accounts = accounts.into_iter();
         let start = |core: &Rc<Self>, account_id: AccountId| {
-            core.enqueue(&account_id, Rc::clone(core).pass(account_id.clone(), true))
+            let pass = core.enqueue(&account_id, Rc::clone(core).sync_pass(account_id.clone()));
+            (account_id, pass)
         };
         let mut next = accounts.next().map(|account_id| start(self, account_id));
         let core = Rc::clone(self);
         self.work.spawn_local(async move {
             let mut offline = false;
-            while let Some(pass) = next {
-                let result = pass
-                    .await
-                    .expect("a queued pass runs to its end, since a panic ends the program");
+            while let Some((account_id, mut pass)) = next {
+                let result = loop {
+                    let (ran, backfill) = pass
+                        .await
+                        .expect("a queued pass runs to its end, since a panic ends the program");
+                    let ended = match backfill {
+                        Some(end) => end.await.ok(),
+                        None => None,
+                    };
+                    match ran {
+                        Some(result) => break ended.unwrap_or(result),
+                        // A backfill held the pull. It has ended, so run the pass now.
+                        None => pass = start(&core, account_id.clone()).1,
+                    }
+                };
                 offline |= result == Err(AdapterFailure::Offline);
                 next = accounts.next().map(|account_id| start(&core, account_id));
             }

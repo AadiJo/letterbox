@@ -5,7 +5,7 @@ import { ME, fromBen, mailbox, readThread, start, sync, thread, threads } from '
 import { scenario } from '../src/scenario.ts'
 
 scenario('a reply in another mailbox joins the conversation it answers', async (t) => {
-  const { core } = await start(t)
+  const { core, box } = await start(t)
   const lunch = await thread(core, 'Lunch on Friday?')
   const inbox = await mailbox(core, 'Inbox')
   const sent = await mailbox(core, 'Sent')
@@ -17,6 +17,16 @@ scenario('a reply in another mailbox joins the conversation it answers', async (
     [false, true],
     'messages are in the order they were sent',
   )
+  // A first sync lists the answer before the question it answers. A reply that comes later
+  // joins through its own reply chain instead.
+  box.deliver(
+    fromBen('lunch-late', 'Re: Lunch on Friday?', '2025-12-05T09:00:00.000Z', {
+      replyTo: ['lunch-ask', 'lunch-answer'],
+    }),
+  )
+  await sync(core)
+  const after = await thread(core, 'Lunch on Friday?')
+  t.equal([after.id, after.messageCount], [lunch.id, 3], 'a reply that arrives later joins the same conversation')
 })
 
 scenario('messages only join a conversation when both the reply chain and the subject match', async (t) => {

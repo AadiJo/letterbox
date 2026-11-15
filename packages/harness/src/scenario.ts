@@ -55,6 +55,9 @@ const NOT_GMAIL = new Set([
   'a wrong password ends the sign-in with an answer and no account',
   // Signs in by password. What a locked keychain does is the core's, whatever the adapter.
   'a locked keychain fails the sign-in, and at start leaves the account waiting for one',
+  // The Gmail adapter answers a rejected page token with provider-error, not page-expired
+  // (adapter rule 8). Teaching it lives in crates/gmail.
+  'a page token the provider no longer accepts starts the snapshot over',
 ])
 
 /**

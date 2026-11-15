@@ -4,7 +4,7 @@
 // Every way this sim provider could be wrong. Each line has one check below with the same id.
 // A "B" line runs once per dialect.
 //
-//   L01 labels: snapshot is out of delivery order, or misses the mailbox list or the cursor
+//   L01 labels: snapshot is not newest first, or misses the mailbox list or the cursor
 //   L02 labels: capabilities are wrong, or bulk ignores the seed
 //   L03 labels: a message in zero mailboxes disappears from the listing
 //   L04 labels: changes invents entries when nothing happened, or its new cursor repeats old entries
@@ -35,7 +35,7 @@
 //   B04 body returns the wrong text, html or attachment entries
 //   B05 body for an expunged ref does not answer gone
 //   B06 paging ignores pageSize, drops the mailbox list from a page, or hands the cursor out early
-//   B07 a delivery between pages breaks paging, repeats a message, or is missed by the next changes
+//   B07 a delivery between pages is listed by a later page, or is missed by the next changes
 //   B08 a flag change between pages is not reported by the next changes
 //   B09 an expunge between pages breaks paging or is not reported as removed
 //   B10 apply flags touches a flag that was undefined
@@ -255,10 +255,10 @@ const openPipes = (): number => process.getActiveResourcesInfo().filter((name) =
 
 // ---------------------------------------------------------------- labels
 
-await check('L01 labels: snapshot lists delivery order, the mailbox list and a cursor', async () => {
+await check('L01 labels: snapshot lists newest first, the mailbox list and a cursor', async () => {
   const { adapter } = await open('labels', [mail('a'), mail('b', 'archive'), mail('c')])
   const all = await snapshotFrom(adapter, null)
-  assert.deepEqual(keys(all.messages), ['a', 'b', 'c'])
+  assert.deepEqual(keys(all.messages), ['c', 'b', 'a'])
   assert.deepEqual(
     all.mailboxes.map((mailbox) => [mailbox.name, mailbox.role, mailbox.parent]),
     [
@@ -282,7 +282,7 @@ await check('L03 labels: a message in zero mailboxes is still listed', async () 
   const { adapter, box } = await open('labels', [mail('a'), mail('b', 'inbox', { mailboxes: [] })])
   box.removeFromMailbox('a', 'inbox')
   const { messages } = await snapshotFrom(adapter, null)
-  assert.deepEqual(keys(messages), ['a', 'b'])
+  assert.deepEqual(keys(messages), ['b', 'a'])
   assert.deepEqual([find(messages, 'a').mailboxes, find(messages, 'b').mailboxes], [[], []])
   assert.deepEqual(box.truth(), [
     { key: 'a', mailboxes: [], unread: true, flagged: false },
@@ -434,12 +434,12 @@ await check('F01 folders: capabilities, null bulk and one mailbox per message', 
   const { adapter } = await open('folders', [mail('a', 'inbox', { bulk: true }), mail('b', 'archive')])
   assert.deepEqual(adapter.capabilities, { modify: true, send: false, multipleMailboxes: false })
   const { messages, mailboxes } = await snapshotFrom(adapter, null)
-  assert.deepEqual(keys(messages), ['a', 'b'])
+  assert.deepEqual(keys(messages), ['b', 'a'])
   assert.deepEqual(
     messages.map((message) => [message.bulk, boxNames(mailboxes, message)]),
     [
-      [null, ['Inbox']],
       [null, ['Archive']],
+      [null, ['Inbox']],
     ],
   )
 })
@@ -568,7 +568,7 @@ await check('F10 folders: expireCursors changes every ref and expires older curs
   box.expireCursors()
   assert.deepEqual(await adapter.changes(first.cursor), { ok: true, kind: 'cursor-expired' })
   const second = await snapshotFrom(adapter, null)
-  assert.deepEqual(keys(second.messages), ['a', 'b'])
+  assert.deepEqual(keys(second.messages), ['b', 'a'])
   const oldRefs = first.messages.map((message) => message.ref)
   for (const message of second.messages) assert(!oldRefs.includes(message.ref), `${message.subject} kept its ref`)
   for (const ref of oldRefs) assert.deepEqual(await adapter.body(ref), { ok: true, kind: 'gone' })
@@ -678,24 +678,24 @@ await both('B06 snapshot pages by pageSize and keeps the cursor for the last pag
   const five = ['a', 'b', 'c', 'd', 'e'].map((key) => mail(key))
   const { adapter } = await open(dialect, five, { pageSize: 2 })
   const first = await pageOf(adapter, null)
-  assert.deepEqual([keys(first.messages), first.cursor, first.mailboxes.length], [['a', 'b'], null, 3])
+  assert.deepEqual([keys(first.messages), first.cursor, first.mailboxes.length], [['e', 'd'], null, 3])
   assert(first.next !== null)
   const second = await pageOf(adapter, first.next)
-  assert.deepEqual([keys(second.messages), second.cursor, second.mailboxes.length], [['c', 'd'], null, 3])
+  assert.deepEqual([keys(second.messages), second.cursor, second.mailboxes.length], [['c', 'b'], null, 3])
   assert(second.next !== null)
   const third = await pageOf(adapter, second.next)
-  assert.deepEqual([keys(third.messages), third.next, third.mailboxes.length], [['e'], null, 3])
+  assert.deepEqual([keys(third.messages), third.next, third.mailboxes.length], [['a'], null, 3])
   assert(third.cursor !== null)
   assertQuiet(await changesSince(adapter, third.cursor))
 })
 
-await both('B07 a delivery between pages is listed or reported, never lost', async (dialect) => {
+await both('B07 a delivery between pages is left to the next changes, never lost', async (dialect) => {
   const { adapter, box } = await open(dialect, [mail('a'), mail('b'), mail('c')], { pageSize: 2 })
   const first = await pageOf(adapter, null)
   assert(first.next !== null)
   box.deliver(mail('d'))
   const rest = await snapshotFrom(adapter, first.next)
-  assert.deepEqual(keys([...first.messages, ...rest.messages]), ['a', 'b', 'c', 'd'])
+  assert.deepEqual(keys([...first.messages, ...rest.messages]), ['c', 'b', 'a'])
   const set = await changesSince(adapter, rest.cursor)
   assert.deepEqual([keys(set.added), set.updated, set.removed], [['d'], [], []])
 })
@@ -704,11 +704,11 @@ await both('B08 a flag change between pages is reported by the next changes', as
   const { adapter, box } = await open(dialect, [mail('a'), mail('b'), mail('c')], { pageSize: 2 })
   const first = await pageOf(adapter, null)
   assert(first.next !== null)
-  box.setFlags('a', { unread: false })
+  box.setFlags('c', { unread: false })
   const rest = await snapshotFrom(adapter, first.next)
-  assert.deepEqual(keys(rest.messages), ['c'])
+  assert.deepEqual(keys(rest.messages), ['a'])
   const set = await changesSince(adapter, rest.cursor)
-  assert.deepEqual(set.updated, [{ ...stateOf(find(first.messages, 'a')), unread: false }])
+  assert.deepEqual(set.updated, [{ ...stateOf(find(first.messages, 'c')), unread: false }])
   assert.deepEqual([set.added, set.removed], [[], []])
 })
 
@@ -717,12 +717,12 @@ await both('B09 an expunge between pages keeps paging and is reported as removed
   const { adapter, box } = await open(dialect, five, { pageSize: 2 })
   const first = await pageOf(adapter, null)
   assert(first.next !== null)
-  box.expunge('a')
+  box.expunge('e')
   box.expunge('c')
   const rest = await snapshotFrom(adapter, first.next)
-  assert.deepEqual(keys(rest.messages), ['d', 'e'])
+  assert.deepEqual(keys(rest.messages), ['b', 'a'])
   const set = await changesSince(adapter, rest.cursor)
-  assert(set.removed.includes(find(first.messages, 'a').ref), 'the listed message is not reported as removed')
+  assert(set.removed.includes(find(first.messages, 'e').ref), 'the listed message is not reported as removed')
   assert.deepEqual([set.added, set.updated, set.removed.length], [[], [], 2])
 })
 
@@ -870,7 +870,7 @@ await both('B19 truth() is in delivery order without expunged messages', async (
     { key: 'c', mailboxes: ['archive'], unread: true, flagged: true },
     { key: 'd', mailboxes: ['archive'], unread: false, flagged: true },
   ])
-  assert.deepEqual(keys(messages), ['a', 'c', 'd'])
+  assert.deepEqual(keys(messages), ['d', 'c', 'a'])
 })
 
 await both("B20 a mailbox parent is the parent's ref", async (dialect) => {
@@ -1030,7 +1030,7 @@ await check('S11 two mailboxes in one provider stay separate', async () => {
   assert.deepEqual(await signIn('other@sim.test', password), { ok: false, failure: 'wrong-password' })
   labels.deliver(mail('n'))
   folders.setOffline(true)
-  assert.deepEqual(keys((await snapshotFrom(mine.adapter, null)).messages), ['a', 'n'])
+  assert.deepEqual(keys((await snapshotFrom(mine.adapter, null)).messages), ['n', 'a'])
   assert.deepEqual(await theirs.adapter.snapshot(null), offline)
   folders.setOffline(false)
   assert.deepEqual(keys((await snapshotFrom(theirs.adapter, null)).messages), ['z'])
@@ -1095,7 +1095,7 @@ await check('C03 resume connects lazily, on first use', async () => {
   const provider = await start()
   const box = provider.createMailbox('labels', seedOf([mail('a'), mail('b')]))
   assert.deepEqual(box.calls(), { snapshot: 0, changes: 0, body: 0, apply: 0 })
-  assert.deepEqual(keys((await snapshotFrom(resumed, null)).messages), ['a', 'b'])
+  assert.deepEqual(keys((await snapshotFrom(resumed, null)).messages), ['b', 'a'])
 })
 
 await both('C04 an adapter recovers after the provider restarts on the same socket', async (dialect) => {
@@ -1106,7 +1106,7 @@ await both('C04 an adapter recovers after the provider restarts on the same sock
   const provider = await start()
   assert.deepEqual(await first.adapter.snapshot(null), { ok: false, failure: 'needs-sign-in' })
   const box = provider.createMailbox(dialect, seedOf([mail('a'), mail('b')]))
-  assert.deepEqual(keys((await snapshotFrom(first.adapter, null)).messages), ['a', 'b'])
+  assert.deepEqual(keys((await snapshotFrom(first.adapter, null)).messages), ['b', 'a'])
   assert.equal(box.calls().snapshot, 1)
 })
 

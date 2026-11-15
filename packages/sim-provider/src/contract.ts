@@ -73,7 +73,7 @@ export type Seed = {
   password: string
   /** False makes the account read-only: `capabilities.modify` is false. Defaults to true. */
   canModify?: boolean
-  /** Messages per snapshot page. Defaults to 50. Small values exercise paging. */
+  /** Messages per snapshot page, newest first. Defaults to 50. Small values exercise paging. */
   pageSize?: number
   mailboxes: SeedMailbox[]
   messages: SeedMessage[]
@@ -106,6 +106,8 @@ export interface SimMailbox {
   // Things the provider does.
   /** Every cursor handed out so far stops working. `changes` answers cursor-expired. */
   expireCursors(): void
+  /** Every snapshot page token handed out so far stops working. `snapshot` answers page-expired. */
+  expirePageTokens(): void
   /** While true, every adapter call answers `offline`. */
   setOffline(offline: boolean): void
   /** The next `apply` answers refused with this reason and changes nothing. */
@@ -120,6 +122,12 @@ export interface SimMailbox {
   applyHeld(): Promise<void>
   /** Applies and answers every waiting apply call, in the order they came, and stops holding. */
   releaseApplies(): void
+  /** From now on, snapshot calls wait. Lets a scenario stop a backfill at a known page. */
+  holdSnapshots(): void
+  /** Resolves once a snapshot call is waiting, at once if one already is. */
+  snapshotHeld(): Promise<void>
+  /** Answers every waiting snapshot call, from the truth as it is now, and stops holding. */
+  releaseSnapshots(): void
 
   // What a scenario checks.
   truth(): TruthMessage[]

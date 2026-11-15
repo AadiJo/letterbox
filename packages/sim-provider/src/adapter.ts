@@ -23,6 +23,12 @@
 //      wherever the provider keeps refs stable.
 //   7. No method reads or writes anything outside the provider. Adapters keep
 //      their resume point in the cursor and their login in the session string.
+//   8. `snapshot` answers `page-expired` when the provider no longer accepts the page
+//      token. The core then lists the mailbox again from the first page.
+//   9. Snapshot pages list the newest mail first, so the core can show recent mail
+//      while it backfills the rest. Gmail's messages.list already does: "The returned
+//      `messages` objects are listed in reverse chronological order (newest first)."
+//      https://developers.google.com/workspace/gmail/api/guides/list-messages
 
 import type { Mailbox, Time } from '@letterbox/protocol'
 
@@ -102,8 +108,11 @@ export type RemoteBody = {
   attachments: { name: string; mime: string; size: number; inline: boolean }[]
 }
 
-/** Why a call could not reach or use the provider. The core retries all three later. */
-export type AdapterFailure = 'offline' | 'needs-sign-in' | 'provider-error'
+/**
+ * Why a call could not reach or use the provider. The core retries the first three later.
+ * `page-expired` comes from `snapshot` only. See rule 8.
+ */
+export type AdapterFailure = 'offline' | 'needs-sign-in' | 'provider-error' | 'page-expired'
 
 /** The result of every adapter call: the value, or the reason the provider was not reached. */
 export type Outcome<Value> = ({ ok: true } & Value) | { ok: false; failure: AdapterFailure }
@@ -152,7 +161,7 @@ export type ApplyResult =
 /** One signed-in mailbox at one provider. */
 export interface Adapter {
   readonly capabilities: AdapterCapabilities
-  /** Lists the whole mailbox in pages. Pass null for the first page. */
+  /** Lists the whole mailbox in pages, newest first. Pass null for the first page. */
   snapshot(page: PageToken | null): Promise<Outcome<SnapshotPage>>
   /** Everything that changed since `cursor`, across all mailboxes. */
   changes(cursor: Cursor): Promise<Outcome<ChangesResult>>
