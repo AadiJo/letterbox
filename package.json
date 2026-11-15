@@ -10,6 +10,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "scenarios": "node packages/harness/src/run.ts",
+    "bench": "node packages/harness/src/bench.ts",
     "check:rust": "cargo xtask provider-names && cargo fmt --check && cargo clippy --all-targets --quiet -- -D warnings && cargo test --quiet --package xtask",
     "check": "pnpm fmt:check && pnpm typecheck && pnpm lint && pnpm check:rust && pnpm lint:selftest && pnpm selfcheck:sim-provider && pnpm scenarios && pnpm scenarios:selftest",
     "selfcheck:sim-provider": "node packages/sim-provider/src/selfcheck.ts",
