@@ -1,6 +1,7 @@
 // The mailbox most scenarios start from, and the few steps they all share.
 
 import type { Dialect, SimMailbox, Seed, SeedMessage } from '@letterbox/sim-provider/contract'
+import type { GmailFake } from '@letterbox/sim-provider/gmail'
 import type {
   Account,
   AccountId,
@@ -130,16 +131,22 @@ export const fromBen = (
 
 export type SignedIn = { core: CoreClient; box: SimMailbox; accountId: AccountId }
 
-/** Signs in with a password through the options the core lists. Fails the scenario if it does not work. */
+/**
+ * Signs in through the options the core lists. Fails the scenario if it does not work.
+ * A gmail run has no password option: it signs in through Gmail's consent page as `address`.
+ */
 export async function signIn(t: Scenario, core: CoreClient, address: string, password: string): Promise<AccountId> {
   const options = await core.query({ view: 'sign-in-options' })
-  const option = options.find((candidate) => candidate.method === 'password')
-  if (!option) throw new Error('the core lists no password sign-in option')
-  const response = await core.request({
-    method: 'sign-in',
-    option: option.id,
-    password: { username: address, password },
-  })
+  const option = options.find((candidate) => candidate.method === (t.gmail ? 'oauth' : 'password'))
+  if (!option) throw new Error(`the core lists no ${t.gmail ? 'oauth' : 'password'} sign-in option`)
+  const consent = async (gmail: GmailFake) => {
+    const attempt = core.begin({ method: 'sign-in', option: option.id })
+    gmail.approveSignIn((await core.take('open-url')).url, address)
+    return attempt.done
+  }
+  const response = t.gmail
+    ? await consent(t.gmail)
+    : await core.request({ method: 'sign-in', option: option.id, password: { username: address, password } })
   if (!response.ok) throw new Error(`sign-in failed: ${response.error}`)
   t.note(`signed in as ${address}`)
   return response.result.accountId

@@ -34,6 +34,7 @@ type Mutation = Edit & {
 }
 
 const core = (file: string) => `crates/core/src/${file}`
+const gmail = (file: string) => `crates/gmail/src/${file}`
 
 const MUTATIONS: Mutation[] = [
   {
@@ -334,6 +335,49 @@ const MUTATIONS: Mutation[] = [
     find: "message.kind === 'settled' && message.change === change",
     replace: "message.kind === 'settled'",
     scenarios: 'replay in order',
+  },
+  {
+    name: 'gmail: STARRED shows up as a mailbox',
+    file: gmail('labels.rs'),
+    find: 'None if label.kind.as_deref() == Some("system") || !is_mailbox_id(&label.id) => return None,',
+    replace:
+      'None if label.id != STARRED && (label.kind.as_deref() == Some("system") || !is_mailbox_id(&label.id)) => return None,',
+    scenarios: 'UNREAD and STARRED become flags',
+  },
+  {
+    name: 'gmail: a label changed on another device is lost by the next sync',
+    file: gmail('adapter.rs'),
+    find: '                    touched.entry(id.id.clone()).or_default();',
+    replace: '                    drop(id);',
+    scenarios: 'read on another device',
+  },
+  {
+    name: 'gmail: a label created on another device never becomes a mailbox',
+    file: gmail('adapter.rs'),
+    find: '        if labels != position.labels {',
+    replace: '        if labels != position.labels && false {',
+    scenarios: 'mailbox created on another device',
+  },
+  {
+    name: 'gmail: mail in the promotions tab is not bulk',
+    file: gmail('labels.rs'),
+    find: '    Some(BULK_CATEGORIES.contains(&category.as_str()))',
+    replace: '    Some(BULK_CATEGORIES.contains(&category.as_str()) && false)',
+    scenarios: 'promotions tab',
+  },
+  {
+    name: 'gmail: a revoked grant is retried forever instead of asking for a sign-in',
+    file: gmail('oauth.rs'),
+    find: '        Err(TokenFailure::InvalidGrant) => Err(AdapterFailure::NeedsSignIn),',
+    replace: '        Err(TokenFailure::InvalidGrant) => Err(AdapterFailure::ProviderError),',
+    scenarios: 'revoked gmail grant',
+  },
+  {
+    name: 'gmail: one deleted message makes a change to its whole conversation fail',
+    file: gmail('adapter.rs'),
+    find: '                Err(error) if error.is_not_found() => {\n                    for id in chunk {',
+    replace: '                Err(error) if error.is_not_found() && false => {\n                    for id in chunk {',
+    scenarios: 'remain after one is deleted',
   },
 ]
 

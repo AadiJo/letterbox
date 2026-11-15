@@ -67,6 +67,8 @@ export const createOauth = (redirects: string, remember: (value: string) => void
   /** Access token to address. A token missing here is expired or was never issued. */
   const accessTokens = new Map<string, string>()
   const refreshes = new Map<string, number>()
+  /** Every refresh and access token issued. They are secrets: none may reach the core's store. */
+  const secrets = new Set<string>()
   let minted = 0
 
   /** Plays the browser: sends the redirect to the app's loopback. An attempt that has stopped listening misses it. */
@@ -83,6 +85,7 @@ export const createOauth = (redirects: string, remember: (value: string) => void
     const token = `fake-access-${++minted}`
     accessTokens.set(token, address)
     remember(token)
+    secrets.add(token)
     return token
   }
 
@@ -130,6 +133,7 @@ export const createOauth = (redirects: string, remember: (value: string) => void
         const refreshToken = `fake-refresh-${++minted}`
         refreshTokens.set(refreshToken, { address: grant.address, scope, revoked: false })
         remember(refreshToken)
+        secrets.add(refreshToken)
         const body = { access_token: mintAccess(grant.address), expires_in: 3599, refresh_token: refreshToken, scope }
         return { status: 200, body: { ...body, token_type: 'Bearer' } }
       }
@@ -150,5 +154,6 @@ export const createOauth = (redirects: string, remember: (value: string) => void
       for (const [token, owner] of accessTokens) if (owner === address) accessTokens.delete(token)
     },
     refreshes: (address: string): number => refreshes.get(address) ?? 0,
+    secrets: (): ReadonlySet<string> => secrets,
   }
 }

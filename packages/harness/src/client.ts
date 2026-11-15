@@ -70,14 +70,14 @@ const within = <T>(what: string, promise: Promise<T>): Promise<T> =>
     )
   })
 
-/** Starts a core process over `dataDir` that reaches the sim provider at `socketPath`. */
+/** Starts a core process over `dataDir`. `providerArgs` say which provider it reaches: `--sim` or `--gmail`. */
 export function startCore(
   dataDir: string,
-  socketPath: string,
+  providerArgs: string[],
   record: (entry: TranscriptEntry) => void,
   newId: Options['newId'],
 ): CoreClient {
-  const child = spawn(CORE_PROGRAM, ['--data', dataDir, '--sim', socketPath], {
+  const child = spawn(CORE_PROGRAM, ['--data', dataDir, ...providerArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   let stderr = ''

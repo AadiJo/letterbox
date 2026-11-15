@@ -59,6 +59,8 @@ export interface GmailFake {
   refreshes(address: string): number
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
+  /** Every refresh and access token this fake issued. None may reach the core's store. */
+  secrets(): ReadonlySet<string>
   close(): Promise<void>
 }
 
@@ -254,6 +256,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     revokeAccess: (address) => oauth.revoke(address),
     refreshes: (address) => oauth.refreshes(address),
     handedOut: () => handedOut,
+    secrets: () => oauth.secrets(),
     close: () => {
       closing ??= new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy()
