@@ -1,13 +1,20 @@
 //! Where the adapter sends its requests, and the sources of everything a sign-in
 //! must not hard-code. Tests point every field at the fake server in
-//! packages/sim-provider/src/gmail and fix the random source, so a run repeats.
+//! packages/sim-provider/src/gmail and fix the random source and the pause, so a run repeats.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
+
+use letterbox_core::adapter::LocalFuture;
 
 /// Makes 32 fresh bytes. The PKCE verifier and the OAuth state each take one draw.
 pub type Random = Rc<dyn Fn() -> [u8; 32]>;
+
+/// Waits out a rate limit: the future ends once the duration has passed. The adapter
+/// drops it early when it closes, so a pause need not watch for that itself.
+pub type Pause = Rc<dyn Fn(Duration) -> LocalFuture<'static, ()>>;
 
 /// The environment variables a live run reads. Nothing in the repo sets them.
 pub const CLIENT_ID_VAR: &str = "LETTERBOX_GMAIL_CLIENT_ID";
@@ -31,6 +38,7 @@ pub struct GmailConfig {
     pub client_secret: Option<String>,
     pub loopback: Loopback,
     pub random: Random,
+    pub pause: Pause,
     /// Addresses to use for these host names instead of asking DNS. Empty for Google.
     /// Tests give the fake's name an IPv6 and an IPv4 address, the way Google's names
     /// resolve, so the client's dual-stack connect runs in every scenario.
@@ -53,7 +61,7 @@ pub enum Loopback {
 }
 
 impl GmailConfig {
-    /// Google's real endpoints, a TCP loopback and the system's random source.
+    /// Google's real endpoints, a TCP loopback, the system's random source and a real timer.
     pub fn google(client_id: String, client_secret: Option<String>) -> Self {
         GmailConfig {
             api_base: "https://gmail.googleapis.com".to_owned(),
@@ -63,6 +71,7 @@ impl GmailConfig {
             client_secret,
             loopback: Loopback::Tcp,
             random: Rc::new(os_random),
+            pause: Rc::new(timer),
             hosts: Vec::new(),
         }
     }
@@ -77,6 +86,15 @@ impl GmailConfig {
             .filter(|secret| !secret.is_empty());
         Some(Self::google(id, secret))
     }
+}
+
+/// Waits on tokio's timer. The only wait the adapter makes, and only on a live run.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a live run must really wait before it asks a rate-limited Gmail again. Tests inject a pause instead"
+)]
+fn timer(wait: Duration) -> LocalFuture<'static, ()> {
+    Box::pin(tokio::time::sleep(wait))
 }
 
 /// Bytes from the operating system's random source.

@@ -25,6 +25,8 @@ export type TranscriptEntry =
 export type CoreClient = KeepingClient & {
   /** Resolves once the core has read the end of its input, after `stop` closes it. */
   inputClosed(): Promise<void>
+  /** Resolves once a gmail adapter is holding a rate-limit wait (HELD_WAIT in core-sim). */
+  waitHeld(): Promise<void>
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
@@ -44,6 +46,8 @@ const WAIT_MS = 5000
 
 /** The line core-sim writes to stderr once its input closes. crates/sim-client/src/main.rs writes it. */
 const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
+/** The line core-sim writes to stderr when a gmail rate-limit wait starts to hold. */
+const WAIT_HELD = 'core-sim: holding a gmail rate-limit wait until the adapter closes'
 
 /** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
 export const CORE_DID_NOT_BUILD = 2
@@ -86,6 +90,18 @@ export function startCore(
     stderr += chunk.toString()
     for (const check of onStderr.splice(0)) check()
   })
+
+  /** Resolves once `line` is on stderr. `what` names it in the timeout. */
+  const onStderrLine = (line: string, what: string) =>
+    new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timed out after ${WAIT_MS} ms waiting for ${what}`)), WAIT_MS)
+      const check = () => {
+        if (!stderr.includes(line)) return void onStderr.push(check)
+        clearTimeout(timer)
+        resolve()
+      }
+      check()
+    })
 
   const sendRaw = (value: unknown) => {
     record({ from: 'ui', message: value })
@@ -166,19 +182,8 @@ export function startCore(
     take: (kind) => within(`a ${kind} message`, client.take(kind)),
     sendRaw,
     violations: () => [...violations],
-    inputClosed: () =>
-      new Promise((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error(`timed out after ${WAIT_MS} ms waiting for the core to read the end of its input`)),
-          WAIT_MS,
-        )
-        const check = () => {
-          if (!stderr.includes(INPUT_CLOSED)) return void onStderr.push(check)
-          clearTimeout(timer)
-          resolve()
-        }
-        check()
-      }),
+    inputClosed: () => onStderrLine(INPUT_CLOSED, 'the core to read the end of its input'),
+    waitHeld: () => onStderrLine(WAIT_HELD, 'the gmail adapter to hold a rate-limit wait'),
     stop: async () => {
       child.stdin.end()
       // A core that never exits would hang the whole run. It gets as long as any answer does.
