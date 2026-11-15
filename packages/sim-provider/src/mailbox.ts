@@ -23,9 +23,13 @@ import type { Call, CallResult, Session } from './wire.ts'
 type Flags = { unread?: boolean; flagged?: boolean }
 type Refusal = Extract<ApplyResult, { kind: 'refused' }>['reason']
 
-/** What server.ts needs from one mailbox. */
+/** What server.ts, and the fake Gmail server in gmail/, need from one mailbox. */
 export type MailboxEntry = {
   control: SimMailbox
+  /** The ground truth, for reading only. Changes go through `control` or `respond`. */
+  store: Store
+  /** The cursor for the mailbox as it is now, as the first snapshot page takes it. */
+  cursor(): Cursor
   password: string
   /** Goes into the session string, so `resume` can rebuild the adapter. */
   session: Session
@@ -294,6 +298,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
 
   return {
     control,
+    store,
+    cursor: () => engine.cursor(),
     password: seed.password,
     session: { address: seed.address, dialect, modify: canModify },
     isOffline: () => offline,
