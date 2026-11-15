@@ -844,12 +844,11 @@ impl Inner {
         let account_id = existing
             .as_ref()
             .map_or_else(|| self.store.next_id(), |account| account.id.clone());
-        let replaced = self.state.borrow().adapters.get(&account_id).cloned();
-        if let Some(replaced) = replaced {
-            replaced.close().await;
-        }
+        // From the supersede check above to the answer below there is no await, so no other
+        // sign-in or sign-out can land in between. The adapter this one replaces closes after.
         let capabilities = connection.adapter.capabilities();
-        self.state
+        let replaced = self
+            .state
             .borrow_mut()
             .adapters
             .insert(account_id.clone(), connection.adapter);
@@ -875,75 +874,76 @@ impl Inner {
         };
         self.respond(id, Response::SignIn(Answer(Ok(signed_in))));
         self.background(&account_id, Rc::clone(self).pass(account_id.clone(), true));
+        if let Some(replaced) = replaced {
+            self.work.spawn_local(async move { replaced.close().await });
+        }
     }
 
-    /// Removes the adapter at once, so no new work starts for the account, and closes
-    /// it, which ends a provider call in flight. A pass still running for the account
-    /// sees its adapter is gone and writes nothing more (see `still_current`).
+    /// Signs the account out at once. No await stands between taking the adapter and
+    /// changing the records, so no sign-in can land in between. The adapter closes
+    /// after, which ends a provider call in flight. A pass still running for the
+    /// account sees its adapter is gone and writes nothing more (see `still_current`).
     fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {
         let adapter = self.state.borrow_mut().adapters.remove(&account_id);
-        let core = Rc::clone(self);
-        self.work.spawn_local(async move {
-            if let Some(adapter) = adapter {
-                adapter.close().await;
+        self.commit(|world, tx, _| {
+            let Some(account) = world.accounts.get(&account_id).cloned() else {
+                return;
+            };
+            if !delete_local_mail {
+                let session = String::new();
+                let health = Health::NeedsSignIn;
+                return put_account(
+                    world,
+                    tx,
+                    AccountRecord {
+                        session,
+                        health,
+                        ..account
+                    },
+                );
             }
-            core.commit(|world, tx, _| {
-                let Some(account) = world.accounts.get(&account_id).cloned() else {
-                    return;
-                };
-                if !delete_local_mail {
-                    let session = String::new();
-                    let health = Health::NeedsSignIn;
-                    return put_account(
-                        world,
-                        tx,
-                        AccountRecord {
-                            session,
-                            health,
-                            ..account
-                        },
-                    );
-                }
-                let messages: Vec<_> = world
-                    .messages
-                    .values()
-                    .filter(|record| record.account_id == account_id)
-                    .map(|record| record.id.clone())
-                    .collect();
-                for id in &messages {
-                    remove_message(world, tx, id);
-                }
-                let threads: Vec<_> = world
-                    .threads
-                    .values()
-                    .filter(|record| record.account_id == account_id)
-                    .map(|record| record.id.clone())
-                    .collect();
-                for id in &threads {
-                    remove_thread(world, tx, id);
-                }
-                let mailboxes: Vec<_> = world
-                    .mailboxes
-                    .values()
-                    .filter(|record| record.account_id == account_id)
-                    .map(|record| record.id.clone())
-                    .collect();
-                for id in &mailboxes {
-                    remove_mailbox(world, tx, id);
-                }
-                let changes: Vec<_> = world
-                    .changes
-                    .values()
-                    .filter(|record| record.account_id == account_id)
-                    .map(|record| record.id.clone())
-                    .collect();
-                for id in &changes {
-                    remove_change(world, tx, id);
-                }
-                remove_account(world, tx, &account_id);
-            });
-            core.respond(id, Response::SignOut(Answer(Ok(Empty {}))));
+            let messages: Vec<_> = world
+                .messages
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &messages {
+                remove_message(world, tx, id);
+            }
+            let threads: Vec<_> = world
+                .threads
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &threads {
+                remove_thread(world, tx, id);
+            }
+            let mailboxes: Vec<_> = world
+                .mailboxes
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &mailboxes {
+                remove_mailbox(world, tx, id);
+            }
+            let changes: Vec<_> = world
+                .changes
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &changes {
+                remove_change(world, tx, id);
+            }
+            remove_account(world, tx, &account_id);
         });
+        self.respond(id, Response::SignOut(Answer(Ok(Empty {}))));
+        if let Some(adapter) = adapter {
+            self.work.spawn_local(async move { adapter.close().await });
+        }
     }
 
     /// Syncs each account in turn and answers once all have finished. The first

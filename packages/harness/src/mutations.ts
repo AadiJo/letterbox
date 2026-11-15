@@ -215,10 +215,19 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'answered cancelled when the core stops',
   },
   {
-    name: 'a sign-out waits for a provider call in flight instead of ending it',
+    name: 'a sign-out waits behind the work already queued for the account',
     file: core('lib.rs'),
-    find: '        self.work.spawn_local(async move {\n            if let Some(adapter) = adapter {',
-    replace: '        self.background(&account_id.clone(), async move {\n            if let Some(adapter) = adapter {',
+    find: '    fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {\n',
+    replace: [
+      '    fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {',
+      '        let core = Rc::clone(self);',
+      '        let queue = account_id.clone();',
+      '        self.background(&queue, async move { core.sign_out_now(id, account_id, delete_local_mail) });',
+      '    }',
+      '',
+      '    fn sign_out_now(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {',
+      '',
+    ].join('\n'),
     scenarios: 'sign-out is answered while',
   },
   {
