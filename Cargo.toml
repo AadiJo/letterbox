@@ -2,6 +2,7 @@
 #
 #   crates/protocol    the messages between the core and every UI. packages/protocol is its TypeScript copy
 #   crates/core        the headless core: store, sync, threads, turns
+#   crates/gmail       the Gmail adapter: OAuth sign-in and the Gmail REST API
 #   crates/sim-client  adapters that reach the sim provider (packages/sim-provider) over its socket,
 #                      and the `core-sim` program every scenario runs
 #   crates/keychain    the system keychain as the core's secret store, for the desktop and mobile apps
@@ -21,6 +22,7 @@ publish = false
 [workspace.dependencies]
 letterbox-protocol = { path = "crates/protocol" }
 letterbox-core = { path = "crates/core" }
+letterbox-gmail = { path = "crates/gmail" }
 foldhash = "0.2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 indexmap = { version = "2.14", features = ["serde"] }

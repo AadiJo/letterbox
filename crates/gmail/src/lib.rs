@@ -1,0 +1,46 @@
+//! The Gmail adapter: sign-in with OAuth 2.0 for installed apps, and the mailbox over
+//! the Gmail REST API (gmail/v1). It follows the adapter contract in
+//! crates/core/src/adapter.rs. How Gmail maps onto it:
+//!
+//!   message ref   the Gmail message id, which never changes
+//!   mailbox ref   the label id. System labels get their role and a readable name.
+//!                 UNREAD and STARRED are the `unread` and `flagged` flags. IMPORTANT,
+//!                 CHAT and the CATEGORY_ labels are not mailboxes.
+//!   bulk          from the inbox tab: Promotions, Social, Updates and Forums are bulk.
+//!   cursor        the history id from users.getProfile, taken before the first page,
+//!                 plus a digest of the label list, which history.list does not cover.
+//!   changes       users.history.list, then each named message's current labels.
+//!                 An expired history id (404) is `cursor-expired`.
+//!   apply         users.messages.modify for one message, batchModify for several.
+//!                 Trash adds the TRASH label.
+//!
+//! Tokens: the refresh token goes in the session string. The access token stays in memory
+//! and is refreshed when a call is refused with 401, so nothing reads a clock. A refresh
+//! refused with `invalid_grant` answers `needs-sign-in`.
+//!
+//! Every endpoint, the client id and secret, the loopback and the random source come from
+//! `GmailConfig`, so the scenarios run against the fake server in
+//! packages/sim-provider/src/gmail with repeatable consent URLs. A live run uses
+//! `GmailConfig::google_from_env`.
+
+mod adapter;
+mod api;
+mod config;
+mod factory;
+mod labels;
+mod loopback;
+mod message;
+mod oauth;
+mod wire;
+
+use std::rc::Rc;
+
+use letterbox_core::adapter::AdapterFactory;
+
+pub use crate::config::{CLIENT_ID_VAR, CLIENT_SECRET_VAR, GmailConfig, Loopback, Random};
+
+/// The Gmail sign-in option: id "gmail", label "Gmail", method oauth. The host's tokio
+/// runtime must have `enable_time` on, for the HTTP client (see `GmailFactory::new`).
+pub fn gmail_factory(config: GmailConfig) -> Rc<dyn AdapterFactory> {
+    Rc::new(factory::GmailFactory::new(config))
+}
