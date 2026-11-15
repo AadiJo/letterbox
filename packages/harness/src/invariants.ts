@@ -42,8 +42,20 @@ export const SIM_KEYCHAIN = 'sim-keychain.json'
 /** Every file under `folder`, with its path relative to it. Empty when the folder does not exist. */
 const filesIn = (folder: string): string[] =>
   existsSync(folder)
-    ? readdirSync(folder, { recursive: true, encoding: 'utf8' }).filter((path) => statSync(join(folder, path)).isFile())
+    ? readdirSync(folder, { recursive: true, encoding: 'utf8' }).filter((path) =>
+        statSync(join(folder, path), { throwIfNoEntry: false })?.isFile(),
+      )
     : []
+
+/** The bytes of a file, or none if it went away since it was listed, as a WAL does when the core closes. */
+const bytesOf = (path: string): Buffer => {
+  try {
+    return readFileSync(path)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return Buffer.alloc(0)
+    throw error
+  }
+}
 
 /**
  * Session strings stay out of the core's store: they belong in the secret store the host
@@ -55,7 +67,7 @@ const filesIn = (folder: string): string[] =>
 export function storeLeaks(dataPath: string, sessions: ReadonlySet<string>): string[] {
   const files = filesIn(dataPath).filter((path) => path !== SIM_KEYCHAIN)
   return files.flatMap((path) => {
-    const bytes = readFileSync(join(dataPath, path))
+    const bytes = bytesOf(join(dataPath, path))
     return [...sessions]
       .filter((session) => [session, JSON.stringify(session).slice(1, -1)].some((form) => bytes.includes(form)))
       .map((session) => `the core's store file ${path} holds the session string ${JSON.stringify(session)}`)

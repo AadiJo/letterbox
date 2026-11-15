@@ -280,6 +280,27 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'first sync shows',
   },
   {
+    // SQLite's checkpoint at close overwrites the page, so only a check made while the core runs sees it.
+    name: 'the session sits in the account record until the first sync overwrites it',
+    file: core('world.rs'),
+    find: '    pub signed_in: bool,\n',
+    replace: '    pub signed_in: bool,\n    pub session: String,\n',
+    also: [
+      {
+        file: core('accounts.rs'),
+        find: '                    signed_in: true,\n',
+        replace: '                    signed_in: true,\n                    session: connection.session.clone(),\n',
+      },
+      {
+        file: core('sync.rs'),
+        find: '                        health,\n                        last_synced_at,\n                        ..account\n',
+        replace:
+          '                        health,\n                        last_synced_at,\n                        session: String::new(),\n                        ..account\n',
+      },
+    ],
+    scenarios: 'first sync shows',
+  },
+  {
     name: 'a sign-out leaves the session in the keychain',
     file: core('accounts.rs'),
     find: '        let _ = self.secrets.delete(&account_id);\n',

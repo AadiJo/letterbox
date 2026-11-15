@@ -66,12 +66,21 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
   const folder = mkdtempSync(join(tmpdir(), 'letterbox-'))
   const data = join(folder, 'data')
   const transcript: TranscriptEntry[] = []
-  const record = (entry: TranscriptEntry) => void transcript.push(entry)
   const provider = await startSimProvider(join(folder, 'provider.sock'))
+  // The store is scanned after every core message, not only at the end: SQLite's checkpoint
+  // at close can overwrite a page that once held a session. Each commit that matters is
+  // followed by a message, so the scan sees its write in the WAL.
+  const leftInStore = new Set<string>()
+  const scanStore = () => {
+    for (const leak of storeLeaks(data, provider.sessions())) leftInStore.add(leak)
+  }
+  const record = (entry: TranscriptEntry) => {
+    transcript.push(entry)
+    if (entry.from === 'core') scanStore()
+  }
   const cores: CoreClient[] = []
   const passwords: string[] = []
   let failure: string | null = null
-  let leftInStore: string[] = []
 
   // One count for the whole run, across core restarts: the core keeps every change id it
   // has seen, so a restarted core must never be sent an id from before. Counting keeps
@@ -130,8 +139,8 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
   } finally {
     await Promise.all(cores.map((core) => core.stop().catch(() => undefined)))
     await provider.close()
-    // Read before the folder goes, once every core has written its last.
-    leftInStore = storeLeaks(data, provider.sessions())
+    // Once more before the folder goes, after every core has written its last.
+    scanStore()
     rmSync(folder, { recursive: true, force: true })
   }
 
@@ -140,7 +149,7 @@ export async function runOne(definition: Definition, dialect: Dialect): Promise<
   const broken = [
     ...cores.flatMap((core) => core.violations()),
     ...leaks(transcript, new Set([...provider.handedOut(), ...passwords])),
-    ...leftInStore,
+    ...[...leftInStore].toSorted(),
     ...cycle.problems,
   ]
   if (broken.length > 0) {
