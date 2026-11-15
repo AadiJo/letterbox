@@ -84,8 +84,9 @@ fn repository(name: &str) -> PathBuf {
     root
 }
 
-/// Commits everything git tracks in `root`, without hooks, and returns the commit.
+/// Commits every file in `root` but `untracked*`, without hooks, and returns the commit.
 fn commit(root: &Path) -> String {
+    git(root, &["add", "--all", "--", ".", ":(exclude,glob)**/untracked*"]);
     git(
         root,
         &[
