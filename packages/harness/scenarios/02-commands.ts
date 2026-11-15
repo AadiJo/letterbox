@@ -72,7 +72,10 @@ scenario('each list filter agrees with the rows, pending changes included', asyn
   // Offline, so the changes stay pending and each filter has to read them.
   box.setOffline(true)
   const target = await thread(core, SUBJECT)
+  const accounts = core.subscribe({ view: 'accounts' })
   const archive = await core.command({ kind: 'set-mailboxes', threadIds: [target.id], add: [], remove: [inbox.id] })
+  // Its push finds the provider unreachable and records that. Waiting for it fixes the revision of every answer after.
+  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
   const other = (await threads(core)).find((row) => row.id !== target.id)
   t.check(other !== undefined, 'there is a second conversation')
   if (!other) return
@@ -157,9 +160,10 @@ scenario('changes made offline replay in order when the provider is back', async
   const { core, box } = await start(t)
   const target = await thread(core, SUBJECT)
   box.setOffline(true)
+  const accounts = core.subscribe({ view: 'accounts' })
   const first = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
   // Its push finds the provider unreachable. Waiting for that keeps the order of the next steps fixed.
-  await untilAccounts(core, (accounts) => accounts[0]?.status.state === 'offline')
+  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
   const second = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: true, flagged: true })
   t.equal([first.kind, second.kind], ['accepted', 'accepted'], 'both are accepted while offline')
   const waiting = await thread(core, SUBJECT)

@@ -107,6 +107,8 @@ scenario('a sign-out is answered while a provider call is still in flight', asyn
   const signedOut = await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })
   t.check(signedOut.ok, 'the sign-out does not wait for the provider to answer')
   box.releaseBodies()
+  // The released body is kept with the mail the sign-out kept. Waiting for it fixes the revision of the next answer.
+  while (open.latest()?.messages[0]?.body.state !== 'ready') await open.next()
   const account = (await core.query({ view: 'accounts' }))[0]
   t.equal(account?.status.state, 'needs-sign-in', 'the account waits for a new sign-in')
 })
