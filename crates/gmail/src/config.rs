@@ -2,6 +2,7 @@
 //! must not hard-code. Tests point every field at the fake server in
 //! packages/sim-provider/src/gmail and fix the random source, so a run repeats.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -30,6 +31,10 @@ pub struct GmailConfig {
     pub client_secret: Option<String>,
     pub loopback: Loopback,
     pub random: Random,
+    /// Addresses to use for these host names instead of asking DNS. Empty for Google.
+    /// Tests give the fake's name an IPv6 and an IPv4 address, the way Google's names
+    /// resolve, so the client's dual-stack connect runs in every scenario.
+    pub hosts: Vec<(String, Vec<SocketAddr>)>,
 }
 
 /// Where the browser lands after consent. The guide says to listen on 127.0.0.1 at a
@@ -58,6 +63,7 @@ impl GmailConfig {
             client_secret,
             loopback: Loopback::Tcp,
             random: Rc::new(os_random),
+            hosts: Vec::new(),
         }
     }
 

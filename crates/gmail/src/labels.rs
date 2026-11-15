@@ -105,6 +105,25 @@ pub fn bulk(label_ids: &[String]) -> Option<bool> {
     Some(BULK_CATEGORIES.contains(&category.as_str()))
 }
 
+/// The most labels one modify or batchModify may add, and the most it may remove: "You can
+/// add up to 100 labels with each update". The core's trash removes every other label, so
+/// an account with many labels needs more than one update.
+/// https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/modify
+const LABEL_LIMIT: usize = 100;
+
+/// Splits one edit into updates that each add and remove at most `LABEL_LIMIT` labels.
+/// Order does not matter: a label is never both added and removed.
+pub fn in_steps<'a>(add: &'a [String], remove: &'a [String]) -> Vec<(&'a [String], &'a [String])> {
+    let adds: Vec<&[String]> = add.chunks(LABEL_LIMIT).collect();
+    let removes: Vec<&[String]> = remove.chunks(LABEL_LIMIT).collect();
+    (0..adds.len().max(removes.len()))
+        .map(|step| {
+            let part = |chunks: &[&'a [String]]| chunks.get(step).copied().unwrap_or(&[]);
+            (part(&adds), part(&removes))
+        })
+        .collect()
+}
+
 /// The label ids to add and remove for one mutation. Values are absolute, so applying the
 /// same edit twice leaves the same labels (rule 6). Trash is "add TRASH", which modify
 /// accepts: the labels guide marks TRASH as manually applicable, so no trash call is needed.

@@ -14,6 +14,7 @@
 
 use std::cell::Cell;
 use std::io::Write;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -36,6 +37,9 @@ const INPUT_CLOSED: &str = "core-sim: input closed, finishing the work in flight
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
 const KEYCHAIN_FILE: &str = "sim-keychain.json";
+
+/// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
+const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
 
 struct Args {
     data: PathBuf,
@@ -80,11 +84,25 @@ fn parse_args() -> Option<Args> {
 fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
     // Each draw is 32 copies of the next number, so every attempt has its own verifier and state.
     let draws = Cell::new(0u8);
+    // The fake listens on 127.0.0.1. Its name also gets ::1, where nothing listens, as
+    // Google's names have both kinds of address, so every request takes the client's
+    // dual-stack path: try IPv6, fall back to IPv4.
+    let port: u16 = url
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.trim_end_matches('/').parse().ok())
+        .unwrap_or_else(|| panic!("--gmail {url:?} does not end in a port"));
+    let base = format!("http://{FAKE_GMAIL_HOST}:{port}");
+    let addresses = vec![
+        SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+        SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+    ];
     gmail_factory(GmailConfig {
-        api_base: url.clone(),
+        api_base: base.clone(),
         // Never fetched. The fake reads the consent URL the scenario hands it.
         auth_url: "https://consent.fake.test/o/oauth2/v2/auth".to_owned(),
-        token_url: format!("{url}/token"),
+        token_url: format!("{base}/token"),
+        hosts: vec![(FAKE_GMAIL_HOST.to_owned(), addresses)],
         client_id: "letterbox-scenarios.apps.fake.test".to_owned(),
         client_secret: Some("not-a-secret".to_owned()),
         loopback: Loopback::Unix {
@@ -115,8 +133,11 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Time is on for the Gmail adapter's HTTP client (see GmailFactory::new). Nothing in the
+    // core or the adapters waits on a timer, so a run still repeats.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
+        .enable_time()
         .build()
         .expect("a single-thread runtime starts");
 

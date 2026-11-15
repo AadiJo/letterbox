@@ -35,10 +35,16 @@ pub struct GmailFactory {
 }
 
 impl GmailFactory {
+    /// The host's tokio runtime must have its time driver on (`enable_time`): the HTTP
+    /// client starts a timer when a name has both IPv6 and IPv4 addresses, as Google's do.
+    /// The adapter's own code never waits on a timer (clippy.toml).
     pub fn new(config: GmailConfig) -> Self {
-        // No idle timeout, so the client needs no timer: the core's runtime has none (see clippy.toml).
-        let http = reqwest::Client::builder()
-            .pool_idle_timeout(None)
+        let http = config
+            .hosts
+            .iter()
+            .fold(reqwest::Client::builder(), |builder, (name, addresses)| {
+                builder.resolve_to_addrs(name, addresses)
+            })
             .build()
             .expect("an HTTP client with rustls builds");
         GmailFactory {

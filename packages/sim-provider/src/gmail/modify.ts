@@ -38,6 +38,9 @@ const REFUSAL_STATUS = {
   'not-supported': 400,
 }
 
+/** The most labels one modify or batchModify body may add, and the most it may remove. */
+const LABEL_LIMIT = 100
+
 /** Applies the mutations in order and stops at the first that fails. */
 const applyAll = async (entry: MailboxEntry, mutations: Mutation[]): Promise<Failure | null> => {
   const [first, ...rest] = mutations
@@ -53,6 +56,10 @@ const applyAll = async (entry: MailboxEntry, mutations: Mutation[]): Promise<Fai
 export const modify = (entry: MailboxEntry, refs: MessageRef[], body: unknown): Promise<Failure | null> => {
   const add = strings(body, 'addLabelIds')
   const remove = strings(body, 'removeLabelIds')
+  // "You can add up to 100 labels with each update", and the same for removing.
+  // https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/modify
+  if (add.length > LABEL_LIMIT || remove.length > LABEL_LIMIT)
+    return Promise.resolve({ status: 400, message: `At most ${LABEL_LIMIT} labels can be added or removed at once` })
   const isBox = (id: string) => mailboxRefsOf(entry.store, [id]) !== null
   const known = (id: string) => isBox(id) || EXTRA_SYSTEM_LABELS.some((extra) => extra === id)
   const bad = [...add, ...remove].find((id) => !known(id) || id === 'SENT' || id === 'DRAFT')

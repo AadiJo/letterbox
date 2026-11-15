@@ -39,7 +39,8 @@ use letterbox_core::adapter::AdapterFactory;
 
 pub use crate::config::{CLIENT_ID_VAR, CLIENT_SECRET_VAR, GmailConfig, Loopback, Random};
 
-/// The Gmail sign-in option: id "gmail", label "Gmail", method oauth.
+/// The Gmail sign-in option: id "gmail", label "Gmail", method oauth. The host's tokio
+/// runtime must have `enable_time` on, for the HTTP client (see `GmailFactory::new`).
 pub fn gmail_factory(config: GmailConfig) -> Rc<dyn AdapterFactory> {
     Rc::new(factory::GmailFactory::new(config))
 }

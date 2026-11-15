@@ -190,6 +190,28 @@ scenario(
 )
 
 scenario(
+  'trash on a gmail account with more than 100 labels stays within the 100-label limit of each update',
+  async (t) => {
+    const seed = standardSeed(t.dialect)
+    const extra = Array.from({ length: 110 }, (_, index) => ({
+      key: `label-${index}`,
+      name: `Label ${index}`,
+      role: null,
+    }))
+    const { core, box } = await start(t, { ...seed, mailboxes: [...seed.mailboxes, ...extra] })
+    const lunch = await thread(core, 'Lunch on Friday?')
+    const trash = await core.command({ kind: 'trash', threadIds: [lunch.id] })
+    t.equal((await core.settled(trash.change)).result, 'done', 'the trash settles as done')
+    t.equal(
+      [truthOf(box, 'lunch-ask')?.mailboxes, truthOf(box, 'lunch-answer')?.mailboxes],
+      [['trash'], ['sent', 'trash']],
+      'Gmail moved both messages to the trash',
+    )
+  },
+  ['gmail'],
+)
+
+scenario(
   'a gmail change still reaches the messages of a conversation that remain after one is deleted',
   async (t) => {
     const { core, box } = await start(t)

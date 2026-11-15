@@ -258,13 +258,20 @@ impl GmailAdapter {
         let ids: Vec<String> = refs.iter().map(|r#ref| r#ref.as_str().to_owned()).collect();
         let (add, remove) = labels::edits(&mutation);
         if add.is_empty() && remove.is_empty() {
-            // Only SENT or DRAFT were named, and Gmail sets those itself.
-            return Ok(ApplyResult::Applied { moved: Vec::new() });
+            // Only SENT or DRAFT were named. Gmail sets those itself, and no change reports them back.
+            return refused(ProviderRefusal::NotSupported);
         }
-        let found = match ids.as_slice() {
-            [id] => self.modify_one(id, &add, &remove).await.map(|()| 1),
-            _ => self.modify_many(&ids, &add, &remove).await,
-        };
+        // Each step stays within the 100-label limit. A step that finds no message, or fails, ends it.
+        let mut found = Ok(0);
+        for (add, remove) in labels::in_steps(&add, &remove) {
+            found = match ids.as_slice() {
+                [id] => self.modify_one(id, add, remove).await.map(|()| 1),
+                _ => self.modify_many(&ids, add, remove).await,
+            };
+            if !matches!(found, Ok(count) if count > 0) {
+                break;
+            }
+        }
         match found {
             Ok(0) => refused(ProviderRefusal::UnknownTarget),
             Ok(_) => Ok(ApplyResult::Applied { moved: Vec::new() }),
