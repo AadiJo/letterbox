@@ -146,8 +146,10 @@ const checks: [string, () => Promise<void>][] = [
     async () => {
       const broken = new Error('the bridge is down')
       let listener: Listener | undefined
+      let endInsideSend = false
       const transport = {
         send: () => {
+          if (endInsideSend) listener?.end(new Error('the core is gone'))
           throw broken
         },
         listen: (given: Listener) => void (listener = given),
@@ -175,6 +177,12 @@ const checks: [string, () => Promise<void>][] = [
       // A wait left behind would take this welcome before `unclaimed` sees it.
       listener?.receive({ kind: 'welcome', protocol: 0, rev: 1 })
       if (handed.length !== 1) fail('a failed hello left its wait behind')
+      // The core goes away inside `send`, and then the next call comes after it is gone.
+      // Each call's wait rejects too. Node stops this whole run on a rejection nobody
+      // handles, so a wait the client drops after it rejects fails the self-check.
+      endInsideSend = true
+      if (!(await settles(client.hello()))) fail('a hello whose send ended the core never settled')
+      if (!(await settles(client.hello()))) fail('a hello after the core ended never settled')
     },
   ],
 ]

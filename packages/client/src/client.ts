@@ -185,6 +185,8 @@ export function createClient(transport: Transport, options: Options): KeepingCli
     } catch (error) {
       const index = waiters.findIndex((waiter) => waiter.matches === matches)
       if (index !== -1) waiters.splice(index, 1)
+      // The dropped wait may already have rejected because the core ended. Nobody holds it now.
+      answer.catch(() => {})
       return Promise.reject<Message>(error)
     }
     return answer
