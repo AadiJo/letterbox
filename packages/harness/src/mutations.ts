@@ -217,8 +217,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a sign-out waits for a provider call in flight instead of ending it',
     file: core('lib.rs'),
-    find: '            self.work.spawn_local(async move { adapter.close().await });',
-    replace: '            self.background(&account_id, async move { adapter.close().await });',
+    find: '        self.work.spawn_local(async move {\n            if let Some(adapter) = adapter {',
+    replace: '        self.background(&account_id.clone(), async move {\n            if let Some(adapter) = adapter {',
     scenarios: 'sign-out is answered while',
   },
   {
