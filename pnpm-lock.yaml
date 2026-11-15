@@ -30,8 +30,17 @@ importers:
         specifier: ^1.93.0
         version: 1.93.0
 
+  packages/client:
+    dependencies:
+      '@letterbox/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/harness:
     dependencies:
+      '@letterbox/client':
+        specifier: workspace:*
+        version: link:../client
       '@letterbox/protocol':
         specifier: workspace:*
         version: link:../protocol

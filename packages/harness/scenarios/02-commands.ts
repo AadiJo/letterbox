@@ -165,8 +165,9 @@ scenario('changes made offline replay in order when the provider is back', async
 
   box.setOffline(false)
   await sync(core)
-  const settledFirst = await core.settled(first.change)
+  // The second is awaited first. A wait that took any change's settled would get the first's, at the lower revision.
   const settledSecond = await core.settled(second.change)
+  const settledFirst = await core.settled(first.change)
   t.equal([settledFirst.result, settledSecond.result], ['done', 'done'], 'both settle as done')
   t.check(settledFirst.rev <= settledSecond.rev, 'they settle in the order they were made')
   t.equal(

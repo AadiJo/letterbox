@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@letterbox/client": "workspace:*",
     "@letterbox/protocol": "workspace:*",
     "@letterbox/sim-provider": "workspace:*"
   }
