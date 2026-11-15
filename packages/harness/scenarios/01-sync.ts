@@ -191,22 +191,26 @@ scenario('a restart keeps the mail and resumes with one cheap call', async (t) =
   )
 })
 
-scenario('a body still loading when the core stops is saved before it exits', async (t) => {
+scenario('bodies still loading when the core stops are saved before it exits', async (t) => {
   const first = await start(t)
-  const photos = await thread(first.core, 'Trip photos')
+  // Two messages: the first body call waits at the provider, the second waits in the core's queue behind it.
+  const lunch = await thread(first.core, 'Lunch on Friday?')
   first.box.holdBodies()
-  const open = watchThread(first.core, photos.id)
-  t.equal((await open.next())?.messages[0]?.body.state, 'loading', 'the body is loading while the provider holds it')
+  const open = watchThread(first.core, lunch.id)
+  const loading = (await open.next())?.messages.map((message) => message.body.state)
+  t.equal(loading, ['loading', 'loading'], 'both bodies are loading while the provider holds them')
   const stopped = first.core.stop()
-  // A core that wrongly stops at once gets this long to do so. A correct core waits for the body either way.
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  await first.core.inputClosed()
   first.box.releaseBodies()
   await stopped
+  t.equal(first.box.calls().body, 2, 'the core asked for both bodies before it exited')
 
   const core = t.startCore()
   await core.hello()
-  t.equal((await openWithBody(core, photos.id)).body.state, 'ready', 'the body is there after the restart')
-  t.equal(first.box.calls().body, 1, 'the provider was asked for it once, before the stop')
+  const detail = await readThread(core, lunch.id)
+  const states = detail?.messages.map((message) => message.body.state)
+  t.equal(states, ['ready', 'ready'], 'both bodies are there after the restart')
+  t.equal(first.box.calls().body, 2, 'the restarted core read them from its store')
 })
 
 scenario('two accounts share one list', async (t) => {

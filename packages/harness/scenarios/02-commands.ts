@@ -2,7 +2,7 @@
 // wrongly while it is on its way to the provider. Each scenario is one of them.
 
 import type { BlobId, ChangeId, ThreadFilter, ThreadSummary } from '@letterbox/protocol'
-import { mailbox, standardSeed, start, sync, thread, threads, truthOf } from '../src/fixtures.ts'
+import { mailbox, standardSeed, start, sync, thread, threads, truthOf, untilAccounts } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 
 const SUBJECT = 'Can you review the draft?'
@@ -146,6 +146,8 @@ scenario('changes made offline replay in order when the provider is back', async
   const target = await thread(core, SUBJECT)
   box.setOffline(true)
   const first = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  // Its push finds the provider unreachable. Waiting for that keeps the order of the next steps fixed.
+  await untilAccounts(core, (accounts) => accounts[0]?.status.state === 'offline')
   const second = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: true, flagged: true })
   t.equal([first.kind, second.kind], ['accepted', 'accepted'], 'both are accepted while offline')
   const waiting = await thread(core, SUBJECT)

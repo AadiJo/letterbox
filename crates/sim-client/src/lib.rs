@@ -4,6 +4,9 @@
 //!
 //! Each sign-in attempt and each adapter has its own socket. An adapter that
 //! loses its socket answers `offline` and connects again on its next call.
+//! Closing an adapter lets the calls it already sent finish, the way an HTTP
+//! client lets a request it sent complete, so a scenario can race a sign-out
+//! against a call in flight.
 
 mod wire;
 
@@ -24,6 +27,7 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::wire::{Call, CallResult, Dialect, Reply, RequestBody, Session, encode, outcome, sign_in_result};
 
@@ -165,6 +169,8 @@ struct SimAdapter {
     /// The socket in use. The lock is held while connecting, so calls side by side share one new socket.
     link: tokio::sync::Mutex<Option<Link>>,
     closed: Cell<bool>,
+    /// Calls not yet answered. `close` waits for them.
+    calls: TaskTracker,
 }
 
 impl SimAdapter {
@@ -175,6 +181,7 @@ impl SimAdapter {
             session,
             link: tokio::sync::Mutex::new(first),
             closed: Cell::new(false),
+            calls: TaskTracker::new(),
         }
     }
 
@@ -206,6 +213,7 @@ impl SimAdapter {
     }
 
     async fn call<T: DeserializeOwned>(&self, call: Call) -> Outcome<T> {
+        let _in_flight = self.calls.token();
         let method = call.method();
         match self.forward(call).await {
             Some(result) if result.method == method => outcome(result.outcome),
@@ -242,6 +250,8 @@ impl Adapter for SimAdapter {
     fn close(&self) -> LocalFuture<'_, ()> {
         Box::pin(async move {
             self.closed.set(true);
+            self.calls.close();
+            self.calls.wait().await;
             let link = self.link.lock().await.clone();
             if let Some(link) = link {
                 link.close().await;

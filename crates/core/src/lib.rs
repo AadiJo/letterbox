@@ -19,20 +19,22 @@
 //! thread gives it a thread of its own and passes messages across.
 //!
 //! A panic in the core is a bug that can leave its memory out of step with the
-//! store. Build the host with `panic = "abort"`, as this workspace does, so a
-//! panic ends the program instead of leaving a broken core running.
+//! store, so the program must end on one. `Core::new` refuses to start in a
+//! program built to unwind. Set `panic = "abort"` in the host's profiles, as
+//! this workspace does.
 
 pub mod adapter;
 mod changes;
 pub mod clock;
 mod maps;
 mod reconcile;
+mod sign_in;
 mod store;
 mod turns;
 mod views;
 mod world;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::future::Future;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -45,14 +47,16 @@ use letterbox_protocol::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::spawn_local;
-use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::adapter::{Adapter, AdapterFactory, AdapterFailure, ApplyResult, ChangesResult, LocalFuture, SignInInput};
-use crate::changes::{overlay, plan, resolve, targets};
+use crate::adapter::{
+    Adapter, AdapterFactory, AdapterFailure, ApplyResult, ChangesResult, Connection, LocalFuture, SignInInput,
+};
+use crate::changes::{Edit, overlay, plan, resolve, targets};
 use crate::clock::Environment;
 use crate::maps::{HashMap, HashSet, IndexMap};
 use crate::reconcile::{Incoming, reconcile};
+use crate::sign_in::{Attempts, Outcome, outcome};
 pub use crate::store::StoreError;
 use crate::store::{Store, Transaction};
 use crate::views::{Live, evaluate};
@@ -85,6 +89,13 @@ impl Core {
     /// Opens the store and resumes every account that is still signed in.
     /// Call this, and `receive`, inside a tokio LocalSet: the core spawns its work there.
     pub fn new(options: CoreOptions) -> Result<Core, StoreError> {
+        if cfg!(panic = "unwind") {
+            panic!(
+                "letterbox-core must run in a program built with panic = \"abort\". After a panic \
+                 its memory can be out of step with the store. Add panic = \"abort\" to the host's \
+                 [profile.dev] and [profile.release] in Cargo.toml."
+            );
+        }
         let store = Store::open(&options.data_path)?;
         let world = load_world(&store);
         let factories: IndexMap<String, Rc<dyn AdapterFactory>> = options
@@ -93,21 +104,25 @@ impl Core {
             .map(|factory| (factory.option().id.clone(), Rc::clone(factory)))
             .collect();
 
-        let mut adapters: HashMap<AccountId, Rc<dyn Adapter>> = HashMap::default();
+        let mut adapters: HashMap<AccountId, Linked> = HashMap::default();
+        let mut links = 0;
         for account in world.accounts.values() {
             if let Some(factory) = factories.get(&account.factory_id)
                 && !account.session.is_empty()
             {
-                adapters.insert(account.id.clone(), factory.resume(&account.session));
+                links += 1;
+                let adapter = factory.resume(&account.session);
+                adapters.insert(account.id.clone(), Linked { adapter, link: links });
             }
         }
+        #[expect(clippy::disallowed_methods, reason = "a sign-in option's id is its factory's id")]
         let options_list = options
             .factories
             .iter()
             .map(|factory| {
                 let option = factory.option();
                 SignInOption {
-                    id: SignInOptionId::new(option.id.clone()),
+                    id: SignInOptionId::minted(option.id.clone()),
                     label: option.label.clone(),
                     method: option.method,
                 }
@@ -128,7 +143,8 @@ impl Core {
                     syncing: HashSet::default(),
                     loading_bodies: HashSet::default(),
                     unreachable_bodies: HashSet::default(),
-                    sign_ins: HashMap::default(),
+                    attempts: Attempts::default(),
+                    links,
                 }),
                 queues: RefCell::new(HashMap::default()),
                 work: TaskTracker::new(),
@@ -148,14 +164,12 @@ impl Core {
     /// nothing does not hold this up. A sign-in still waiting for the user is
     /// cancelled first, so it is answered `cancelled` instead of holding up the close.
     pub async fn close(self) {
-        for attempt in self.inner.state.borrow().sign_ins.values() {
-            attempt.signal.cancel();
-        }
+        self.inner.state.borrow().attempts.cancel_all();
         self.inner.work.close();
         self.inner.work.wait().await;
         let adapters: Vec<_> = self.inner.state.borrow_mut().adapters.drain().collect();
-        for (_, adapter) in adapters {
-            adapter.close().await;
+        for (_, linked) in adapters {
+            linked.adapter.close().await;
         }
     }
 }
@@ -181,13 +195,24 @@ struct Inner {
 /// Everything that changes while the core runs. Borrow it only between awaits.
 struct State {
     world: World,
-    adapters: HashMap<AccountId, Rc<dyn Adapter>>,
+    /// The adapter serving each signed-in account.
+    adapters: HashMap<AccountId, Linked>,
     /// In the order they were made, which is the order updates go out.
     subscriptions: IndexMap<SubscriptionId, Subscription>,
     syncing: HashSet<AccountId>,
     loading_bodies: HashSet<MessageId>,
     unreachable_bodies: HashSet<MessageId>,
-    sign_ins: HashMap<SignInOptionId, Rc<Attempt>>,
+    attempts: Attempts,
+    /// How many adapters have been linked to an account. Each link takes the next number.
+    links: u64,
+}
+
+/// The adapter serving one account, and the number of the sign-in (or start) that linked
+/// it. A new sign-in links a new number, so a pass can tell its adapter was replaced.
+#[derive(Clone)]
+struct Linked {
+    adapter: Rc<dyn Adapter>,
+    link: u64,
 }
 
 struct Subscription {
@@ -196,43 +221,11 @@ struct Subscription {
     sent: String,
 }
 
-/// One sign-in attempt in flight.
-#[derive(Default)]
-struct Attempt {
-    /// Cancelled when a newer attempt for the same option starts.
-    signal: CancellationToken,
-    superseded: Cell<bool>,
-    /// Cancelled once the attempt has its answer. A newer attempt waits for it.
-    answered: CancellationToken,
-}
-
-/// Marks a sign-in attempt answered when its task ends, however it ends.
-struct Answered {
-    core: Rc<Inner>,
-    option: SignInOptionId,
-    attempt: Rc<Attempt>,
-}
-
-impl Drop for Answered {
-    fn drop(&mut self) {
-        // try_borrow_mut: during a panic the state may still be borrowed, and a second panic would abort.
-        if let Ok(mut state) = self.core.state.try_borrow_mut()
-            && state
-                .sign_ins
-                .get(&self.option)
-                .is_some_and(|current| Rc::ptr_eq(current, &self.attempt))
-        {
-            state.sign_ins.remove(&self.option);
-        }
-        self.attempt.answered.cancel();
-    }
-}
-
 /// What a view needs from outside the world while the core answers it.
 struct LiveState<'a> {
     syncing: &'a HashSet<AccountId>,
     unreachable_bodies: &'a HashSet<MessageId>,
-    adapters: &'a HashMap<AccountId, Rc<dyn Adapter>>,
+    adapters: &'a HashMap<AccountId, Linked>,
     options: &'a [SignInOption],
 }
 
@@ -411,8 +404,8 @@ impl Inner {
         let found = {
             let state = self.state.borrow();
             state.world.messages.get(&id).and_then(|record| {
-                let adapter = state.adapters.get(&record.account_id)?;
-                Some((Rc::clone(adapter), record.r#ref.clone()))
+                let linked = state.adapters.get(&record.account_id)?;
+                Some((Rc::clone(&linked.adapter), record.r#ref.clone()))
             })
         };
         let Some((adapter, r#ref)) = found else {
@@ -465,20 +458,21 @@ impl Inner {
         });
     }
 
-    /// True while `adapter` is still the account's adapter. A sign-out removes it and a new
-    /// sign-in replaces it. A pass checks this after every provider call and writes nothing
-    /// once it is false, so it cannot bring back records a sign-out deleted, or overwrite
-    /// the status a sign-out or sign-in set.
-    fn still_current(&self, account_id: &AccountId, adapter: &Rc<dyn Adapter>) -> bool {
+    /// True while `linked` still serves the account. A sign-out unlinks it and a new sign-in
+    /// links another. A pass checks this after every provider call and writes nothing once
+    /// it is false, so it cannot bring back records a sign-out deleted, or overwrite the
+    /// status a sign-out or sign-in set.
+    fn still_current(&self, account_id: &AccountId, linked: &Linked) -> bool {
         let state = self.state.borrow();
         state
             .adapters
             .get(account_id)
-            .is_some_and(|current| Rc::ptr_eq(current, adapter))
+            .is_some_and(|current| current.link == linked.link)
     }
 
     /// Carries every pending change for one account to the provider, oldest first. Stops when the provider is unreachable.
-    async fn push(self: &Rc<Self>, account_id: &AccountId, adapter: &Rc<dyn Adapter>) -> PassResult {
+    async fn push(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
+        let adapter = &linked.adapter;
         let waiting: Vec<ChangeRecord> = self
             .state
             .borrow()
@@ -489,7 +483,7 @@ impl Inner {
             .cloned()
             .collect();
         for change in waiting {
-            if !self.still_current(account_id, adapter) {
+            if !self.still_current(account_id, linked) {
                 return Ok(());
             }
             let Some(op) = change.op.clone() else { continue };
@@ -501,7 +495,7 @@ impl Inner {
             let mut refused = None;
             for step in steps {
                 let outcome = adapter.apply(step.mutation).await?;
-                if !self.still_current(account_id, adapter) {
+                if !self.still_current(account_id, linked) {
                     return Ok(());
                 }
                 match outcome {
@@ -542,7 +536,8 @@ impl Inner {
     }
 
     /// Fetches what changed at the provider. Falls back to a full snapshot when there is no cursor or it expired.
-    async fn pull(self: &Rc<Self>, account_id: &AccountId, adapter: &Rc<dyn Adapter>) -> PassResult {
+    async fn pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
+        let adapter = &linked.adapter;
         let cursor = self
             .state
             .borrow()
@@ -553,7 +548,7 @@ impl Inner {
         if let Some(cursor) = cursor
             && let ChangesResult::Changes(set) = adapter.changes(cursor).await?
         {
-            if !self.still_current(account_id, adapter) {
+            if !self.still_current(account_id, linked) {
                 return Ok(());
             }
             self.commit(|world, tx, _| {
@@ -578,7 +573,7 @@ impl Inner {
         let mut page = None;
         loop {
             let result = adapter.snapshot(page.take()).await?;
-            if !self.still_current(account_id, adapter) {
+            if !self.still_current(account_id, linked) {
                 return Ok(());
             }
             messages.extend(result.messages);
@@ -618,17 +613,17 @@ impl Inner {
             let known = state.world.accounts.contains_key(&account_id);
             state.adapters.get(&account_id).filter(|_| known).cloned()
         };
-        let Some(adapter) = adapter else { return Ok(()) };
+        let Some(linked) = adapter else { return Ok(()) };
         if with_pull {
             self.state.borrow_mut().syncing.insert(account_id.clone());
             self.commit(|_, _, _| {});
         }
-        let mut result = self.push(&account_id, &adapter).await;
+        let mut result = self.push(&account_id, &linked).await;
         if result.is_ok() && with_pull {
-            result = self.pull(&account_id, &adapter).await;
+            result = self.pull(&account_id, &linked).await;
         }
         self.state.borrow_mut().syncing.remove(&account_id);
-        if !self.still_current(&account_id, &adapter) {
+        if !self.still_current(&account_id, &linked) {
             // A sign-out or a new sign-in took the account while this pass ran, and its
             // records are theirs now. Only show that this pass stopped syncing.
             if with_pull {
@@ -738,7 +733,12 @@ impl Inner {
             });
         }
 
-        let resolved = resolve(&self.state.borrow().world, &command);
+        let Some((thread_ids, edit)) = Edit::of(&command) else {
+            // Set-turn was answered above. Send and undo are refused as not supported.
+            let reason = Refusal::NotSupported;
+            return self.send(CoreMessage::Rejected { change, reason });
+        };
+        let resolved = resolve(&self.state.borrow().world, thread_ids, edit);
         let (account_id, op) = match resolved {
             Ok(resolved) => resolved,
             Err(reason) => return self.send(CoreMessage::Rejected { change, reason }),
@@ -764,94 +764,76 @@ impl Inner {
 
     fn sign_in(self: &Rc<Self>, id: RequestId, option: SignInOptionId, password: Option<PasswordInput>) {
         let Some(factory) = self.factories.get(option.as_str()).cloned() else {
-            return self.respond(id, Response::SignIn(Answer(Err(SignInError::Denied))));
+            return self.respond(id, Response::SignIn(Answer::from(Err(SignInError::Denied))));
         };
-
-        // One attempt per option at a time. A new one ends the one before it and waits for
-        // that one to be answered, so the two answers always arrive in the order asked.
-        let attempt = Rc::new(Attempt::default());
-        let prior = self
-            .state
-            .borrow_mut()
-            .sign_ins
-            .insert(option.clone(), Rc::clone(&attempt));
-        if let Some(prior) = &prior {
-            prior.superseded.set(true);
-            prior.signal.cancel();
-        }
+        let (attempt, prior) = self.state.borrow_mut().attempts.start(&option);
         let core = Rc::clone(self);
         self.work.spawn_local(async move {
-            let _answered = Answered {
-                core: Rc::clone(&core),
-                option,
-                attempt: Rc::clone(&attempt),
-            };
             if let Some(prior) = prior {
                 prior.answered.cancelled().await;
             }
-            core.connect(id, password, factory, &attempt).await;
+            let newest = || core.state.borrow().attempts.is_newest(&option, &attempt);
+            let ended = if newest() {
+                let open_url = {
+                    let core = Rc::clone(&core);
+                    let id = id.clone();
+                    Box::new(move |url| core.send(CoreMessage::OpenUrl { id: id.clone(), url }))
+                };
+                let input = SignInInput {
+                    password,
+                    open_url,
+                    signal: attempt.signal.clone(),
+                };
+                let answer = factory.connect(input).await;
+                outcome(newest(), answer)
+            } else {
+                Outcome::Superseded(None)
+            };
+            core.end_sign_in(id, &factory.option().id, ended);
+            core.state.borrow_mut().attempts.answered(&option, &attempt);
         });
     }
 
-    fn superseded(&self, id: RequestId) {
-        self.respond(id, Response::SignIn(Answer(Err(SignInError::Superseded))));
+    /// Answers a sign-in attempt from how it ended. Each arm answers once, and none of them
+    /// awaits, so no other sign-in or sign-out can land between the decision and the answer.
+    fn end_sign_in(self: &Rc<Self>, id: RequestId, factory_id: &str, ended: Outcome) {
+        match ended {
+            Outcome::Superseded(unused) => {
+                self.respond(id, Response::SignIn(Answer::from(Err(SignInError::Superseded))));
+                if let Some(connection) = unused {
+                    self.work.spawn_local(async move { connection.adapter.close().await });
+                }
+            }
+            Outcome::Failed(failure) => self.respond(id, Response::SignIn(Answer::from(Err(failure.into())))),
+            Outcome::SignedIn(connection) => self.install(id, factory_id, connection),
+        }
     }
 
-    /// Runs one sign-in attempt to its answer.
-    async fn connect(
-        self: &Rc<Self>,
-        id: RequestId,
-        password: Option<PasswordInput>,
-        factory: Rc<dyn AdapterFactory>,
-        attempt: &Attempt,
-    ) {
-        if attempt.superseded.get() {
-            return self.superseded(id);
-        }
-        let open_url = {
-            let core = Rc::clone(self);
-            let id = id.clone();
-            Box::new(move |url| core.send(CoreMessage::OpenUrl { id: id.clone(), url }))
-        };
-        let input = SignInInput {
-            password,
-            open_url,
-            signal: attempt.signal.clone(),
-        };
-        let result = factory.connect(input).await;
-        if attempt.superseded.get() {
-            if let Ok(connection) = result {
-                connection.adapter.close().await;
-            }
-            return self.superseded(id);
-        }
-        let connection = match result {
-            Ok(connection) => connection,
-            Err(failure) => return self.respond(id, Response::SignIn(Answer(Err(failure.into())))),
-        };
-
-        let factory_id = factory.option().id.clone();
+    /// Links the account a sign-in reached, or relinks it if this address signed in before,
+    /// answers the sign-in and starts its first sync. The adapter it replaces closes after.
+    fn install(self: &Rc<Self>, id: RequestId, factory_id: &str, connection: Connection) {
+        let address = connection.address.to_lowercase();
         let existing = self
             .state
             .borrow()
             .world
             .accounts
             .values()
-            .find(|account| {
-                account.factory_id == factory_id && account.address.to_lowercase() == connection.address.to_lowercase()
-            })
+            .find(|account| account.factory_id == factory_id && account.address.to_lowercase() == address)
             .cloned();
         let account_id = existing
             .as_ref()
             .map_or_else(|| self.store.next_id(), |account| account.id.clone());
-        // From the supersede check above to the answer below there is no await, so no other
-        // sign-in or sign-out can land in between. The adapter this one replaces closes after.
         let capabilities = connection.adapter.capabilities();
-        let replaced = self
-            .state
-            .borrow_mut()
-            .adapters
-            .insert(account_id.clone(), connection.adapter);
+        let replaced = {
+            let mut state = self.state.borrow_mut();
+            state.links += 1;
+            let linked = Linked {
+                adapter: connection.adapter,
+                link: state.links,
+            };
+            state.adapters.insert(account_id.clone(), linked)
+        };
         self.commit(|world, tx, _| {
             put_account(
                 world,
@@ -860,7 +842,7 @@ impl Inner {
                     id: account_id.clone(),
                     address: connection.address,
                     provider_label: connection.provider_label,
-                    factory_id,
+                    factory_id: factory_id.to_owned(),
                     session: connection.session,
                     capabilities,
                     cursor: existing.as_ref().and_then(|account| account.cursor.clone()),
@@ -872,20 +854,31 @@ impl Inner {
         let signed_in = SignedIn {
             account_id: account_id.clone(),
         };
-        self.respond(id, Response::SignIn(Answer(Ok(signed_in))));
+        self.respond(id, Response::SignIn(Answer::from(Ok(signed_in))));
         self.background(&account_id, Rc::clone(self).pass(account_id.clone(), true));
         if let Some(replaced) = replaced {
-            self.work.spawn_local(async move { replaced.close().await });
+            self.work.spawn_local(async move { replaced.adapter.close().await });
         }
     }
 
     /// Signs the account out at once. No await stands between taking the adapter and
-    /// changing the records, so no sign-in can land in between. The adapter closes
-    /// after, which ends a provider call in flight. A pass still running for the
-    /// account sees its adapter is gone and writes nothing more (see `still_current`).
+    /// changing the records, so no sign-in can land in between. The adapter closes after.
+    /// A pass still running for the account sees its adapter is gone and writes nothing
+    /// more (see `still_current`). Deleting the mail settles the account's waiting changes
+    /// as failed, since each accepted change gets exactly one `settled` (guarantee 2).
     fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {
-        let adapter = self.state.borrow_mut().adapters.remove(&account_id);
-        self.commit(|world, tx, _| {
+        let unlinked = self.state.borrow_mut().adapters.remove(&account_id);
+        let waiting: Vec<ChangeId> = if delete_local_mail {
+            let state = self.state.borrow();
+            let changes = state.world.changes.values();
+            changes
+                .filter(|change| change.account_id == account_id && change.outcome.is_none())
+                .map(|change| change.id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let rev = self.commit(|world, tx, _| {
             let Some(account) = world.accounts.get(&account_id).cloned() else {
                 return;
             };
@@ -940,9 +933,13 @@ impl Inner {
             }
             remove_account(world, tx, &account_id);
         });
-        self.respond(id, Response::SignOut(Answer(Ok(Empty {}))));
-        if let Some(adapter) = adapter {
-            self.work.spawn_local(async move { adapter.close().await });
+        let result = ChangeResult::Failed(Refusal::UnknownTarget);
+        for change in waiting {
+            self.send(CoreMessage::Settled { change, rev, result });
+        }
+        self.respond(id, Response::SignOut(Answer::from(Ok(Empty {}))));
+        if let Some(unlinked) = unlinked {
+            self.work.spawn_local(async move { unlinked.adapter.close().await });
         }
     }
 
@@ -974,7 +971,7 @@ impl Inner {
             } else {
                 Ok(Empty {})
             };
-            core.respond(id, Response::SyncNow(Answer(answer)));
+            core.respond(id, Response::SyncNow(Answer::from(answer)));
         });
     }
 
@@ -986,11 +983,16 @@ impl Inner {
                 delete_local_mail,
             } => self.sign_out(id, account_id, delete_local_mail),
             Request::SyncNow { account_id } => self.sync_now(id, account_id),
-            Request::Blob { .. } => self.respond(id, Response::Blob(Answer(Err(BlobError::NotSupported)))),
+            Request::Blob { .. } => self.respond(id, Response::Blob(Answer::from(Err(BlobError::NotSupported)))),
         }
     }
 
     fn receive(self: &Rc<Self>, value: serde_json::Value) {
+        assert!(
+            self.state.try_borrow_mut().is_ok(),
+            "Core::receive was called from inside CoreOptions::send. Queue the message and call \
+             receive after send returns."
+        );
         let message = match serde_json::from_value::<ClientMessage>(value) {
             Ok(message) => message,
             Err(error) => {

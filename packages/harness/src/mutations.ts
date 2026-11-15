@@ -76,8 +76,9 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'offline changes reach the provider newest first',
     file: core('lib.rs'),
-    find: '        for change in waiting {',
-    replace: '        for change in waiting.into_iter().rev() {',
+    find: '        for change in waiting {\n            if !self.still_current(account_id, linked) {',
+    replace:
+      '        for change in waiting.into_iter().rev() {\n            if !self.still_current(account_id, linked) {',
     scenarios: 'replay in order',
   },
   {
@@ -160,9 +161,10 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a superseded sign-in is not told so',
-    file: core('lib.rs'),
-    find: '            prior.superseded.set(true);\n',
-    replace: '',
+    file: core('sign_in.rs'),
+    find: '        (false, answer) => Outcome::Superseded(answer.ok()),',
+    replace:
+      '        (false, Ok(connection)) => Outcome::SignedIn(connection),\n        (false, Err(failure)) => Outcome::Failed(failure),',
     scenarios: 'second sign-in',
   },
   {
@@ -208,9 +210,23 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'saved before it exits',
   },
   {
+    name: 'a push that outlives its sign-out still writes what it learned',
+    file: core('lib.rs'),
+    find: '.is_some_and(|current| current.link == linked.link)',
+    replace: '.is_some_and(|current| current.link == linked.link) || linked.link > 0',
+    scenarios: 'a sign-out that',
+  },
+  {
+    name: 'a sign-out that deletes mail leaves its waiting changes unsettled',
+    file: core('lib.rs'),
+    find: '            self.send(CoreMessage::Settled { change, rev, result });\n',
+    replace: '            drop((change, rev, result));\n',
+    scenarios: 'deletes mail settles',
+  },
+  {
     name: 'closing the core waits forever on a sign-in the user never finishes',
     file: core('lib.rs'),
-    find: '        for attempt in self.inner.state.borrow().sign_ins.values() {\n            attempt.signal.cancel();\n        }\n',
+    find: '        self.inner.state.borrow().attempts.cancel_all();\n',
     replace: '',
     scenarios: 'answered cancelled when the core stops',
   },

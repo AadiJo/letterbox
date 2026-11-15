@@ -5,5 +5,7 @@
   "tabWidth": 2,
   "useTabs": false,
   "printWidth": 120,
-  "trailingComma": "all"
+  "trailingComma": "all",
+  // Written by `cargo xtask protocol-ts`, which checks it byte for byte.
+  "ignorePatterns": ["packages/protocol/src/generated.ts"]
 }

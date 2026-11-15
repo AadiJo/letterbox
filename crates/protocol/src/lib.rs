@@ -1,8 +1,9 @@
 //! The protocol between the core and every UI. Version 0.
 //!
-//! This is the Rust mirror of `packages/protocol/src/protocol.ts`. The wire shapes
-//! are the same JSON. The harness checks every message the Rust core sends against
-//! the TypeScript schemas in `parse.ts`, so the two cannot drift apart unseen.
+//! This file is the only place the protocol is written by hand. `cargo xtask protocol-ts`
+//! writes the TypeScript types from it (packages/protocol/src/generated.ts), and `pnpm
+//! check` fails while that copy is stale. The harness also checks every message the core
+//! sends against a schema that the TypeScript build holds to those generated types.
 //!
 //! Client messages only need to be read here, and core messages only written, so
 //! each type derives just the direction it travels.
@@ -22,27 +23,24 @@
 
 use std::num::NonZeroU64;
 
-use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use ts_rs::TS;
 
 pub const PROTOCOL: u32 = 0;
 
 // ---------------------------------------------------------------- ids
 
-/// Declares opaque string ids. Clients never build or parse one. Provider ids stay inside the core.
+/// Declares opaque string ids. In TypeScript each one is a branded string, so a plain
+/// string cannot be passed where an id belongs.
 macro_rules! ids {
-    ($($(#[$doc:meta])* $name:ident),* $(,)?) => {$(
+    ($($(#[$doc:meta])* $name:ident = $brand:literal),* $(,)?) => {$(
         $(#[$doc])*
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
         #[serde(transparent)]
+        #[ts(type = $brand)]
         pub struct $name(String);
 
         impl $name {
-            /// Wraps a string the core minted or a client sent.
-            pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
-            }
-
             pub fn as_str(&self) -> &str {
                 &self.0
             }
@@ -63,20 +61,46 @@ macro_rules! ids {
 }
 
 ids!(
-    /// Minted by the core.
-    AccountId,
-    MailboxId,
-    ThreadId,
-    MessageId,
-    BlobId,
-    SignInOptionId,
-    /// Minted by the client, one per subscription.
-    SubscriptionId,
-    /// Minted by the client, one per command.
-    ChangeId,
-    /// Minted by the client, one per request.
-    RequestId,
+    AccountId = "Id<'Account'>",
+    MailboxId = "Id<'Mailbox'>",
+    ThreadId = "Id<'Thread'>",
+    MessageId = "Id<'Message'>",
+    BlobId = "Id<'Blob'>",
+    SignInOptionId = "Id<'SignInOption'>",
+    /// One per subscription.
+    SubscriptionId = "Id<'Subscription'>",
+    /// One per command.
+    ChangeId = "Id<'Change'>",
+    /// One per request.
+    RequestId = "Id<'Request'>",
 );
+
+/// Ids only the core makes. A client uses the ids it was sent and never makes one.
+/// clippy.toml bans `minted` outside crates/core, so a UI crate cannot call it.
+macro_rules! minted_by_core {
+    ($($name:ident),* $(,)?) => {$(
+        impl $name {
+            pub fn minted(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+        }
+    )*};
+}
+
+minted_by_core!(AccountId, MailboxId, ThreadId, MessageId, BlobId, SignInOptionId);
+
+/// Ids a client makes, one per subscription, command or request, so it can match the answers.
+macro_rules! minted_by_client {
+    ($($name:ident),* $(,)?) => {$(
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+        }
+    )*};
+}
+
+minted_by_client!(SubscriptionId, ChangeId, RequestId);
 
 /// Store revision. It rises on every change to the store and never repeats.
 pub type Rev = u64;
@@ -91,7 +115,7 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> R
 
 // ---------------------------------------------------------------- model
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     pub id: AccountId,
@@ -103,7 +127,7 @@ pub struct Account {
 }
 
 /// What this account allows. The UI enables and hides controls from these alone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
     /// False while access is read-only. Every command except set-turn is then rejected.
@@ -114,7 +138,7 @@ pub struct Capabilities {
 }
 
 /// Sync state of one account. `last_synced_at` lets the UI say honestly how stale a view is.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "state", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum AccountStatus {
     Syncing {
@@ -135,7 +159,7 @@ pub enum AccountStatus {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum AccountErrorReason {
     Provider,
@@ -143,7 +167,7 @@ pub enum AccountErrorReason {
 }
 
 /// A folder or a label. A message belongs to a set of these.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Mailbox {
     pub id: MailboxId,
@@ -156,7 +180,7 @@ pub struct Mailbox {
     pub total: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
     Inbox,
@@ -167,7 +191,7 @@ pub enum Role {
     Spam,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Person {
     pub name: Option<String>,
@@ -176,7 +200,7 @@ pub struct Person {
 }
 
 /// Who owes the next message in a conversation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum Turn {
     Mine,
@@ -186,7 +210,7 @@ pub enum Turn {
 }
 
 /// Why the core decided that. Shown to the user and saved with every correction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum TurnReason {
     TheyWroteLast,
@@ -197,14 +221,14 @@ pub enum TurnReason {
     SetByUser,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct TurnState {
     pub holder: Turn,
     pub reason: TurnReason,
 }
 
 /// One row in a list. The core builds threads itself, so every provider gets them.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
     pub id: ThreadId,
@@ -223,14 +247,14 @@ pub struct ThreadSummary {
     pub pending: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 pub struct ThreadDetail {
     #[serde(flatten)]
     pub summary: ThreadSummary,
     pub messages: Vec<Message>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub id: MessageId,
@@ -246,7 +270,7 @@ pub struct Message {
 /// Bodies download on demand, so one can be missing while offline.
 /// `html` is hostile input. The UI must render it sandboxed, with scripts and
 /// network off. The core never fetches remote content named in a message.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "state", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Body {
     Ready {
@@ -260,7 +284,7 @@ pub enum Body {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum Unavailable {
     Offline,
@@ -268,7 +292,7 @@ pub enum Unavailable {
     Gone,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
     pub blob_id: BlobId,
@@ -280,31 +304,38 @@ pub struct Attachment {
 
 // ---------------------------------------------------------------- subscribe
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadFilter {
     /// Leave out to list every account together.
     #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
     pub account_id: Option<AccountId>,
     #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
     pub mailbox_id: Option<MailboxId>,
     #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
     pub turn: Option<Turn>,
     #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
     pub unread: Option<bool>,
     /// Full-text search over the local index.
     #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
     pub text: Option<String>,
 }
 
 /// Every live view. Add a variant here and a matching one to `Update`.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "view", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Query {
     Accounts,
     SignInOptions,
     Mailboxes {
         #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        #[ts(optional)]
         account_id: Option<AccountId>,
     },
     Threads {
@@ -319,7 +350,7 @@ pub enum Query {
 }
 
 /// The answer to a query. A threads update replaces the whole window.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "view", rename_all = "kebab-case")]
 pub enum Update {
     Accounts { data: Vec<Account> },
@@ -329,7 +360,7 @@ pub enum Update {
     Thread { data: Option<ThreadDetail> },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 pub struct ThreadPage {
     pub total: u64,
     pub threads: Vec<ThreadSummary>,
@@ -339,7 +370,7 @@ pub struct ThreadPage {
 
 /// A user intent. Every command acts on whole threads.
 /// Only set-turn works with read-only access, because it never leaves the device.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
     /// Correct the rule, or hand the thread back to it with `auto`.
@@ -350,8 +381,12 @@ pub enum Command {
     SetFlags {
         thread_ids: Vec<ThreadId>,
         #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        #[ts(optional)]
         unread: Option<bool>,
         #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        #[ts(optional)]
         flagged: Option<bool>,
     },
     /// Archive is `remove: [inbox]`. A move is one add and one remove.
@@ -373,7 +408,7 @@ pub enum Command {
 }
 
 /// The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum TurnChoice {
     Mine,
@@ -395,7 +430,7 @@ impl TurnChoice {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Draft {
     pub account_id: AccountId,
@@ -413,7 +448,7 @@ pub struct Draft {
 }
 
 /// Why the core or the provider said no.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum Refusal {
     NotPermitted,
@@ -425,7 +460,7 @@ pub enum Refusal {
 }
 
 /// The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChangeResult {
     Done,
@@ -436,14 +471,14 @@ pub enum ChangeResult {
 // ---------------------------------------------------------------- request
 
 /// A way to add an account. The UI lists these and never hard-codes a provider.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 pub struct SignInOption {
     pub id: SignInOptionId,
     pub label: String,
     pub method: SignInMethod,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum SignInMethod {
     Oauth,
@@ -451,13 +486,15 @@ pub enum SignInMethod {
 }
 
 /// Every one-shot call. Add a variant here and a matching one to `Response`.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "method", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Request {
     /// Answers once the account exists. For oauth the core sends `open-url` first.
     SignIn {
         option: SignInOptionId,
         #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        #[ts(optional)]
         password: Option<PasswordInput>,
     },
     SignOut {
@@ -466,22 +503,25 @@ pub enum Request {
     },
     SyncNow {
         #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        #[ts(optional)]
         account_id: Option<AccountId>,
     },
     /// A local URL the core serves for one attachment or inline image.
     Blob { blob_id: BlobId },
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 pub struct PasswordInput {
     pub username: String,
     pub password: String,
     #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
     pub server: Option<String>,
 }
 
 /// The answer to one request, by method.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "method", rename_all = "kebab-case")]
 pub enum Response {
     SignIn(Answer<SignedIn, SignInError>),
@@ -491,41 +531,61 @@ pub enum Response {
 }
 
 /// A result or an error. On the wire: `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Answer<T, E>(pub Result<T, E>);
+/// Build one from a `Result` with `Answer::from`.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(untagged)]
+pub enum Answer<T, E> {
+    Ok { ok: True, result: T },
+    Err { ok: False, error: E },
+}
 
-impl<T: Serialize, E: Serialize> Serialize for Answer<T, E> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut out = serializer.serialize_struct("Answer", 2)?;
-        match &self.0 {
-            Ok(result) => {
-                out.serialize_field("ok", &true)?;
-                out.serialize_field("result", result)?;
-            }
-            Err(error) => {
-                out.serialize_field("ok", &false)?;
-                out.serialize_field("error", error)?;
-            }
+impl<T, E> From<Result<T, E>> for Answer<T, E> {
+    fn from(result: Result<T, E>) -> Self {
+        match result {
+            Ok(result) => Answer::Ok { ok: True, result },
+            Err(error) => Answer::Err { ok: False, error },
         }
-        out.end()
+    }
+}
+
+/// `true` on the wire, and `true` in TypeScript: the `ok` of a success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[ts(type = "true")]
+pub struct True;
+
+impl Serialize for True {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+
+/// `false` on the wire, and `false` in TypeScript: the `ok` of a failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[ts(type = "false")]
+pub struct False;
+
+impl Serialize for False {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(false)
     }
 }
 
 /// A result with no fields: `{}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[ts(type = "Record<string, never>")]
 pub struct Empty {}
 
 /// An error that cannot happen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 pub enum Never {}
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SignedIn {
     pub account_id: AccountId,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum SignInError {
     Cancelled,
@@ -536,20 +596,20 @@ pub enum SignInError {
     Offline,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum SyncNowError {
     Offline,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct BlobUrl {
     pub url: String,
     pub mime: String,
     pub size: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlobError {
     Offline,
@@ -559,7 +619,7 @@ pub enum BlobError {
 
 // ---------------------------------------------------------------- envelope
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ClientMessage {
     /// `protocol` is any number, so a client on another version gets version-mismatch, not malformed.
@@ -583,7 +643,7 @@ pub enum ClientMessage {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum CoreMessage {
     Welcome {
@@ -629,7 +689,7 @@ pub enum CoreMessage {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProtocolErrorReason {
     VersionMismatch,

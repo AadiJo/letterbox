@@ -114,6 +114,12 @@ export interface SimMailbox {
   holdBodies(): void
   /** Answers every waiting body call, from the truth as it is now, and stops holding. */
   releaseBodies(): void
+  /** From now on, apply calls wait and change nothing. Lets a scenario sign out while a push is in flight. */
+  holdApplies(): void
+  /** Resolves once an apply call is waiting, at once if one already is. */
+  applyHeld(): Promise<void>
+  /** Applies and answers every waiting apply call, in the order they came, and stops holding. */
+  releaseApplies(): void
 
   // What a scenario checks.
   truth(): TruthMessage[]

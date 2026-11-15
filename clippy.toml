@@ -4,6 +4,13 @@
 # says so with #[expect(..., reason = "...")].
 
 disallowed-methods = [
+  # Only the core makes these ids. Each place it does carries an #[expect] that names it.
+  { path = "letterbox_protocol::AccountId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::MailboxId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::ThreadId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::MessageId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::BlobId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::SignInOptionId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
   { path = "std::time::SystemTime::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
   { path = "std::time::Instant::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
   { path = "chrono::Utc::now", reason = "time comes in through clock::Environment, so a run can be repeated" },

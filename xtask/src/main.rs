@@ -7,12 +7,13 @@
 //! string. Comments may. With no paths it checks crates/core/src and crates/protocol/src.
 //! The words are in lint/provider-terms.txt. xtask/tests runs it over xtask/fixtures.
 
+mod protocol_ts;
 mod provider_names;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: cargo xtask provider-names [path...]";
+const USAGE: &str = "usage: cargo xtask provider-names [path...]\n       cargo xtask protocol-ts [--check]";
 
 /// What provider-names checks when it is given no paths.
 const CHECKED: [&str; 2] = ["crates/core/src", "crates/protocol/src"];
@@ -23,13 +24,17 @@ const CHECKED: [&str; 2] = ["crates/core/src", "crates/protocol/src"];
 )]
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() != Some("provider-names") {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
-    }
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask sits in the workspace folder");
+    match args.next().as_deref() {
+        Some("provider-names") => {}
+        Some("protocol-ts") => return protocol_ts(workspace, args.next().as_deref() == Some("--check")),
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    }
     let given: Vec<PathBuf> = args.map(PathBuf::from).collect();
     let roots = if given.is_empty() {
         CHECKED.iter().map(|path| workspace.join(path)).collect()
@@ -63,6 +68,34 @@ fn main() -> ExitCode {
         }
     }
     if failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+}
+
+/// Writes the TypeScript copy of the protocol, or with `check`, fails if the written copy differs.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "a command-line tool reports on stdout and stderr"
+)]
+fn protocol_ts(workspace: &Path, check: bool) -> ExitCode {
+    let path = workspace.join(protocol_ts::PATH);
+    let generated = protocol_ts::generate();
+    if !check {
+        return match std::fs::write(&path, generated) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{}: {error}", protocol_ts::PATH);
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if std::fs::read_to_string(&path).is_ok_and(|written| written == generated) {
+        return ExitCode::SUCCESS;
+    }
+    eprintln!(
+        "{} is out of date with crates/protocol. Run `cargo xtask protocol-ts` and commit the result. \
+         Edit the Rust types, never the generated file.",
+        protocol_ts::PATH
+    );
+    ExitCode::FAILURE
 }
 
 /// `path` if it is a file, else every .rs file under it, sorted.

@@ -20,6 +20,9 @@ use tokio::task::LocalSet;
 
 const USAGE: &str = "usage: core-sim --data <folder> --sim <socket> [--now <time>]";
 
+/// Written to stderr once stdin closes, before the core finishes its work and exits.
+const INPUT_CLOSED: &str = "core-sim: input closed, finishing the work in flight";
+
 struct Args {
     data: PathBuf,
     sim: PathBuf,
@@ -100,7 +103,9 @@ fn main() -> ExitCode {
             // is read, so work runs in the order the client asked for it.
             tokio::task::yield_now().await;
         }
-        // Stdin closed. Finish the work in flight, then stop.
+        // Stdin closed. Finish the work in flight, then stop. The harness waits for this line
+        // to know the core has read the end of its input (see packages/harness/src/client.ts).
+        eprintln!("{INPUT_CLOSED}");
         core.close().await;
         ExitCode::SUCCESS
     })

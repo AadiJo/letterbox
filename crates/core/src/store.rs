@@ -14,9 +14,8 @@ use serde::de::DeserializeOwned;
 
 const TABLES: [&str; 5] = ["accounts", "mailboxes", "messages", "threads", "changes"];
 
-/// The core has no answer yet for a failed write (AccountStatus has an `error`
-/// state with reason `storage` for that). Until it does, a failed write panics,
-/// which ends the program (see the crate docs in lib.rs).
+/// The panic message when SQLite refuses a write. The panic ends the program, so what
+/// is on disk stays a state the core was really in (see the crate docs in lib.rs).
 const WRITE_FAILED: &str = "the store could not write";
 
 /// A kind of record the store keeps, one table per kind.
@@ -37,8 +36,9 @@ macro_rules! minted {
     ($($name:ident => $prefix:literal),* $(,)?) => {$(
         impl MintedId for $name {
             const PREFIX: &'static str = $prefix;
+            #[expect(clippy::disallowed_methods, reason = "the store mints every record id")]
             fn minted(value: String) -> Self {
-                $name::new(value)
+                $name::minted(value)
             }
         }
     )*};

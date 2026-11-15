@@ -1,0 +1,22 @@
+#!/bin/sh
+# Pre-push hook. `pnpm install` wires it through the `prepare` script in package.json.
+#
+# Refuses to push a branch whose name has a prefix, such as `agent/name` or `fix/name`.
+# Branch names on the remote are never prefixed. Deleting such a branch is still allowed.
+
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  case "$remote_ref" in
+    refs/heads/*/*)
+      name=${remote_ref#refs/heads/}
+      cat >&2 <<MESSAGE
+pre-push: "$name" has a prefix, and branch names here never do. Nothing was pushed.
+Rename the branch without it, for example: git branch -m ${name##*/}
+Do not pass --no-verify, and do not delete or change this hook.
+MESSAGE
+      exit 1
+      ;;
+  esac
+done
+exit 0

@@ -28,6 +28,8 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.53", features = ["rt", "sync"] }
+# The `#[ts(...)]` attributes in crates/protocol say what ts-rs cannot read from serde, so its warnings add nothing.
+ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 
 # A panic in the core is a bug that can leave its memory out of step with the store,

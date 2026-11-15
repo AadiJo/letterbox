@@ -14,10 +14,6 @@
   "rules": {
     "eslint/eqeqeq": "error",
     "typescript/no-explicit-any": "error",
-    // Off on purpose. Scenarios and the self-checks act one step at a time, waiting for each
-    // answer before the next step, so their transcripts are the same on every run. Awaiting in
-    // a loop is how that is written. This rule's advice, Promise.all, would break it.
-    "eslint/no-await-in-loop": "off",
     "letterbox/require-suppression-reason": "error",
     "letterbox/no-cross-package-relative-import": "error"
   },
@@ -27,6 +23,12 @@
   // Rules that hold for some folders only. Each one also lists its own fixture folder, so
   // `pnpm lint:selftest` checks the rule through this file, the way real code meets it.
   "overrides": [
+    {
+      // Scenarios and the sim self-check act one step at a time, each waiting for the answer
+      // before the next, so a run is the same every time. Awaiting in a loop is how that is written.
+      "files": ["packages/harness/**", "packages/sim-provider/src/selfcheck.ts"],
+      "rules": { "eslint/no-await-in-loop": "off" }
+    },
     {
       "files": ["packages/protocol/src/**", "lint/fixtures/no-provider-names/**"],
       "rules": { "letterbox/no-provider-names": "error" }
@@ -38,6 +40,10 @@
     {
       "files": ["packages/harness/scenarios/**", "lint/fixtures/scenario-threads-through-fixtures/**"],
       "rules": { "letterbox/scenario-threads-through-fixtures": "error" }
+    },
+    {
+      "files": ["packages/harness/scenarios/**", "lint/fixtures/scenario-waits-on-events/**"],
+      "rules": { "letterbox/scenario-waits-on-events": "error" }
     }
   ]
 }

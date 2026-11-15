@@ -7,6 +7,8 @@ name: check
 on:
   push:
   pull_request:
+    # `edited` reruns the title check below when only the title changes.
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
@@ -29,6 +31,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: pnpm install --frozen-lockfile
+
+      # A squash merge makes the PR title the commit on main, so it follows the commit rules.
+      # The title goes through an environment variable, never straight into the script.
+      - if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: node lint/commit-title.ts --title "$TITLE"
 
       - run: pnpm check
 

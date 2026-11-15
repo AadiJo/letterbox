@@ -4,9 +4,11 @@
 import { PROTOCOL } from '@letterbox/protocol'
 import {
   ME,
+  PASSWORD,
   bodiesSettled,
   openThread,
   readThread,
+  signIn,
   standardSeed,
   start,
   sync,
@@ -107,6 +109,49 @@ scenario('a sign-out is answered while a provider call is still in flight', asyn
   box.releaseBodies()
   const account = (await core.query({ view: 'accounts' }))[0]
   t.equal(account?.status.state, 'needs-sign-in', 'the account waits for a new sign-in')
+})
+
+scenario(
+  'a sign-out that deletes mail settles waiting changes, and a push in flight cannot bring them back',
+  async (t) => {
+    const { core, box, accountId } = await start(t)
+    const target = await thread(core, 'Can you review the draft?')
+    box.holdApplies()
+    const answer = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+    await box.applyHeld()
+    const signedOut = await core.request({ method: 'sign-out', accountId, deleteLocalMail: true })
+    t.check(signedOut.ok, 'the sign-out is answered while the push waits at the provider')
+    t.equal(
+      (await core.settled(answer.change)).result,
+      { failed: 'unknown-target' },
+      'the waiting change settles as failed',
+    )
+    box.releaseApplies()
+    // Stopping waits for the push to finish, so whatever it wrote is in the store the next core reads.
+    await core.stop()
+    const again = t.startCore()
+    await again.hello()
+    t.equal(await again.query({ view: 'accounts' }), [], 'no account came back')
+    t.equal(await threads(again), [], 'no mail came back')
+  },
+)
+
+scenario('a sign-out that keeps mail stays signed out while a push in flight finishes', async (t) => {
+  const { core, box, accountId } = await start(t)
+  const target = await thread(core, 'Can you review the draft?')
+  box.holdApplies()
+  const answer = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  await box.applyHeld()
+  await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })
+  box.releaseApplies()
+  await core.stop()
+  const again = t.startCore()
+  await again.hello()
+  const account = (await again.query({ view: 'accounts' }))[0]
+  t.equal(account?.status.state, 'needs-sign-in', 'the account still waits for a sign-in')
+  t.check((await thread(again, 'Can you review the draft?')).pending, 'the change still waits to reach the provider')
+  await signIn(t, again, ME, PASSWORD)
+  t.equal((await again.settled(answer.change)).result, 'done', 'it settles once the account is signed in again')
 })
 
 scenario('a body loads when a conversation is opened, once', async (t) => {

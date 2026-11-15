@@ -120,16 +120,49 @@ pub fn targets(world: &World, thread_ids: &[ThreadId]) -> Result<Targets, Refusa
     })
 }
 
-/// Turns a command into an Op, or says why it cannot be done on this account.
-/// The core answers set-turn itself and never passes it here.
-pub fn resolve(world: &World, command: &Command) -> Result<(AccountId, Op), Refusal> {
-    let thread_ids = match command {
-        Command::Send { .. } | Command::Undo { .. } => return Err(Refusal::NotSupported),
-        Command::SetTurn { .. } => unreachable!("the core answers set-turn without resolving it"),
-        Command::SetFlags { thread_ids, .. }
-        | Command::SetMailboxes { thread_ids, .. }
-        | Command::Trash { thread_ids } => thread_ids,
-    };
+/// What a command that reaches the provider asks for, apart from the threads it names.
+/// Commands the core answers on its own (set-turn) or does not support have no Edit.
+pub enum Edit<'a> {
+    Flags {
+        unread: Option<bool>,
+        flagged: Option<bool>,
+    },
+    Mailboxes {
+        add: &'a [MailboxId],
+        remove: &'a [MailboxId],
+    },
+    Trash,
+}
+
+impl<'a> Edit<'a> {
+    /// The threads a command names and the Edit it asks for, or None for a command that
+    /// never reaches the provider.
+    pub fn of(command: &'a Command) -> Option<(&'a [ThreadId], Edit<'a>)> {
+        match command {
+            Command::SetFlags {
+                thread_ids,
+                unread,
+                flagged,
+            } => Some((
+                thread_ids,
+                Edit::Flags {
+                    unread: *unread,
+                    flagged: *flagged,
+                },
+            )),
+            Command::SetMailboxes {
+                thread_ids,
+                add,
+                remove,
+            } => Some((thread_ids, Edit::Mailboxes { add, remove })),
+            Command::Trash { thread_ids } => Some((thread_ids, Edit::Trash)),
+            Command::SetTurn { .. } | Command::Send { .. } | Command::Undo { .. } => None,
+        }
+    }
+}
+
+/// Turns an Edit of some threads into an Op, or says why it cannot be done on this account.
+pub fn resolve(world: &World, thread_ids: &[ThreadId], edit: Edit<'_>) -> Result<(AccountId, Op), Refusal> {
     let target = targets(world, thread_ids)?;
     let account = world.accounts.get(&target.account_id).ok_or(Refusal::UnknownTarget)?;
     if !account.capabilities.modify {
@@ -168,8 +201,8 @@ pub fn resolve(world: &World, command: &Command) -> Result<(AccountId, Op), Refu
         ))
     };
 
-    match command {
-        Command::SetFlags { unread, flagged, .. } => {
+    match edit {
+        Edit::Flags { unread, flagged } => {
             if unread.is_none() && flagged.is_none() {
                 return Err(Refusal::Invalid);
             }
@@ -177,12 +210,12 @@ pub fn resolve(world: &World, command: &Command) -> Result<(AccountId, Op), Refu
                 account.id.clone(),
                 Op::Flags {
                     message_ids: message_ids.clone(),
-                    unread: *unread,
-                    flagged: *flagged,
+                    unread,
+                    flagged,
                 },
             ))
         }
-        Command::Trash { .. } => {
+        Edit::Trash => {
             let trash = with_role(Role::Trash).ok_or(Refusal::NotSupported)?;
             let others = own
                 .iter()
@@ -191,7 +224,7 @@ pub fn resolve(world: &World, command: &Command) -> Result<(AccountId, Op), Refu
                 .collect();
             mailboxes(vec![trash], others)
         }
-        Command::SetMailboxes { add, remove, .. } => {
+        Edit::Mailboxes { add, remove } => {
             let mut named = add.iter().chain(remove);
             if add.is_empty() && remove.is_empty() {
                 return Err(Refusal::Invalid);
@@ -200,19 +233,16 @@ pub fn resolve(world: &World, command: &Command) -> Result<(AccountId, Op), Refu
                 return Err(Refusal::UnknownTarget);
             }
             if mode == MailboxMode::Sets {
-                return mailboxes(add.clone(), remove.clone());
+                return mailboxes(add.to_vec(), remove.to_vec());
             }
             // Plain folders: a message is in one place, so every change is a move out of `remove`.
             if add.len() > 1 || remove.is_empty() {
                 return Err(Refusal::NotSupported);
             }
             match add.first().cloned().or_else(|| with_role(Role::Archive)) {
-                Some(destination) => mailboxes(vec![destination], remove.clone()),
+                Some(destination) => mailboxes(vec![destination], remove.to_vec()),
                 None => Err(Refusal::NotSupported),
             }
-        }
-        Command::Send { .. } | Command::Undo { .. } | Command::SetTurn { .. } => {
-            unreachable!("answered before the account was looked up")
         }
     }
 }

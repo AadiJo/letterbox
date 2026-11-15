@@ -187,9 +187,10 @@ pub struct World {
     pub messages_by_reference: HashMap<String, IndexSet<MessageId>>,
 }
 
-/// The id of one attachment: its message and its place in the message. The only place blob ids are made.
+/// The id of one attachment: its message and its place in the message.
+#[expect(clippy::disallowed_methods, reason = "the one place blob ids are made")]
 pub fn blob_id_of(message_id: &MessageId, index: usize) -> BlobId {
-    BlobId::new(format!("blob_{message_id}_{}", index + 1))
+    BlobId::minted(format!("blob_{message_id}_{}", index + 1))
 }
 
 /// A lookup key that is unique across accounts.

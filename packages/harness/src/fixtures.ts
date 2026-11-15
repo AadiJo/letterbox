@@ -2,6 +2,7 @@
 
 import type { Dialect, SimMailbox, Seed, SeedMessage } from '@letterbox/sim-provider/contract'
 import type {
+  Account,
   AccountId,
   Mailbox,
   Message,
@@ -158,6 +159,19 @@ export async function start(t: Scenario, seed: Seed = standardSeed(t.dialect)): 
 export async function sync(core: CoreClient) {
   const response = await core.request({ method: 'sync-now' })
   if (!response.ok) throw new Error(`sync failed: ${response.error}`)
+}
+
+/** Waits until the accounts view passes `ready`, and returns it. Scenarios wait on what the core reports, never on time. */
+export async function untilAccounts(core: CoreClient, ready: (accounts: Account[]) => boolean): Promise<Account[]> {
+  const view = core.subscribe({ view: 'accounts' })
+  for (;;) {
+    const accounts = view.latest()
+    if (accounts && ready(accounts)) {
+      view.close()
+      return accounts
+    }
+    await view.next()
+  }
 }
 
 /** Every thread that passes `filter`, newest first. */

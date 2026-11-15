@@ -63,6 +63,10 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let refusal: Refusal | null = null
   // Body calls waiting for `releaseBodies`. Null while bodies are not held.
   let heldBodies: (() => void)[] | null = null
+  // Apply calls waiting for `releaseApplies`. Null while applies are not held.
+  let heldApplies: (() => void)[] | null = null
+  // Callers of `applyHeld` waiting for the next apply call to be held.
+  const onApplyHeld: (() => void)[] = []
 
   if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`sim provider: pageSize ${pageSize} is not usable`)
 
@@ -179,6 +183,19 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       heldBodies = null
       for (const answerNow of waiting) answerNow()
     },
+    holdApplies: () => {
+      heldApplies ??= []
+    },
+    applyHeld: () =>
+      new Promise<void>((resolve) => {
+        if (heldApplies !== null && heldApplies.length > 0) resolve()
+        else onApplyHeld.push(resolve)
+      }),
+    releaseApplies: () => {
+      const waiting = heldApplies ?? []
+      heldApplies = null
+      for (const answerNow of waiting) answerNow()
+    },
     truth: () =>
       [...store.messages.values()].map((message) => ({
         key: message.key,
@@ -282,7 +299,10 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     isOffline: () => offline,
     respond: (call, reply) => {
       if (call.method === 'body' && heldBodies !== null && !offline) heldBodies.push(() => reply(answer(call)))
-      else reply(answer(call))
+      else if (call.method === 'apply' && heldApplies !== null && !offline) {
+        heldApplies.push(() => reply(answer(call)))
+        for (const notify of onApplyHeld.splice(0)) notify()
+      } else reply(answer(call))
     },
   }
 }

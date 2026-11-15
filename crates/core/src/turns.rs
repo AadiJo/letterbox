@@ -1,9 +1,6 @@
 //! Whose turn is it in a conversation? This is the rule the product is built on.
 //! It reads only facts every provider can supply, so it gives the same answer
 //! for the same mail wherever that mail lives.
-//!
-//! The rule here is one candidate. It still has to be measured against real
-//! mail before anything is built on top of it.
 
 use std::sync::LazyLock;
 

@@ -69,6 +69,8 @@
 //   C06 provider close leaves the socket file or keeps accepting connections
 //   H01 a held body call is answered before release, or from the truth at the time it was asked
 //   H02 handedOut misses a ref, cursor, page token or session, or lists a fact a UI may show
+//   H03 a held apply call is answered or changes the mailbox before release, or applyHeld
+//       resolves before an apply call is held
 
 import assert from 'node:assert/strict'
 import { existsSync, rmSync } from 'node:fs'
@@ -1145,6 +1147,29 @@ await both('H01 a held body call waits, then answers from the truth at release',
   assert.equal(first.body.text, 'Text of a')
   assert.deepEqual(await gone, { ok: true, kind: 'gone' }, 'a message expunged during the hold is not gone')
   assert.equal(box.calls().body, 2)
+})
+
+await both('H03 a held apply call waits and changes nothing, then applies at release', async (dialect) => {
+  const { adapter, box } = await open(dialect, [mail('a')])
+  const { messages } = await snapshotFrom(adapter, null)
+  box.holdApplies()
+  let held = false
+  const heldNow = box.applyHeld().then(() => (held = true))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(held, false, 'applyHeld resolved before any apply call was held')
+  let answered = false
+  const outcome = adapter
+    .apply({ kind: 'flags', refs: [find(messages, 'a').ref], unread: false })
+    .then((result) => ((answered = true), result))
+  await heldNow
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(answered, false, 'a held apply call was answered before release')
+  assert.equal(box.truth()[0]?.unread, true, 'a held apply call changed the mailbox before release')
+  box.releaseApplies()
+  const released = await outcome
+  assert(released.ok && released.kind === 'applied', 'the released apply call did not apply')
+  assert.equal(box.truth()[0]?.unread, false, 'the released apply call did not change the mailbox')
+  assert.equal(box.calls().apply, 1)
 })
 
 await both('H02 handedOut lists every opaque string the core got, and no facts', async (dialect) => {
