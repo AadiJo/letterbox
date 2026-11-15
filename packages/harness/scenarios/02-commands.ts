@@ -2,7 +2,19 @@
 // wrongly while it is on its way to the provider. Each scenario is one of them.
 
 import type { BlobId, ChangeId, ThreadFilter, ThreadSummary } from '@letterbox/protocol'
-import { mailbox, standardSeed, start, sync, thread, threads, truthOf, untilAccounts } from '../src/fixtures.ts'
+import {
+  ME,
+  PASSWORD,
+  mailbox,
+  signIn,
+  standardSeed,
+  start,
+  sync,
+  thread,
+  threads,
+  truthOf,
+  untilAccounts,
+} from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 
 const SUBJECT = 'Can you review the draft?'
@@ -279,6 +291,28 @@ scenario('commands with nothing to act on, or not built yet, are rejected', asyn
   t.equal(undo.kind === 'rejected' && undo.reason, 'not-supported', 'undo is not built yet and says so')
   const blob = await core.request({ method: 'blob', blobId: 'blob_message_1_1' as BlobId })
   t.equal(blob.ok === false && blob.error, 'not-supported', 'attachment bytes are not built yet and say so')
+})
+
+scenario('a command after a restart is not mistaken for one made before it', async (t) => {
+  const first = await start(t)
+  const target = await thread(first.core, SUBJECT)
+  const before = await first.core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  t.equal((await first.core.settled(before.change)).result, 'done', 'the first change settles')
+  await first.core.stop()
+
+  // The second core takes the same steps as the first, so ids that restart with each core would repeat.
+  const core = t.startCore()
+  await core.hello()
+  await signIn(t, core, ME, PASSWORD)
+  await sync(core)
+  const again = await core.command({
+    kind: 'set-flags',
+    threadIds: [(await thread(core, SUBJECT)).id],
+    flagged: true,
+  })
+  t.check(again.change !== before.change, 'the new command has a change id of its own')
+  t.equal((await core.settled(again.change)).result, 'done', 'it settles')
+  t.equal(truthOf(first.box, 'review')?.flagged, true, 'the provider holds the new change')
 })
 
 scenario('a pending change survives a restart', async (t) => {

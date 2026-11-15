@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { type Client, createClient } from '@letterbox/client'
+import { createClient, type KeepingClient } from '@letterbox/client'
 import type { CoreMessage, ThreadId } from '@letterbox/protocol'
 import type { Seed, SeedMailbox, SeedMessage, SimMailbox } from '@letterbox/sim-provider/contract'
 import { startSimProvider } from '@letterbox/sim-provider/server'
@@ -115,14 +115,18 @@ function benchSeed(size: number): { seed: Seed; conversations: number } {
 function startCore(data: string, socket: string) {
   const [program = '', ...args] = command
   const child = spawn(program, [...args, '--data', data, '--sim', socket], { stdio: ['pipe', 'pipe', 'inherit'] })
-  const client = createClient({
-    send: (message) => void child.stdin.write(`${JSON.stringify(message)}\n`),
-    listen: (listener) => {
-      // The core under test sends protocol messages. The scenarios check their shapes.
-      createInterface({ input: child.stdout }).on('line', (line) => listener.receive(JSON.parse(line) as CoreMessage))
-      child.on('exit', (code) => listener.end(new Error(`the core exited with code ${code}`)))
+  let counter = 0
+  const client = createClient(
+    {
+      send: (message) => void child.stdin.write(`${JSON.stringify(message)}\n`),
+      listen: (listener) => {
+        // The core under test sends protocol messages. The scenarios check their shapes.
+        createInterface({ input: child.stdout }).on('line', (line) => listener.receive(JSON.parse(line) as CoreMessage))
+        child.on('exit', (code) => listener.end(new Error(`the core exited with code ${code}`)))
+      },
     },
-  })
+    { newId: (kind) => `${kind}_${++counter}`, unclaimed: 'keep' },
+  )
   const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()))
   return {
     ...client,
@@ -139,7 +143,7 @@ function startCore(data: string, socket: string) {
 }
 
 /** Sends a command and waits for it to settle. */
-async function settle(core: Client, threadId: ThreadId, flags: { unread?: boolean; flagged?: boolean }) {
+async function settle(core: KeepingClient, threadId: ThreadId, flags: { unread?: boolean; flagged?: boolean }) {
   const answer = await core.command({ kind: 'set-flags', threadIds: [threadId], ...flags })
   if (answer.kind === 'rejected') throw new Error(`the core rejected a command: ${answer.reason}`)
   await core.settled(answer.change)

@@ -8,6 +8,9 @@
 //
 // No wait here has a time limit. A UI waits as long as the core takes, for example for a
 // change made offline to settle. The harness adds its own limit around each wait.
+//
+// Every wait is registered before its message is sent, so a transport that answers
+// synchronously, inside `send`, cannot answer before anyone listens.
 
 import type {
   ChangeId,
@@ -50,6 +53,21 @@ export type Listener = {
   end(error: Error): void
 }
 
+export type Options = {
+  /**
+   * Makes the id for a subscription, a request or a change. Change ids must differ across
+   * app restarts too: the core keeps every change, and treats a repeated change id as the
+   * same change (protocol guarantee 4). Use `crypto.randomUUID` or similar in an app.
+   */
+  newId(kind: 'sub' | 'req' | 'change'): string
+  /**
+   * What happens to a core message no wait takes, such as a `settled` nobody awaits or an
+   * `open-url`. A function receives it and nothing is held, as an app needs. 'keep' holds
+   * it for a later `take` or `settled`, as a test needs.
+   */
+  unclaimed: 'keep' | ((message: CoreMessage) => void)
+}
+
 export type Subscription<V extends View> = {
   /** The newest data, or undefined before the first update. */
   latest(): Queries[V]['result'] | undefined
@@ -57,11 +75,13 @@ export type Subscription<V extends View> = {
   rev(): Rev
   /** How many updates have arrived. */
   count(): number
-  /** Resolves with the next update that arrives after this call. */
+  /** Resolves with the next update that arrives after this call. Rejects once the subscription is closed or the core is gone. */
   next(): Promise<Queries[V]['result']>
+  /** Stops the view. Waiting `next` calls reject. */
   close(): void
 }
 
+/** The client an app uses. Messages no wait takes go to the `unclaimed` function. */
 export type Client = {
   /** Says hello with this client's protocol version and resolves with the welcome. */
   hello(): Promise<Of<'welcome'>>
@@ -69,13 +89,20 @@ export type Client = {
   subscribe<V extends View>(query: QueryFor<V>): Subscription<V>
   /** Asks once: subscribes, takes the first update and unsubscribes. */
   query<V extends View>(query: QueryFor<V>): Promise<Queries[V]['result']>
-  /** Sends a command and resolves with the core's first answer to it. Without `change`, the client names the change. */
+  /** Sends a command and resolves with the core's first answer to it. Without `change`, `newId` names the change. */
   command(command: Command, change?: ChangeId): Promise<Of<'accepted'> | Of<'rejected'>>
-  /** Resolves with the `settled` for a change, whenever the provider has it. */
-  settled(change: ChangeId): Promise<Of<'settled'>>
   request<M extends Method>(request: RequestFor<M>): Promise<ResponseFor<M>>
   /** Starts a request without waiting, for a caller that needs its id or two requests in flight. */
   begin<M extends Method>(request: RequestFor<M>): { id: RequestId; done: Promise<ResponseFor<M>> }
+}
+
+/**
+ * The client a test uses. It holds every message no wait has taken, so a wait made after
+ * its message arrived still finds it. An app has no such waits, so it holds nothing.
+ */
+export type KeepingClient = Client & {
+  /** Resolves with the `settled` for a change, whether it arrived already or arrives later. */
+  settled(change: ChangeId): Promise<Of<'settled'>>
   /** Resolves with the next message of this kind that no other wait has taken. */
   take<Kind extends CoreMessage['kind']>(kind: Kind): Promise<Of<Kind>>
 }
@@ -87,18 +114,21 @@ type Waiter = {
 }
 
 type Open = {
-  updates: Of<'update'>[]
-  waiting: { notify: () => void; reject: (error: Error) => void }[]
+  latest: Of<'update'> | undefined
+  count: number
+  closed: boolean
+  waiting: { resolve: (update: Of<'update'>) => void; reject: (error: Error) => void }[]
 }
 
 /** Builds a client over `transport`. */
-export function createClient(transport: Transport): Client {
-  /** Messages no wait has taken yet. The next wait that matches one takes it. */
+export function createClient(transport: Transport, options: Options & { unclaimed: 'keep' }): KeepingClient
+export function createClient(transport: Transport, options: Options): Client
+export function createClient(transport: Transport, options: Options): KeepingClient {
+  /** Held messages no wait has taken yet, with `unclaimed: 'keep'`. */
   const unclaimed: CoreMessage[] = []
   const waiters: Waiter[] = []
   const subscriptions = new Map<SubscriptionId, Open>()
   let ended: Error | null = null
-  let counter = 0
 
   transport.listen({
     receive: (message) => {
@@ -107,13 +137,15 @@ export function createClient(transport: Transport): Client {
         // before it read the unsubscribe. Both orders are valid, so it is dropped.
         const open = subscriptions.get(message.sub)
         if (!open) return false
-        open.updates.push(message)
-        for (const waiting of open.waiting.splice(0)) waiting.notify()
+        open.latest = message
+        open.count += 1
+        for (const waiting of open.waiting.splice(0)) waiting.resolve(message)
         return true
       }
       const index = waiters.findIndex((waiter) => waiter.matches(message))
-      if (index === -1) unclaimed.push(message)
-      else waiters.splice(index, 1)[0]?.resolve(message)
+      if (index !== -1) waiters.splice(index, 1)[0]?.resolve(message)
+      else if (options.unclaimed === 'keep') unclaimed.push(message)
+      else options.unclaimed(message)
       return true
     },
     end: (error) => {
@@ -123,7 +155,7 @@ export function createClient(transport: Transport): Client {
     },
   })
 
-  /** Waits for a message that passes `matches`, taking an unclaimed one first. */
+  /** Waits for a message that passes `matches`, taking a held one first. Register it before sending. */
   const waitFor = <Message extends CoreMessage>(matches: (message: CoreMessage) => message is Message) =>
     new Promise<Message>((resolve, reject) => {
       const index = unclaimed.findIndex(matches)
@@ -139,53 +171,49 @@ export function createClient(transport: Transport): Client {
       })
     })
 
-  const take: Client['take'] = (kind) => waitFor((message): message is Of<typeof kind> => message.kind === kind)
+  const take: KeepingClient['take'] = (kind) => waitFor((message): message is Of<typeof kind> => message.kind === kind)
 
   const subscribe = <V extends View>(query: QueryFor<V>): Subscription<V> => {
-    const sub = `sub_${++counter}` as SubscriptionId
-    const open: Open = { updates: [], waiting: [] }
+    const sub = options.newId('sub') as SubscriptionId
+    const open: Open = { latest: undefined, count: 0, closed: false, waiting: [] }
     subscriptions.set(sub, open)
     transport.send({ kind: 'subscribe', sub, query })
     // Updates on this subscription carry the data for the view it asked for.
     const dataOf = (update: Of<'update'>) => update.data as Queries[V]['result']
     return {
-      latest: () => {
-        const last = open.updates.at(-1)
-        return last ? dataOf(last) : undefined
-      },
-      rev: () => open.updates.at(-1)?.rev ?? -1,
-      count: () => open.updates.length,
+      latest: () => (open.latest ? dataOf(open.latest) : undefined),
+      rev: () => open.latest?.rev ?? -1,
+      count: () => open.count,
       next: () =>
         new Promise((resolve, reject) => {
           if (ended) return reject(ended)
-          const before = open.updates.length
-          open.waiting.push({
-            notify: () => {
-              const update = open.updates[before]
-              if (update) resolve(dataOf(update))
-            },
-            reject,
-          })
+          if (open.closed) return reject(new Error(`the subscription to ${query.view} is closed`))
+          open.waiting.push({ resolve: (update) => resolve(dataOf(update)), reject })
         }),
       close: () => {
+        if (open.closed) return
+        open.closed = true
         subscriptions.delete(sub)
+        const error = new Error(`the subscription to ${query.view} was closed`)
+        for (const waiting of open.waiting.splice(0)) waiting.reject(error)
         transport.send({ kind: 'unsubscribe', sub })
       },
     }
   }
 
   const begin: Client['begin'] = (request) => {
-    const id = `req_${++counter}` as RequestId
-    transport.send({ kind: 'request', id, request })
+    const id = options.newId('req') as RequestId
     const done = waitFor((message): message is Of<'response'> => message.kind === 'response' && message.id === id)
+    transport.send({ kind: 'request', id, request })
     // The core answers a request with the response for the same method.
     return { id, done: done as Promise<Of<'response'> & ResponseFor<typeof request.method>> }
   }
 
   return {
     hello: () => {
+      const welcome = take('welcome')
       transport.send({ kind: 'hello', protocol: PROTOCOL })
-      return take('welcome')
+      return welcome
     },
     subscribe,
     query: async (query) => {
@@ -194,12 +222,13 @@ export function createClient(transport: Transport): Client {
       subscription.close()
       return data
     },
-    command: (command, change = `change_${++counter}` as ChangeId) => {
-      transport.send({ kind: 'command', change, command })
-      return waitFor(
+    command: (command, change = options.newId('change') as ChangeId) => {
+      const answer = waitFor(
         (message): message is Of<'accepted'> | Of<'rejected'> =>
           (message.kind === 'accepted' || message.kind === 'rejected') && message.change === change,
       )
+      transport.send({ kind: 'command', change, command })
+      return answer
     },
     settled: (change) =>
       waitFor((message): message is Of<'settled'> => message.kind === 'settled' && message.change === change),

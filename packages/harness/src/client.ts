@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { type Client, createClient, type Listener, type Subscription } from '@letterbox/client'
+import { createClient, type KeepingClient, type Listener, type Options, type Subscription } from '@letterbox/client'
 import type { CoreMessage } from '@letterbox/protocol'
 import { coreMessageProblem } from '@letterbox/protocol/parse'
 
@@ -22,7 +22,7 @@ export type TranscriptEntry =
   | { from: 'scenario'; note: string }
 
 /** The shared client, where every wait fails after WAIT_MS, plus what only a test does to a core. */
-export type CoreClient = Client & {
+export type CoreClient = KeepingClient & {
   /** Resolves once the core has read the end of its input, after `stop` closes it. */
   inputClosed(): Promise<void>
   /** Sends anything at all, for scenarios about bad input. */
@@ -71,7 +71,12 @@ const within = <T>(what: string, promise: Promise<T>): Promise<T> =>
   })
 
 /** Starts a core process over `dataDir` that reaches the sim provider at `socketPath`. */
-export function startCore(dataDir: string, socketPath: string, record: (entry: TranscriptEntry) => void): CoreClient {
+export function startCore(
+  dataDir: string,
+  socketPath: string,
+  record: (entry: TranscriptEntry) => void,
+  newId: Options['newId'],
+): CoreClient {
   const child = spawn(CORE_PROGRAM, ['--data', dataDir, '--sim', socketPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -87,7 +92,11 @@ export function startCore(dataDir: string, socketPath: string, record: (entry: T
     child.stdin.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
   }
   let listener: Listener | undefined
-  const client = createClient({ send: sendRaw, listen: (given) => void (listener = given) })
+  // Held messages serve `take` and `settled`.
+  const client = createClient(
+    { send: sendRaw, listen: (given) => void (listener = given) },
+    { newId, unclaimed: 'keep' },
+  )
   const violations: string[] = []
 
   /** Handles one line from the core: checks it against the protocol, hands it to the client, and records it. */
