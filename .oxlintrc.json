@@ -14,10 +14,6 @@
   "rules": {
     "eslint/eqeqeq": "error",
     "typescript/no-explicit-any": "error",
-    // Off on purpose. The core pushes changes one at a time so they reach the provider in the
-    // order the user made them, and it reads pages in order. Awaiting in a loop is how that is
-    // written. This rule's advice, Promise.all, would break both.
-    "eslint/no-await-in-loop": "off",
     "letterbox/require-suppression-reason": "error",
     "letterbox/no-cross-package-relative-import": "error"
   },
@@ -28,11 +24,17 @@
   // `pnpm lint:selftest` checks the rule through this file, the way real code meets it.
   "overrides": [
     {
-      "files": ["packages/core/src/**", "packages/protocol/src/**", "lint/fixtures/no-provider-names/**"],
+      // Scenarios and the sim self-check act one step at a time, each waiting for the answer
+      // before the next, so a run is the same every time. Awaiting in a loop is how that is written.
+      "files": ["packages/harness/**", "packages/sim-provider/src/selfcheck.ts"],
+      "rules": { "eslint/no-await-in-loop": "off" }
+    },
+    {
+      "files": ["packages/protocol/src/**", "lint/fixtures/no-provider-names/**"],
       "rules": { "letterbox/no-provider-names": "error" }
     },
     {
-      "files": ["packages/core/src/**", "packages/protocol/src/**", "lint/fixtures/no-stdout-in-core/**"],
+      "files": ["packages/protocol/src/**", "lint/fixtures/no-stdout-in-core/**"],
       "rules": { "letterbox/no-stdout-in-core": "error" }
     },
     {
@@ -40,10 +42,8 @@
       "rules": { "letterbox/scenario-threads-through-fixtures": "error" }
     },
     {
-      "files": ["packages/core/src/**", "lint/fixtures/no-ambient-time-or-randomness/**"],
-      // The one place that may read the clock and make random ids, and its stand-in fixture.
-      "excludeFiles": ["packages/core/src/clock.ts", "lint/fixtures/no-ambient-time-or-randomness/clock.ts"],
-      "rules": { "letterbox/no-ambient-time-or-randomness": "error" }
+      "files": ["packages/harness/scenarios/**", "lint/fixtures/scenario-waits-on-events/**"],
+      "rules": { "letterbox/scenario-waits-on-events": "error" }
     }
   ]
 }

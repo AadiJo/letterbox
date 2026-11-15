@@ -1,0 +1,34 @@
+# Calls the Rust crates may not make. Time comes into the core through
+# clock::Environment, so a run can be repeated. Stdout carries the protocol, so a
+# stray print corrupts it for every client. A crate that has a reason to make one
+# says so with #[expect(..., reason = "...")].
+
+disallowed-methods = [
+  # Only the core makes these ids. Each place it does carries an #[expect] that names it.
+  { path = "letterbox_protocol::AccountId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::MailboxId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::ThreadId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::MessageId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::BlobId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "letterbox_protocol::SignInOptionId::minted", reason = "only the core makes ids. A UI passes on the ids the core sent it" },
+  { path = "std::time::SystemTime::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "std::time::Instant::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "chrono::Utc::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "chrono::Local::now", reason = "time comes in through clock::Environment, so a run can be repeated" },
+  { path = "std::thread::sleep", reason = "a timer makes a run depend on the wall clock. The core waits on adapters and the client only" },
+  # tokio's `time` feature is off, so these do not exist yet. allow-invalid keeps the ban ready for when it is turned on.
+  { path = "tokio::time::Instant::now", reason = "time comes in through clock::Environment, so a run can be repeated", allow-invalid = true },
+  { path = "tokio::time::sleep", reason = "a timer makes a run depend on the wall clock", allow-invalid = true },
+  { path = "tokio::time::sleep_until", reason = "a timer makes a run depend on the wall clock", allow-invalid = true },
+  { path = "tokio::time::interval", reason = "a timer makes a run depend on the wall clock", allow-invalid = true },
+  { path = "tokio::time::timeout", reason = "a timer makes a run depend on the wall clock", allow-invalid = true },
+  { path = "std::io::stdout", reason = "the core talks only through CoreOptions::send. The program that runs it owns stdout" },
+  { path = "std::io::stderr", reason = "the core reports only through CoreOptions::send" },
+]
+disallowed-macros = [
+  { path = "std::println", reason = "the core talks only through CoreOptions::send" },
+  { path = "std::print", reason = "the core talks only through CoreOptions::send" },
+  { path = "std::eprintln", reason = "the core reports only through CoreOptions::send" },
+  { path = "std::eprint", reason = "the core reports only through CoreOptions::send" },
+  { path = "std::dbg", reason = "the core reports only through CoreOptions::send" },
+]

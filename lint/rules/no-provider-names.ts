@@ -1,20 +1,20 @@
-// Keeps provider vocabulary out of the core and the protocol.
+// Keeps provider vocabulary out of the TypeScript protocol. `cargo xtask provider-names`
+// does the same for the Rust core and protocol, from the same list of words.
 //
 // Checks identifiers, string literals and template literals. Comments may name a
 // provider. .oxlintrc.json decides which folders this rule applies to.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { defineRule, type Ranged } from '@oxlint/plugins'
 import { reportOncePerPosition } from '../ast.ts'
 
-/**
- * Provider names, plus two prefixes that only one provider uses for its labels and
- * headers. "googlemail" and "protonmail" are listed because each is one word, so the
- * whole-word match on "google" and "proton" does not see them.
- */
-const TERMS =
-  'gmail google googlemail imap jmap outlook exchange microsoft yahoo icloud fastmail proton protonmail category_ x-gm-'
-    .split(' ')
-    .map((term) => new RegExp(term, 'gi'))
+/** The words in lint/provider-terms.txt, which `cargo xtask provider-names` reads for the Rust crates. */
+const TERMS = readFileSync(join(import.meta.dirname, '..', 'provider-terms.txt'), 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line !== '' && !line.startsWith('#'))
+  .map((term) => new RegExp(term, 'gi'))
 
 /**
  * True when a word can start or end between text[index - 1] and text[index].
@@ -55,7 +55,7 @@ export default defineRule({
       report(
         node,
         `"${term}" is provider vocabulary. The core and the protocol must behave the same for every provider, so do not name one here. ` +
-          'If behaviour differs between providers, add a field to AdapterCapabilities in packages/core/src/adapter.ts and branch on it. ' +
+          'If behaviour differs between providers, add a field to AdapterCapabilities in crates/core/src/adapter.rs and branch on it. ' +
           'If a provider knows a fact the core needs, add it to RemoteFacts and let the adapter fill it in.',
       )
     }

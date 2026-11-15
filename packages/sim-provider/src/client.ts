@@ -1,11 +1,12 @@
-// The core's side of the sim provider: two sign-in options whose adapters
-// forward every call over the unix socket to server.ts.
+// A TypeScript client for the sim provider: two sign-in options whose adapters
+// forward every call over the unix socket to server.ts. The core uses the Rust
+// copy in crates/sim-client. The self-check drives the server through this one.
 //
 // Each sign-in attempt and each adapter has its own socket. An adapter that
 // loses its socket answers `offline` and connects again on its next call.
 
 import { createConnection } from 'node:net'
-import type { Adapter, AdapterFactory } from '@letterbox/core/adapter'
+import type { Adapter, AdapterFactory } from './adapter.ts'
 import type { SimAdapterFactories } from './contract.ts'
 import { encode, isRecord, isReply, lineReader } from './wire.ts'
 import type { Call, CallResult, Reply, RequestBody, Session, SignInResult } from './wire.ts'

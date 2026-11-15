@@ -1,4 +1,5 @@
-// The messages between client.ts and server.ts: JSON, one message per line.
+// The messages between a client and server.ts: JSON, one message per line.
+// crates/sim-client/src/wire.rs is the Rust copy the core's adapters use.
 //
 // The client numbers its requests per socket and the server answers with the
 // same id. An adapter call gets one `result` reply. A password sign-in gets one
@@ -17,7 +18,7 @@ import type {
   PageToken,
   SignInFailure,
   SnapshotPage,
-} from '@letterbox/core/adapter'
+} from './adapter.ts'
 import type { Dialect } from './contract.ts'
 
 /** One adapter call, as sent to the server. */

@@ -1,0 +1,23 @@
+# Provider vocabulary the core and the protocol may not use. One word per line,
+# matched as a whole word in any casing. Two checks read this file:
+#   lint/rules/no-provider-names.ts   the TypeScript protocol, through oxlint
+#   xtask/src/provider_names.rs       the Rust core and protocol, through `cargo xtask provider-names`
+#
+# "googlemail" and "protonmail" are listed because each is one word, so the
+# whole-word match on "google" and "proton" does not see them. "category_" and
+# "x-gm-" are prefixes that only one provider uses for its labels and headers.
+gmail
+google
+googlemail
+imap
+jmap
+outlook
+exchange
+microsoft
+yahoo
+icloud
+fastmail
+proton
+protonmail
+category_
+x-gm-

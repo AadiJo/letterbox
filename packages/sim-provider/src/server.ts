@@ -1,5 +1,6 @@
 // The sim provider's server. It runs inside the test process, owns every
-// mailbox's ground truth, and answers the adapters in client.ts over a unix socket.
+// mailbox's ground truth, and answers adapters over a unix socket: the core's in
+// crates/sim-client, and the self-check's in client.ts.
 
 import { rmSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -48,7 +49,7 @@ export const startSimProvider: StartSimProvider = (socketPath) => {
 
   /** Sends a sign-in result and remembers the session string the client will make from it. */
   const sendSignedIn = (socket: Socket, id: number, result: SignInResult): void => {
-    // client.ts turns the session into its string this same way.
+    // Both clients turn the session into its string this same way, so the leak check knows it.
     if (result.ok) handedOut.add(JSON.stringify(result.session))
     send(socket, { id, kind: 'signed-in', result })
   }

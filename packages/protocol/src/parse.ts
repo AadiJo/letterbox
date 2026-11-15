@@ -1,63 +1,14 @@
-// Schemas for both directions of the protocol. The core checks every client
-// message before it acts on it. The harness checks every core message, so a core
-// in any language is held to the same shapes.
+// The schema for every message the core sends. The harness checks each one, so the
+// Rust core (crates/core) is held to the shapes in protocol.ts. The core reads client
+// messages with its own copy of the protocol, crates/protocol.
 //
-// The schemas are written by hand next to the types in protocol.ts. The type
-// checks below fail the build if a schema and its type ever disagree.
+// The schema is written by hand next to the types in protocol.ts. The type check
+// below fails the build if the schema and its type ever disagree.
 
 import { type } from 'arktype'
-import type { ClientMessage, CoreMessage } from './protocol.ts'
+import type { CoreMessage } from './protocol.ts'
 
 const turn = type("'mine' | 'theirs' | 'none'")
-
-const filter = type({
-  'accountId?': 'string',
-  'mailboxId?': 'string',
-  'turn?': turn,
-  'unread?': 'boolean',
-  'text?': 'string',
-})
-
-const query = type({ view: "'accounts'" })
-  .or({ view: "'sign-in-options'" })
-  .or({ view: "'mailboxes'", 'accountId?': 'string' })
-  .or({ view: "'threads'", filter, offset: 'number.integer >= 0', limit: 'number.integer > 0' })
-  .or({ view: "'thread'", threadId: 'string' })
-
-const draft = type({
-  accountId: 'string',
-  to: 'string[]',
-  cc: 'string[]',
-  bcc: 'string[]',
-  subject: 'string',
-  text: 'string',
-  html: 'string | null',
-  inReplyTo: 'string | null',
-})
-
-const command = type({ kind: "'set-turn'", threadIds: 'string[]', turn: turn.or("'auto'") })
-  .or({ kind: "'set-flags'", threadIds: 'string[]', 'unread?': 'boolean', 'flagged?': 'boolean' })
-  .or({ kind: "'set-mailboxes'", threadIds: 'string[]', add: 'string[]', remove: 'string[]' })
-  .or({ kind: "'trash'", threadIds: 'string[]' })
-  .or({ kind: "'send'", draft })
-  .or({ kind: "'undo'", change: 'string' })
-
-const request = type({
-  method: "'sign-in'",
-  option: 'string',
-  'password?': { username: 'string', password: 'string', 'server?': 'string' },
-})
-  .or({ method: "'sign-out'", accountId: 'string', deleteLocalMail: 'boolean' })
-  .or({ method: "'sync-now'", 'accountId?': 'string' })
-  .or({ method: "'blob'", blobId: 'string' })
-
-const clientMessage = type({ kind: "'hello'", protocol: 'number' })
-  .or({ kind: "'subscribe'", sub: 'string', query })
-  .or({ kind: "'unsubscribe'", sub: 'string' })
-  .or({ kind: "'command'", change: 'string', command })
-  .or({ kind: "'request'", id: 'string', request })
-
-type Parsed = typeof clientMessage.infer
 
 /** Replaces every branded id with a plain string, so the schema and the types can be compared. */
 type Plain<T> = T extends string
@@ -175,20 +126,8 @@ const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' 
 
 // The build fails here if the schema and the types in protocol.ts ever differ:
 // a field one has and the other lacks, a value one allows and the other does not.
-const clientSchemaMatches: Same<Flat<Parsed>, Flat<Plain<ClientMessage>>> = true
 const coreSchemaMatches: Same<Flat<typeof coreMessage.infer>, Flat<Plain<CoreMessage>>> = true
-void clientSchemaMatches
 void coreSchemaMatches
-
-export type ParseResult = { ok: true; message: ClientMessage } | { ok: false; problem: string }
-
-/** Turns one decoded JSON value into a client message, or says what is wrong with it. */
-export function parseClientMessage(value: unknown): ParseResult {
-  const parsed = clientMessage(value)
-  if (parsed instanceof type.errors) return { ok: false, problem: parsed.summary }
-  // The schema checked every field. Branded ids differ from plain strings only in type, so this is the one place they get the brand.
-  return { ok: true, message: parsed as ClientMessage }
-}
 
 /** Checks one decoded JSON value from the core. Returns null when it is a valid core message, else what is wrong. */
 export function coreMessageProblem(value: unknown): string | null {

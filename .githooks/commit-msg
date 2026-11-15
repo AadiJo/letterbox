@@ -1,0 +1,13 @@
+#!/bin/sh
+# Commit-msg hook. `pnpm install` wires it through the `prepare` script in package.json.
+#
+# Checks the message with lint/commit-title.ts: one line, a lowercase conventional type,
+# a description that starts in lowercase, and no co-author trailer.
+
+node "$(git rev-parse --show-toplevel)/lint/commit-title.ts" --file "$1" && exit 0
+cat >&2 <<MESSAGE
+
+commit-msg: nothing was committed. Fix the message and commit again.
+Do not pass --no-verify, and do not delete or change this hook.
+MESSAGE
+exit 1

@@ -5,5 +5,8 @@ node_modules
 # Written by `pnpm scenarios`: one transcript per scenario run.
 artifacts
 
+# Cargo's build output.
+target
+
 # Local stores made by running the core by hand.
 data

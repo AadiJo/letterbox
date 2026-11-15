@@ -1,0 +1,54 @@
+# The core and its protocol. The test tooling around them stays in TypeScript, under packages/.
+#
+#   crates/protocol    the messages between the core and every UI. packages/protocol is its TypeScript copy
+#   crates/core        the headless core: store, sync, threads, turns
+#   crates/sim-client  adapters that reach the sim provider (packages/sim-provider) over its socket,
+#                      and the `core-sim` program every scenario runs
+#
+# `pnpm scenarios` builds `core-sim` and runs every scenario against it.
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+edition = "2024"
+# Let chains (`if let ... && let ...`) need 1.88.
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+letterbox-protocol = { path = "crates/protocol" }
+letterbox-core = { path = "crates/core" }
+foldhash = "0.2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+indexmap = { version = "2.14", features = ["serde"] }
+regex = "1.12"
+rusqlite = { version = "0.43", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53", features = ["rt", "sync"] }
+# The `#[ts(...)]` attributes in crates/protocol say what ts-rs cannot read from serde, so its warnings add nothing.
+ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+
+# A panic in the core is a bug that can leave its memory out of step with the store,
+# so it ends the program instead of letting the core go on. Tests unwind regardless.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Every suppression says why. The Rust side of letterbox/require-suppression-reason.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# clippy.toml lists the clock, randomness and stdout calls the core may not make.
+disallowed_methods = "deny"
+disallowed_macros = "deny"
+# A RefCell borrow held across an await panics when another task borrows it.
+await_holding_refcell_ref = "deny"

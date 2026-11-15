@@ -1,7 +1,7 @@
 // A client for the core process, as a scenario uses it. It speaks only the
 // protocol, so it would drive a core written in any language the same way.
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import type {
@@ -60,24 +60,43 @@ export type CoreClient = {
   ): { id: RequestId; done: Promise<Extract<Response, { method: M }>> }
   /** Resolves with the next message of this kind that no one has taken yet. */
   take<Kind extends CoreMessage['kind']>(kind: Kind): Promise<Of<Kind>>
+  /** Resolves once the core has read the end of its input, after `stop` closes it. */
+  inputClosed(): Promise<void>
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
-  /** Closes the core's input and waits for the process to end. */
+  /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
   stop(): Promise<void>
   /** Every message the core sent that broke the protocol's shapes. A scenario fails if there is one. */
   violations(): string[]
 }
 
-const CORE_MAIN = fileURLToPath(new URL('./core-main.ts', import.meta.url))
+/** The core program the scenarios run: crates/sim-client/src/main.rs, built by `buildCore`. */
+const CORE_PROGRAM = fileURLToPath(new URL('../../../target/debug/core-sim', import.meta.url))
 const WAIT_MS = 5000
+
+/** The line core-sim writes to stderr once its input closes. crates/sim-client/src/main.rs writes it. */
+const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
+
+/** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
+export const CORE_DID_NOT_BUILD = 2
+
+/** Builds the core program from the current source. Returns false, after cargo has printed why, if it does not build. */
+export function buildCore(): boolean {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  return spawnSync('cargo', ['build', '--quiet', '--bin', 'core-sim'], { cwd: root, stdio: 'inherit' }).status === 0
+}
 
 /** Starts a core process over `dataDir` that reaches the sim provider at `socketPath`. */
 export function startCore(dataDir: string, socketPath: string, record: (entry: TranscriptEntry) => void): CoreClient {
-  const child = spawn(process.execPath, [CORE_MAIN, '--data', dataDir, '--sim', socketPath], {
+  const child = spawn(CORE_PROGRAM, ['--data', dataDir, '--sim', socketPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   let stderr = ''
-  child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+  const onStderr: (() => void)[] = []
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString()
+    for (const check of onStderr.splice(0)) check()
+  })
 
   const unclaimed: CoreMessage[] = []
   const waiters: {
@@ -266,9 +285,30 @@ export function startCore(dataDir: string, socketPath: string, record: (entry: T
     take,
     sendRaw,
     violations: () => [...violations],
+    inputClosed: () =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`timed out after ${WAIT_MS} ms waiting for the core to read the end of its input`)),
+          WAIT_MS,
+        )
+        const check = () => {
+          if (!stderr.includes(INPUT_CLOSED)) return void onStderr.push(check)
+          clearTimeout(timer)
+          resolve()
+        }
+        check()
+      }),
     stop: async () => {
       child.stdin.end()
+      // A core that never exits would hang the whole run. It gets as long as any answer does.
+      let killed = false
+      const timer = setTimeout(() => {
+        killed = true
+        child.kill()
+      }, WAIT_MS)
       await exited
+      clearTimeout(timer)
+      if (killed) throw new Error(`the core did not exit within ${WAIT_MS} ms of its input closing`)
     },
   }
 }

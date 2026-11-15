@@ -1,6 +1,6 @@
 // The labels dialect: refs that never change and one change log for the whole mailbox.
 
-import type { ChangesResult, Cursor, MessageRef } from '@letterbox/core/adapter'
+import type { ChangesResult, Cursor, MessageRef } from './adapter.ts'
 import { remoteMailboxes, remoteMessage, stateOf } from './store.ts'
 import type { Engine, Store } from './store.ts'
 

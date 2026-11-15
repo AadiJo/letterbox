@@ -20,10 +20,11 @@
 //            `expireCursors` resets every mailbox, which expires every cursor.
 //            Gives no bulk verdict (`bulk` is null).
 //
-// server.ts runs the provider inside the harness. client.ts gives the core the
-// adapter factories that talk to it.
+// server.ts runs the provider inside the harness. The core reaches it through the
+// adapters in crates/sim-client. client.ts is a TypeScript twin of those adapters
+// that the self-check uses to drive the server.
 
-import type { AdapterFactory } from '@letterbox/core/adapter'
+import type { AdapterFactory } from './adapter.ts'
 import type { Mailbox, Time } from '@letterbox/protocol'
 
 export type Dialect = 'labels' | 'folders'
@@ -113,6 +114,12 @@ export interface SimMailbox {
   holdBodies(): void
   /** Answers every waiting body call, from the truth as it is now, and stops holding. */
   releaseBodies(): void
+  /** From now on, apply calls wait and change nothing. Lets a scenario sign out while a push is in flight. */
+  holdApplies(): void
+  /** Resolves once an apply call is waiting, at once if one already is. */
+  applyHeld(): Promise<void>
+  /** Applies and answers every waiting apply call, in the order they came, and stops holding. */
+  releaseApplies(): void
 
   // What a scenario checks.
   truth(): TruthMessage[]
@@ -138,7 +145,7 @@ export type StartSimProvider = (socketPath: string) => Promise<SimProvider>
 
 /**
  * The sign-in options the core offers when it runs against the sim provider.
- * Exported from client.ts. Two factories, in this order:
+ * Made by client.ts here and by crates/sim-client for the core. Two factories, in this order:
  *   id "sim-password", method password: username is the address, password must match the seed.
  *   id "sim-oauth", method oauth: calls `openUrl`, then waits for approveSignIn or denySignIn.
  * The provider label is "Sim labels" or "Sim folders", by the mailbox's dialect.
