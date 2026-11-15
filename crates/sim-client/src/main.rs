@@ -1,24 +1,34 @@
 //! The core as a process, wired to the sim provider. This is what every scenario
 //! talks to: one JSON message per line on stdin, one per line on stdout.
 //!
-//!   core-sim --data <folder> --sim <socket> [--now <time>]
+//!   core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]
+//!
+//! `--sim` lists the two sim provider options. `--gmail` adds the Gmail option, pointed at
+//! the fake Gmail server at `<url>` (packages/sim-provider/src/gmail). Its consent URLs must
+//! not change between runs, so its random source and loopback port are fixed here, and the
+//! browser's redirect arrives on a unix socket in `--gmail-redirects`. At least one is needed.
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! A real app gets its own entry point with real adapters. Nothing here is test
 //! logic inside the core: this file only chooses which factories, clock and secret store it gets.
 
+use std::cell::Cell;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::rc::Rc;
 
+use letterbox_core::adapter::AdapterFactory;
 use letterbox_core::clock::FixedEnvironment;
 use letterbox_core::{Core, CoreOptions};
+use letterbox_gmail::{GmailConfig, Loopback, gmail_factory};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::task::LocalSet;
 
-const USAGE: &str = "usage: core-sim --data <folder> --sim <socket> [--now <time>]";
+const USAGE: &str =
+    "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]";
 
 /// Written to stderr once stdin closes, before the core finishes its work and exits.
 const INPUT_CLOSED: &str = "core-sim: input closed, finishing the work in flight";
@@ -29,13 +39,16 @@ const KEYCHAIN_FILE: &str = "sim-keychain.json";
 
 struct Args {
     data: PathBuf,
-    sim: PathBuf,
+    sim: Option<PathBuf>,
+    gmail: Option<(String, PathBuf)>,
     now: String,
 }
 
 fn parse_args() -> Option<Args> {
     let mut data = None;
     let mut sim = None;
+    let mut gmail = None;
+    let mut redirects = None;
     let mut now = "2026-01-01T00:00:00.000Z".to_owned();
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -43,14 +56,45 @@ fn parse_args() -> Option<Args> {
         match flag.as_str() {
             "--data" => data = Some(PathBuf::from(value)),
             "--sim" => sim = Some(PathBuf::from(value)),
+            "--gmail" => gmail = Some(value),
+            "--gmail-redirects" => redirects = Some(PathBuf::from(value)),
             "--now" => now = value,
             _ => return None,
         }
     }
-    Some(Args {
+    let gmail = match (gmail, redirects) {
+        (Some(url), Some(redirects)) => Some((url, redirects)),
+        (None, None) => None,
+        _ => return None,
+    };
+    (sim.is_some() || gmail.is_some()).then_some(Args {
         data: data?,
-        sim: sim?,
+        sim,
+        gmail,
         now,
+    })
+}
+
+/// The Gmail option, pointed at the fake server. Nothing here is a real client: the fake
+/// accepts any client id, as long as the code exchange names the one consent did.
+fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
+    // Each draw is 32 copies of the next number, so every attempt has its own verifier and state.
+    let draws = Cell::new(0u8);
+    gmail_factory(GmailConfig {
+        api_base: url.clone(),
+        // Never fetched. The fake reads the consent URL the scenario hands it.
+        auth_url: "https://consent.fake.test/o/oauth2/v2/auth".to_owned(),
+        token_url: format!("{url}/token"),
+        client_id: "letterbox-scenarios.apps.fake.test".to_owned(),
+        client_secret: Some("not-a-secret".to_owned()),
+        loopback: Loopback::Unix {
+            dir: redirects,
+            first_port: 47_000,
+        },
+        random: Rc::new(move || {
+            draws.set(draws.get().wrapping_add(1));
+            [draws.get(); 32]
+        }),
     })
 }
 
@@ -76,12 +120,15 @@ fn main() -> ExitCode {
         .build()
         .expect("a single-thread runtime starts");
 
+    let mut factories = args.sim.as_deref().map(sim_adapter_factories).unwrap_or_default();
+    factories.extend(args.gmail.map(|(url, redirects)| fake_gmail(url, redirects)));
+
     LocalSet::new().block_on(&runtime, async move {
         let options = CoreOptions {
             secrets: Box::new(FileKeychain::new(args.data.join(KEYCHAIN_FILE))),
             data_path: args.data,
             env: Box::new(env),
-            factories: sim_adapter_factories(&args.sim),
+            factories,
             send: Box::new(|message| {
                 let mut out = std::io::stdout().lock();
                 serde_json::to_writer(&mut out, &message).expect("core messages are plain data");
