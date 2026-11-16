@@ -1,5 +1,5 @@
 // What each toolbar button and shortcut does to a conversation, as a protocol command.
-// Only commands the core already has are here. Reply and compose wait for the core.
+// Replies go through drafts.ts and sending.ts. Composing a new conversation is not here yet.
 
 import type { Account, Command, Mailbox, MailboxId, ThreadSummary } from '@letterbox/protocol'
 import { client } from './core.ts'
@@ -16,6 +16,15 @@ export const SHORTCUTS = { done: 'd', archive: 'e', trash: '#', flag: 's', unrea
   Action,
   string
 >
+
+/** The key that opens a reply to the open conversation. With Shift, Reply all. */
+export const REPLY_KEY = 'r'
+
+/** Whether the account can send a reply in `thread` at all. */
+export function canReply(thread: ThreadSummary, mail: Mail) {
+  const account = mail.accounts.find((candidate) => candidate.id === thread.accountId)
+  return account !== undefined && account.can.send && account.can.modify
+}
 
 const byKey = new Map<string, Action>(ALL.map((action) => [SHORTCUTS[action], action]))
 

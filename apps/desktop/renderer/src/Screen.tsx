@@ -4,10 +4,11 @@
 import type { Account, Command, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
-import { type Action, actionForKey, type Mail, markRead, run } from './actions.ts'
+import { type Action, actionForKey, canReply, type Mail, markRead, REPLY_KEY, run } from './actions.ts'
+import { openReply } from './drafts.ts'
 import { leave, release, shake } from './motion.ts'
 import { Reader } from './Reader.tsx'
-import { threadRecord, useThread } from './threads.ts'
+import { threadDetail, threadRecord, useThread } from './threads.ts'
 import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { notify, undo, UNDO_KEY, withdraw } from './undo.ts'
@@ -28,7 +29,8 @@ const typing = (target: EventTarget | null) =>
 
 /**
  * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
- * actions.ts's keys act on the open conversation, and z undoes the last undoable action.
+ * actions.ts's keys act on the open conversation, r opens a reply (Shift+R, Reply all), and z
+ * undoes the last undoable action.
  * `leaves` says whether a command takes a conversation out of this list. When it does, the
  * row slides out and the next one opens in its place.
  */
@@ -80,6 +82,13 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     if (generation.current === started) select(next)
   }
 
+  /** Opens the reply editor on the open conversation, once its messages are here and its account can send. */
+  const reply = (all: boolean) => {
+    const thread = selected ? threadRecord(selected) : undefined
+    const detail = selected ? threadDetail(selected) : undefined
+    if (thread && detail && canReply(thread, mail)) openReply(detail, all)
+  }
+
   /** Undoes the action on the toast, if it can be. Once the core accepts, its conversation is back and opens again. */
   const undoLast = async () => {
     const started = generation.current
@@ -99,6 +108,11 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
       event.preventDefault()
       return
     }
+    if (event.key.toLowerCase() === REPLY_KEY) {
+      reply(event.shiftKey)
+      event.preventDefault()
+      return
+    }
     if (event.key === UNDO_KEY) {
       void undoLast()
       event.preventDefault()
@@ -115,7 +129,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     return () => window.removeEventListener('keydown', listener)
   }, [])
 
-  return { selected, select, act, undo: undoLast }
+  return { selected, select, act, reply, undo: undoLast }
 }
 
 type ScreenProps = {
@@ -155,7 +169,13 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
         <Toast onUndo={selection.undo} />
       </section>
       <section aria-label="Reader" className="flex min-w-0 flex-1 flex-col">
-        <Toolbar thread={thread} mail={chrome.mail} onAct={selection.act} search={chrome.search} />
+        <Toolbar
+          thread={thread}
+          mail={chrome.mail}
+          onAct={selection.act}
+          onReply={selection.reply}
+          search={chrome.search}
+        />
         <Reader id={selection.selected} mailboxes={chrome.mail.mailboxes} />
       </section>
     </>

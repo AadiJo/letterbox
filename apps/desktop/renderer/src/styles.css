@@ -6,6 +6,8 @@
  * Text uses four neutral steps: fg (245), fg2 (210), muted (165), faint (140).
  * Blue is only for unread and progress. Amber is only for turns that waited past 7 days.
  * Green is only for finished: the undo toast and an empty Your turn.
+ * Blue is also the one Send button, the only filled button in the window.
+ * Red is only for what did not work: an address the core cannot send to and a reply that was not sent.
  * The default palette is cleared, so every color in the renderer is one of these.
  */
 @theme {
@@ -27,6 +29,7 @@
   --color-blue: #4d9cff;
   --color-amber: #ff905e;
   --color-green: #3fb871;
+  --color-red: #ff6a63;
   --color-sel: #2c2c31;
   --color-pill: #2c2c2e;
   --color-pill-sel: #3e3e44;

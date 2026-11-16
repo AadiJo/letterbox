@@ -29,6 +29,11 @@ export type ServerOptions = {
   paths: Paths
   /** The port to try first. The next free one is used if it is taken. 0 lets the system pick. */
   port: number
+  /**
+   * core-sim flags for the next tab's core, read as each one starts. A UI check that runs the
+   * parts in its own process uses it, as ui/reply.ts holds a send's undo window with `--hold-waits`.
+   */
+  coreFlags?: () => readonly string[]
 } & ({ relay: true; sim: Sim } | { relay: false; sim: Sim | undefined })
 
 export type DevServer = {
@@ -45,7 +50,7 @@ const MAX_DELIVER = 500
 const REPLACED = 4000
 
 /** Relays each `/core` WebSocket to its own core, one at a time. */
-function coreRelay(paths: Paths, now: string) {
+function coreRelay(paths: Paths, now: string, flags: () => readonly string[]) {
   let current: { socket: WebSocket; core: Promise<CoreProcess> } | undefined
 
   /** Takes over the store for `socket`: stops the previous tab's core, then starts this one's. */
@@ -60,7 +65,7 @@ function coreRelay(paths: Paths, now: string) {
         previous.socket.close(REPLACED, 'another tab opened the core')
         await (await previous.core).stop()
       }
-      const next = startCore(paths, now)
+      const next = startCore(paths, now, flags())
       next.onLine((line) => socket.send(line))
       void next.exited.then(() => socket.close(1011, 'the core exited'))
       for (const line of early.splice(0)) next.send(line)
@@ -115,7 +120,7 @@ const deliverRoute =
  */
 export async function startServer(options: ServerOptions): Promise<DevServer> {
   const http = createHttpServer()
-  const relay = options.relay ? coreRelay(options.paths, options.sim.now) : undefined
+  const relay = options.relay ? coreRelay(options.paths, options.sim.now, options.coreFlags ?? (() => [])) : undefined
   const sockets = new WebSocketServer({ noServer: true })
   if (relay) sockets.on('connection', relay.connect)
 

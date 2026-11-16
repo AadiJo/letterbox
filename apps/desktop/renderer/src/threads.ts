@@ -66,7 +66,12 @@ export const threadRecord = (id: ThreadId) => records.get(id)?.thread
 
 const details = new Map<
   ThreadId,
-  { subscribe: (onChange: () => void) => () => void; latest: () => ThreadDetail | null | undefined }
+  {
+    subscribe: (onChange: () => void) => () => void
+    latest: () => ThreadDetail | null | undefined
+    /** The store revision `latest` is from, or -1 before the first update. */
+    rev: () => number
+  }
 >()
 
 /**
@@ -106,6 +111,7 @@ function detailView(id: ThreadId) {
       }
     },
     latest: () => open?.subscription.latest(),
+    rev: () => open?.subscription.rev() ?? -1,
   }
   details.set(id, view)
   return view
@@ -115,6 +121,25 @@ function detailView(id: ThreadId) {
 export function useThreadDetail(id: ThreadId) {
   const view = detailView(id)
   return useSyncExternalStore(view.subscribe, view.latest)
+}
+
+/** The open conversation's messages, read once, for an event handler. Undefined unless something watches it. */
+export const threadDetail = (id: ThreadId) => details.get(id)?.latest()
+
+/**
+ * Calls `listener` with one conversation and the store revision it is from, now and after
+ * each update, until the returned function runs. It keeps the view live meanwhile, even with
+ * no reader on it, for a caller that follows one change to its end (sending.ts).
+ */
+export function watchThreadDetail(id: ThreadId, listener: (detail: ThreadDetail | null, rev: number) => void) {
+  const view = detailView(id)
+  const tell = () => {
+    const detail = view.latest()
+    if (detail !== undefined) listener(detail, view.rev())
+  }
+  const stop = view.subscribe(tell)
+  tell()
+  return stop
 }
 
 // Pagers: one live list each, over one filter, showing one range at a time.

@@ -1,12 +1,14 @@
 // What the last action did, in a toast for 5 s: "Marked done" with Undo (or z), or
 // "Archived" and "Moved to Trash" with nothing to undo yet. A new action replaces it.
+// A reply the core holds in its undo window shows "Sending" with Undo until the window ends.
 //
 // Only Done can be undone: setting the turn back to the one the conversation had is exact.
 // Archive and Trash wait for the core's own `undo`, which answers not-supported today.
 
-import type { Command, ThreadId, ThreadSummary } from '@letterbox/protocol'
+import type { ChangeId, Command, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import { type Action, send } from './actions.ts'
+import { now } from './clock.ts'
 
 /** The key that undoes the last undoable action. */
 export const UNDO_KEY = 'z'
@@ -15,9 +17,16 @@ export const UNDO_KEY = 'z'
 const NOTICE_MS = 5000
 
 type SetTurn = Extract<Command, { kind: 'set-turn' }>
+type UndoSend = Extract<Command, { kind: 'undo' }>
 
-/** What the toast says, and the command that undoes it if there is one. */
-type Said = { label: 'Marked done'; undo: SetTurn } | { label: 'Archived' | 'Moved to Trash'; undo: null }
+/**
+ * What the toast says, and the command that undoes it if there is one. A send's toast stays
+ * until its window ends at `until`, and `onUndone` runs once the core takes the send back.
+ */
+type Said =
+  | { label: 'Marked done'; undo: SetTurn }
+  | { label: 'Archived' | 'Moved to Trash'; undo: null }
+  | { label: 'Sending'; undo: UndoSend; until: string; onUndone: () => void }
 
 /** The toast's content. `serial` rises with each one, so a new toast replays its entrance. */
 export type Notice = { serial: number; threadId: ThreadId } & Said
@@ -30,7 +39,11 @@ const watchers = new Set<() => void>()
 const setNotice = (next: Notice | null) => {
   clearTimeout(expiry)
   notice = next
-  if (next) expiry = setTimeout(() => setNotice(null), NOTICE_MS)
+  if (next)
+    expiry = setTimeout(
+      () => setNotice(null),
+      next.label === 'Sending' ? Math.max(0, Date.parse(next.until) - now()) : NOTICE_MS,
+    )
   watchers.forEach((watcher) => watcher())
 }
 
@@ -62,6 +75,17 @@ export function notify(action: Action, before: ThreadSummary) {
   setNotice({ serial, threadId: before.id, ...body })
 }
 
+/** Shows "Sending" with Undo for a send the core holds until `until`. sending.ts calls this. */
+export function offerUndoSend(threadId: ThreadId, change: ChangeId, until: string, onUndone: () => void) {
+  serial += 1
+  setNotice({ serial, threadId, label: 'Sending', undo: { kind: 'undo', change }, until, onUndone })
+}
+
+/** Takes the toast down if it offers to undo the send `change`, whose window has ended. */
+export const withdrawSend = (change: ChangeId) => {
+  if (notice?.label === 'Sending' && notice.undo.change === change) withdraw()
+}
+
 /** Takes the toast down. */
 export const withdraw = () => setNotice(null)
 
@@ -75,7 +99,9 @@ export async function undo() {
   const taken = notice
   if (!taken?.undo) return null
   withdraw()
-  return (await send(taken.undo)) ? taken.threadId : null
+  if (!(await send(taken.undo))) return null
+  if (taken.label === 'Sending') taken.onUndone()
+  return taken.threadId
 }
 
 /** The toast's content, or null. */
