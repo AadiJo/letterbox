@@ -27,6 +27,8 @@ export type CoreClient = KeepingClient & {
   inputClosed(): Promise<void>
   /** Resolves once a gmail adapter is holding a rate-limit wait (HELD_WAIT in core-sim). */
   waitHeld(): Promise<void>
+  /** Resolves with the first `count` gmail rate-limit waits this core began, in seconds, in order. */
+  waits(count: number): Promise<number[]>
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
@@ -48,6 +50,8 @@ const WAIT_MS = 5000
 const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
 /** The line core-sim writes to stderr when a gmail rate-limit wait starts to hold. */
 const WAIT_HELD = 'core-sim: holding a gmail rate-limit wait until the adapter closes'
+/** The line core-sim writes to stderr as each gmail rate-limit wait begins, with its length. */
+const WAIT_BEGUN = /core-sim: gmail rate-limit wait of (\d+) ms\n/g
 
 /** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
 export const CORE_DID_NOT_BUILD = 2
@@ -91,17 +95,18 @@ export function startCore(
     for (const check of onStderr.splice(0)) check()
   })
 
-  /** Resolves once `line` is on stderr. `what` names it in the timeout. */
-  const onStderrLine = (line: string, what: string) =>
+  /** Resolves once `ready` holds for what is on stderr. `what` names it in the timeout. */
+  const untilStderr = (ready: () => boolean, what: string) =>
     new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`timed out after ${WAIT_MS} ms waiting for ${what}`)), WAIT_MS)
       const check = () => {
-        if (!stderr.includes(line)) return void onStderr.push(check)
+        if (!ready()) return void onStderr.push(check)
         clearTimeout(timer)
         resolve()
       }
       check()
     })
+  const waitsBegun = () => [...stderr.matchAll(WAIT_BEGUN)].map((match) => Number(match[1]) / 1000)
 
   const sendRaw = (value: unknown) => {
     record({ from: 'ui', message: value })
@@ -182,8 +187,12 @@ export function startCore(
     take: (kind) => within(`a ${kind} message`, client.take(kind)),
     sendRaw,
     violations: () => [...violations],
-    inputClosed: () => onStderrLine(INPUT_CLOSED, 'the core to read the end of its input'),
-    waitHeld: () => onStderrLine(WAIT_HELD, 'the gmail adapter to hold a rate-limit wait'),
+    inputClosed: () => untilStderr(() => stderr.includes(INPUT_CLOSED), 'the core to read the end of its input'),
+    waitHeld: () => untilStderr(() => stderr.includes(WAIT_HELD), 'the gmail adapter to hold a rate-limit wait'),
+    waits: async (count) => {
+      await untilStderr(() => waitsBegun().length >= count, `${count} gmail rate-limit waits`)
+      return waitsBegun().slice(0, count)
+    },
     stop: async () => {
       child.stdin.end()
       // A core that never exits would hang the whole run. It gets as long as any answer does.

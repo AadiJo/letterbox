@@ -10,9 +10,13 @@
 // they do over the sim socket. The counts read in Gmail terms: one snapshot per
 // messages.list page, one changes per history.list, one body per format=full get,
 // and one apply per modify or batchModify that changes labels. `setQuota` adds Gmail's
-// per-user rate limit (quota.ts).
+// usage limits (quota.ts). The mailbox's `expirePageTokens` makes messages.list refuse
+// every page token it handed out.
 //
 // Where Gmail's behaviour is not documented, the fake picks the strict reading:
+//   - messages.list answers a page token it does not accept with the 400 a live call
+//     with a made-up token got (https://github.com/brekkylab/backlot/issues/390). Google
+//     documents no answer for an expired one, so it gets the same.
 //   - batchModify answers 404 and changes nothing if any id is unknown.
 //   - modify and batchModify refuse SENT and DRAFT with 400, the labels the
 //     labels guide says cannot be applied by hand.
@@ -28,7 +32,7 @@ import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { ask, modify, parse, strings } from './modify.ts'
 import { MODIFY_SCOPE, READONLY_SCOPE, createOauth } from './oauth.ts'
-import { type Quota, RATE_LIMITED, createQuotas, unitsOf } from './quota.ts'
+import { type Quota, createQuotas, unitsOf } from './quota.ts'
 import {
   cursorOf,
   fullOf,
@@ -76,6 +80,16 @@ const STATUS_NAMES: Record<number, [string, string]> = {
   403: ['PERMISSION_DENIED', 'insufficientPermissions'],
   404: ['NOT_FOUND', 'notFound'],
   409: ['ABORTED', 'aborted'],
+}
+
+/** What messages.list answered a live call with a page token it did not issue. See the header. */
+const INVALID_PAGE_TOKEN = {
+  error: {
+    code: 400,
+    message: 'Invalid pageToken',
+    errors: [{ message: 'Invalid pageToken', domain: 'global', reason: 'invalidArgument' }],
+    status: 'INVALID_ARGUMENT',
+  },
 }
 
 /** Writes a JSON answer, or an empty one for 204. */
@@ -137,7 +151,11 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     }
     if (method === 'GET' && path === 'messages') {
       const result = await ask(entry, { method: 'snapshot', arg: query.get('pageToken') as PageToken | null })
-      if (result.method !== 'snapshot' || !result.outcome.ok) return fail(response, 400, 'Invalid pageToken')
+      if (result.method !== 'snapshot') return fail(response, 503, 'Backend error')
+      // A page held until the mailbox went offline gets no answer, like any call to it then.
+      if (!result.outcome.ok && result.outcome.failure === 'offline') return void response.socket?.destroy()
+      // Else the mailbox could not read the token, or it expired.
+      if (!result.outcome.ok) return send(response, 400, INVALID_PAGE_TOKEN)
       const page = result.outcome
       // messages.list leaves out spam and trash unless asked.
       const listed = page.messages.filter((item) => {
@@ -240,8 +258,8 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       const refused = quotas.charge(entry.control.address, unitsOf(method, path, url.searchParams))
       if (refused) {
         const wait = refused.retryAfter === undefined ? {} : { 'Retry-After': String(refused.retryAfter) }
-        response.writeHead(403, { 'Content-Type': 'application/json; charset=UTF-8', ...wait })
-        return void response.end(JSON.stringify(RATE_LIMITED))
+        response.writeHead(refused.status, { 'Content-Type': 'application/json; charset=UTF-8', ...wait })
+        return void response.end(JSON.stringify(refused.body))
       }
       await api(entry, method, path, url.searchParams, response, body)
     })

@@ -1,4 +1,4 @@
-// Gmail's per-user rate limit, as the fake models it. Each call costs the quota units on
+// Gmail's usage limits, as the fake models them. Each call costs the quota units on
 // Google's quota page: https://developers.google.com/workspace/gmail/api/reference/quota
 //
 // Real Gmail counts units per user per minute. The fake has no clock, so a scenario sets a
@@ -6,12 +6,45 @@
 // was told to wait, and the fake takes it that the minute passed while it waited. A budget
 // of 0 refuses every call, however many windows pass.
 
-/** A rate limit a scenario sets on one account. */
+/** A 403 for one limit, in the shape the handle-errors guide shows. https://developers.google.com/workspace/gmail/api/guides/handle-errors */
+const refusal = (reason: string, message: string) => ({
+  status: 403,
+  body: {
+    error: { code: 403, message, errors: [{ message, domain: 'usageLimits', reason }], status: 'PERMISSION_DENIED' },
+  },
+})
+
+/** What Gmail answers a call over each limit. */
+const REFUSALS = {
+  // The 403 a live run got when it went over its per-user limit.
+  rateLimitExceeded: refusal(
+    'rateLimitExceeded',
+    "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'.",
+  ),
+  // The guide's samples. A per-user limit is waited out. A daily one needs more quota for the project.
+  userRateLimitExceeded: refusal('userRateLimitExceeded', 'User Rate Limit Exceeded'),
+  dailyLimitExceeded: refusal('dailyLimitExceeded', 'Daily Limit Exceeded'),
+  // The guide gives a 429 its message but no body, so this one names no reason and the status alone says it.
+  tooManyRequests: {
+    status: 429,
+    body: {
+      error: {
+        code: 429,
+        message: 'Too many requests: Too many concurrent requests for user',
+        status: 'RESOURCE_EXHAUSTED',
+      },
+    },
+  },
+}
+
+/** A limit a scenario sets on one account. */
 export type Quota = {
   /** Units one window allows. */
   units: number
-  /** Seconds to name in a Retry-After header on each refusal. Real Gmail's 403 names none. */
+  /** Seconds to name in a Retry-After header on each refusal. The live 403 named none. */
   retryAfter?: number
+  /** Which limit a refusal reports. The per-user rate limit unless set. */
+  reason?: keyof typeof REFUSALS
 }
 
 /** Formats that make users.messages.get cost 60 units instead of 20. */
@@ -33,19 +66,6 @@ export const unitsOf = (method: string, path: string, query: URLSearchParams): n
   return 0
 }
 
-const OVER_QUOTA =
-  "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'."
-
-/** The 403 Gmail sent a live run that went over its per-user limit. https://developers.google.com/workspace/gmail/api/guides/handle-errors */
-export const RATE_LIMITED = {
-  error: {
-    code: 403,
-    message: OVER_QUOTA,
-    errors: [{ message: OVER_QUOTA, domain: 'usageLimits', reason: 'rateLimitExceeded' }],
-    status: 'PERMISSION_DENIED',
-  },
-}
-
 /** Every account's limit, what its window has used, and how many calls it refused. */
 export const createQuotas = () => {
   const limits = new Map<string, Quota>()
@@ -61,9 +81,9 @@ export const createQuotas = () => {
     },
     /**
      * Charges a call to `address`'s window. Returns null when it fits. Else the call is
-     * refused, the window ends, and this returns the Retry-After seconds to send, if any.
+     * refused, the window ends, and this returns the status, body and Retry-After seconds to send.
      */
-    charge: (address: string, units: number): { retryAfter?: number } | null => {
+    charge: (address: string, units: number): { status: number; body: unknown; retryAfter?: number } | null => {
       const quota = limits.get(address)
       if (!quota) return null
       const spent = (used.get(address) ?? 0) + units
@@ -73,7 +93,8 @@ export const createQuotas = () => {
       }
       used.set(address, 0)
       refused.set(address, (refused.get(address) ?? 0) + 1)
-      return quota.retryAfter === undefined ? {} : { retryAfter: quota.retryAfter }
+      const answer = REFUSALS[quota.reason ?? 'rateLimitExceeded']
+      return quota.retryAfter === undefined ? answer : { ...answer, retryAfter: quota.retryAfter }
     },
     refusals: (address: string) => refused.get(address) ?? 0,
   }
