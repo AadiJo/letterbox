@@ -94,6 +94,9 @@ impl Inner {
         if !self.still_current(&account_id, &linked) {
             return;
         }
+        // The account's status shows what the provider said, as after a sync pass.
+        let reached = found.as_ref().map(drop).map_err(|failure| *failure);
+        self.record_outcome(&account_id, reached, false, false);
         let now = parse(&self.env.now());
         match found {
             Ok(Found { r#ref: Some(r#ref) }) => self.delivered(&account_id, record, &outbound, r#ref),

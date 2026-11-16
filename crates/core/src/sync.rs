@@ -256,9 +256,23 @@ impl Inner {
             return Some(result);
         }
 
-        let account = self.state.borrow().world.accounts.get(&account_id).cloned();
+        self.record_outcome(&account_id, result, synced, with_pull);
+        Some(result)
+    }
+
+    /// Records how a pass or an outbox check (confirm.rs) that still serves the account ended:
+    /// its health from `result`, and the time it synced when `synced`. Writes only when the
+    /// health changed, unless `pulled` says a sync ran and the status must show it ended.
+    pub(crate) fn record_outcome(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        result: PassResult,
+        synced: bool,
+        pulled: bool,
+    ) {
+        let account = self.state.borrow().world.accounts.get(account_id).cloned();
         let Some(account) = account else {
-            return Some(result);
+            return;
         };
         if synced {
             let mut state = self.state.borrow_mut();
@@ -271,11 +285,11 @@ impl Inner {
                 world
                     .messages
                     .get(id)
-                    .is_none_or(|record| record.account_id != account_id)
+                    .is_none_or(|record| &record.account_id != account_id)
             });
         }
         let health = Health::from(result);
-        if with_pull || health != account.health {
+        if pulled || health != account.health {
             self.commit(|world, tx, _| {
                 let last_synced_at = if synced {
                     Some(self.env.now())
@@ -293,7 +307,6 @@ impl Inner {
                 );
             });
         }
-        Some(result)
     }
 
     /// A sync-now's pass. It joins the backfill the pass left or found running while it is

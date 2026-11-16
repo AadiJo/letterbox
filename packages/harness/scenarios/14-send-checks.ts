@@ -3,7 +3,7 @@
 // held waits, a moved clock, and a sync whose answer comes after the checks queued before it.
 
 import type { ChangeId } from '@letterbox/protocol'
-import { sync } from '../src/fixtures.ts'
+import { ME, PASSWORD, signIn, sync, untilAccounts } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 import { cutOff, draft } from '../src/sending.ts'
 
@@ -77,3 +77,24 @@ scenario('three unconfirmed sends are looked up once each per round, before and 
   }
   t.equal(box.calls().send, 0, 'none of them was sent again')
 })
+
+scenario(
+  'gmail: a check refused for a revoked grant asks for a sign-in, and the send settles after it',
+  async (t) => {
+    const { box, change } = await cutOff(t)
+    box.releaseSends()
+    t.gmail?.revokeAccess(ME)
+    // A long window, so the send waits for the sign-in instead of failing.
+    const core = t.startCore({ confirmWindow: LONG_WINDOW })
+    await core.hello()
+    const accounts = core.subscribe({ view: 'accounts' })
+    await untilAccounts(accounts, (list) => list[0]?.status.state === 'needs-sign-in')
+    t.note('the restart’s check was refused, and the account asks for a sign-in')
+    t.equal(box.calls().send, 1, 'the send was not sent again')
+
+    await signIn(t, core, ME, PASSWORD)
+    t.equal((await core.settled(change)).result, 'done', 'after the sign-in the copy is found and the send is done')
+    t.equal(box.calls().send, 1, 'it was still sent only once')
+  },
+  ['gmail'],
+)

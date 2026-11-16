@@ -189,4 +189,11 @@ export const SEND_MUTATIONS: Mutation[] = [
     replace: '        self.state.borrow_mut().checks.insert(change.clone());',
     scenarios: 'three unconfirmed sends',
   },
+  {
+    name: 'a check the provider refuses leaves the account looking healthy',
+    file: core('confirm.rs'),
+    find: '        self.record_outcome(&account_id, reached, false, false);\n',
+    replace: '        drop(reached);\n',
+    scenarios: 'revoked grant asks',
+  },
 ]
