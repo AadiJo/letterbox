@@ -196,14 +196,6 @@ export function confirmBcc(id: ThreadId) {
   showExtra(id)
 }
 
-/** Opens the editor on the draft with `text` beside Send, to say why something it asked for cannot happen yet. */
-export function refuse(id: ThreadId, text: string) {
-  const current = drafts.get(id)
-  if (current?.state !== 'open' && current?.state !== 'collapsed') return
-  opening = id
-  set(id, { ...current, state: 'open', problem: { at: 'send', text } })
-}
-
 /** Shows the Cc and Bcc lines. */
 export function showExtra(id: ThreadId) {
   const current = drafts.get(id)
