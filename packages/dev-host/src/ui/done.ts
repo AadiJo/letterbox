@@ -4,7 +4,7 @@
 // or a scroll moves no row it should not, an empty Your turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
-import { appErrors, capture, equal, openPage, type Relay, SIZES } from './record.ts'
+import { appErrors, capture, equal, openPage, type Relay, SIZES, WAIT_MS } from './record.ts'
 
 const yourTurn = (page: Page) => page.locator('[role="listbox"][aria-label="Your turn"] [role="option"]')
 const rowIds = (page: Page) => yourTurn(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
@@ -185,8 +185,8 @@ async function checkLateArchive(page: Page, relay: Relay) {
 async function checkLeaveDuringExit(page: Page) {
   const id = await openSharedRow(page)
   const left = page.evaluate(
-    (leaving) =>
-      new Promise<void>((resolve) => {
+    ([leaving, waitMs]) =>
+      new Promise<void>((resolve, reject) => {
         const subtitle = document.querySelector('[data-field="subtitle"]')
         const row = document.querySelector(`[data-list="mail"] [data-row="${leaving}"]`)
         const allMail = [...document.querySelectorAll<HTMLElement>('nav[aria-label="Sidebar"] button')].find((button) =>
@@ -194,10 +194,18 @@ async function checkLeaveDuringExit(page: Page) {
         )
         if (!subtitle || !row || !allMail) throw new Error('Inbox, its row or the All mail button is missing')
         const before = subtitle.textContent
+        const fail = (message: string) => {
+          observer.disconnect()
+          clearTimeout(timer)
+          reject(new Error(message))
+        }
         // Once the core has taken the row out of Inbox, while the row still slides out.
         const observer = new MutationObserver(() => {
+          if (!row.isConnected && subtitle.textContent === before)
+            return fail('the row finished leaving before the core took it out of Inbox, so the check missed the exit')
           if (subtitle.textContent === before || !row.isConnected) return
           observer.disconnect()
+          clearTimeout(timer)
           document.body.dataset.rowAnimations = '0'
           const animate = Element.prototype.animate
           Element.prototype.animate = function (...args) {
@@ -208,9 +216,10 @@ async function checkLeaveDuringExit(page: Page) {
           allMail.click()
           resolve()
         })
+        const timer = setTimeout(() => fail(`the core did not take the row out of Inbox within ${waitMs} ms`), waitMs)
         observer.observe(document.body, { childList: true, subtree: true, characterData: true })
       }),
-    id,
+    [id, WAIT_MS] as const,
   )
   await page.keyboard.press('e')
   await left

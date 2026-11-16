@@ -10,7 +10,7 @@ export const root = fileURLToPath(new URL('../../../../', import.meta.url))
 export const ARTIFACTS = join(root, 'artifacts/ui')
 
 /** The longest any one wait in a check may take. */
-const WAIT_MS = 15_000
+export const WAIT_MS = 15_000
 
 /** The window sizes every scene is captured at. */
 export const SIZES = {
