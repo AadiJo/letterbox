@@ -132,9 +132,12 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   return { selected, select, act, reply, undo: undoLast }
 }
 
+/** A list's subtitle. People has a shorter one for a narrow window. */
+export type Subtitle = string | { wide: string; narrow: string }
+
 type ScreenProps = {
   title: string
-  subtitle: string
+  subtitle: Subtitle
   chrome: Chrome
   accounts: readonly Account[]
   selection: ReturnType<typeof useSelection>
@@ -142,41 +145,47 @@ type ScreenProps = {
   children: ReactNode
 }
 
-/** The list pane beside the reader pane. */
+/** The list pane beside the reader pane. The toast floats over the reader, never over the rows. */
 export function Screen({ title, subtitle, chrome, accounts, selection, children }: ScreenProps) {
   const thread = useThread(selection.selected)
   return (
     <>
-      <section aria-label={title} className="relative flex min-h-0 w-[384px] flex-none flex-col border-r border-line">
-        <header className="flex h-[72px] flex-none items-center gap-2.5 pr-3 pl-[18px]">
+      <section
+        aria-label={title}
+        className="relative flex min-h-0 w-[340px] flex-none flex-col border-r border-line bg-list wide:w-[372px]"
+      >
+        <header className="top-band gap-2.5 pr-[18px] pl-5" data-field="list-head">
           <button
             type="button"
             aria-label="Show the sidebar"
             onClick={chrome.onToggleSidebar}
-            className="inline-flex size-7 items-center justify-center rounded-md text-fg2 hover:bg-hover wide:hidden"
+            className="-ml-1.5 inline-flex size-[30px] items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg wide:hidden"
           >
             <PanelLeft className="size-4" strokeWidth={1.75} aria-hidden />
           </button>
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] leading-[1.2] font-semibold">{title}</h2>
-            <p className="truncate text-xs text-muted" data-field="subtitle">
-              {subtitle}
+            <h2 className="cap-top text-head font-semibold tracking-[-0.01em]" data-field="list-title">
+              {title}
+            </h2>
+            <p className="mt-1 truncate text-meta text-muted" data-field="subtitle">
+              {typeof subtitle === 'string' ? (
+                subtitle
+              ) : (
+                <>
+                  <span className="wide:hidden">{subtitle.narrow}</span>
+                  <span className="hidden wide:inline">{subtitle.wide}</span>
+                </>
+              )}
             </p>
           </div>
         </header>
         <SyncStrip accounts={accounts} />
         {children}
-        <Toast onUndo={selection.undo} />
       </section>
-      <section aria-label="Reader" className="flex min-w-0 flex-1 flex-col">
-        <Toolbar
-          thread={thread}
-          mail={chrome.mail}
-          onAct={selection.act}
-          onReply={selection.reply}
-          search={chrome.search}
-        />
-        <Reader id={selection.selected} mailboxes={chrome.mail.mailboxes} />
+      <section aria-label="Reader" className="relative flex min-w-0 flex-1 flex-col bg-reader">
+        <Toolbar thread={thread} mail={chrome.mail} onAct={selection.act} search={chrome.search} />
+        <Reader id={selection.selected} mail={chrome.mail} />
+        <Toast onUndo={selection.undo} />
       </section>
     </>
   )
@@ -192,19 +201,19 @@ function SyncStrip({ accounts }: { accounts: readonly Account[] }) {
   const totals = syncing.map((status) => status.total)
   const total = totals.every((value) => value !== null) ? totals.reduce((sum, value) => sum + value, 0) : null
   return (
-    <div role="status" aria-label="Sync" className="flex flex-col gap-1.5 px-[18px] pt-0.5 pb-3">
-      <div className="flex justify-between text-xs text-fg2">
+    <div role="status" aria-label="Sync" className="flex flex-col gap-1.5 px-5 pt-0.5 pb-3">
+      <div className="flex justify-between text-meta text-fg2">
         <b className="font-medium text-fg">Syncing older mail</b>
         <span className="tabular-nums" data-field="sync-count">
           {total === null ? `${count.format(done)} messages so far` : `${count.format(done)} of ${count.format(total)}`}
         </span>
       </div>
       {total !== null && total > 0 && (
-        <div className="h-[3px] overflow-hidden rounded-sm bg-line2">
+        <div className="h-[3px] overflow-hidden rounded-sm bg-pill">
           <div className="h-full bg-blue" style={{ width: `${Math.min(100, (done / total) * 100)}%` }} />
         </div>
       )}
-      <p className="text-xs text-muted">Newest mail first. You can read it now.</p>
+      <p className="text-meta text-muted">Newest mail first. You can read it now.</p>
     </div>
   )
 }

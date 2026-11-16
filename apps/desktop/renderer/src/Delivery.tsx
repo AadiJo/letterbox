@@ -10,7 +10,7 @@ import { editAndSendAgain, REFUSALS } from './sending.ts'
 export function DeliveryMark({ delivery }: { delivery: Exclude<Delivery, { state: 'failed' }> }) {
   return (
     <span
-      className="ml-auto inline-flex items-center gap-1.5 text-[12.5px] whitespace-nowrap text-fg2 tabular-nums"
+      className="ml-auto inline-flex items-center gap-1.5 self-center text-meta whitespace-nowrap text-fg2 tabular-nums"
       data-field="delivery"
     >
       <Clock className="size-3.5" strokeWidth={1.75} aria-hidden />
@@ -42,17 +42,17 @@ export function NotSent({
     <div
       role="alert"
       data-field="not-sent"
-      className="mb-3.5 ml-6 flex items-center gap-3 rounded-[10px] border border-red/35 bg-red/[0.07] py-2 pr-2 pl-3"
+      className="mt-4 flex items-center gap-3 rounded-[10px] bg-red/[0.07] py-2 pr-2 pl-3 inset-ring inset-ring-red/35"
     >
       <Icon className="size-4 flex-none text-red" strokeWidth={2} aria-hidden />
-      <p className="min-w-0 flex-1 text-[13px] leading-[1.4] text-fg2">
+      <p className="min-w-0 flex-1 text-row text-fg2">
         <b className="font-semibold text-fg">{unsure ? 'May not have been sent.' : 'Not sent.'}</b>{' '}
         {unsure ? 'Check Sent before sending again.' : REFUSALS[delivery.reason]}
       </p>
       <button
         type="button"
         onClick={() => editAndSendAgain(thread, message)}
-        className="inline-flex h-7 flex-none items-center rounded-[7px] border border-key bg-raised px-2.5 text-[12.5px] font-medium text-fg hover:bg-hover"
+        className="inline-flex h-7 flex-none items-center rounded-lg px-2.5 text-row font-medium text-fg shadow-outline hover:bg-hover"
       >
         Edit and send again
       </button>

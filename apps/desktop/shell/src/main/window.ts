@@ -12,15 +12,14 @@ const SCHEME = 'app'
 const HOST = 'renderer'
 
 /** The window's colour before the page paints: the design's window background. */
-const BACKGROUND = '#141415'
+const BACKGROUND = '#0f0f11'
 
 /**
- * Where macOS draws the traffic lights: in the top bar of the inset sidebar. The sidebar sits
- * 8px in from the window edge with a 1px border, and its top bar is 36px tall with 14px of
- * padding (the design's .side and .side .top). So 8 + 1 + 14 across, and the top bar's
- * middle (8 + 1 + 18) less half the buttons' 14px down.
+ * Where macOS draws the traffic lights: in the sidebar's top band, on the line every pane's
+ * first element starts on, 36px down (the renderer's `top-band` in styles.css), and 18px
+ * across, the sidebar's own left gutter.
  */
-const TRAFFIC_LIGHTS = { x: 23, y: 30 }
+const TRAFFIC_LIGHTS = { x: 18, y: 36 }
 
 /** The policy for a built renderer: its own files only, nothing remote, no inline script. */
 const CSP_BUILT = [

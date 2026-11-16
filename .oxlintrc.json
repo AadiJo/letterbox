@@ -59,6 +59,10 @@
       "rules": { "letterbox/renderer-clock": "error" }
     },
     {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-design-tokens/**"],
+      "rules": { "letterbox/renderer-design-tokens": "error" }
+    },
+    {
       "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-motion/**"],
       "rules": { "letterbox/renderer-motion": "error" }
     },

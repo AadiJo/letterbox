@@ -5,13 +5,13 @@ import type { SeedMessage } from '@letterbox/sim-provider/contract'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import type { Browser, Page } from 'playwright'
 import { join } from 'node:path'
-import { appErrors, ARTIFACTS, capture, equal, openPage, SIZES } from './record.ts'
+import { checkC2, MUTED } from './c2.ts'
+import { appErrors, ARTIFACTS, capture, captureC2, equal, openPage, ROW_HEIGHT, SIZES } from './record.ts'
 
 const seed = devSeeds['people-first']
 const DAY = 86_400_000
 const NOW = Date.parse(seed.now)
 const AMBER = 'rgb(255, 144, 94)'
-const MUTED = 'rgb(165, 165, 165)'
 const DELIVER = 3
 
 /** The seed's conversations whose turn is `turn`, from the last 30 days, newest first. */
@@ -142,11 +142,22 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     true,
     'the reader shows the newest message body',
   )
+  await checkC2(page)
+  // The C2 screens, at twice their pixels like the mocks, Flag's tooltip showing as in the mock.
+  await captureC2(page, 'people-1440', () => page.getByRole('button', { name: 'Flag', exact: true }).hover())
+  await page.mouse.move(0, 0)
+  await captureC2(page, 'people-1920')
+  await captureC2(page, 'narrow-1024')
   await capture(page, 'people')
 
   // The narrow window: the sidebar folds behind a toggle, and search is an icon.
   await page.setViewportSize(SIZES.narrow)
   equal(await sidebar(page).isVisible(), false, 'narrow: the sidebar is hidden')
+  equal(
+    await page.locator('[data-field="subtitle"]').innerText(),
+    `${mine.length} yours · ${fresh('theirs').length} waiting`,
+    'narrow: the People subtitle is short',
+  )
   equal(await page.getByRole('search').isVisible(), false, 'narrow: the search field is folded')
   equal(await page.getByRole('button', { name: 'Search', exact: true }).isVisible(), true, 'narrow: search is an icon')
   await page.getByRole('button', { name: 'Show the sidebar' }).click()
@@ -260,7 +271,7 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   const open = await page.locator('[data-field="reader-subject"]').textContent()
   await page.keyboard.press('s')
   await page.locator('[aria-label="Unflag"]').waitFor()
-  const away = 400 * 73
+  const away = 400 * ROW_HEIGHT
   await page.locator('[data-list="mail"]').evaluate((list, top) => list.scrollTo({ top }), away)
   await page.waitForFunction(
     (top) =>

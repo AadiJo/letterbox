@@ -1,10 +1,22 @@
 // The UI check for the reader's layout and the done states, over a `people-first` dev host
-// of its own: the reader fills a 1920 px pane, Done slides the row out with an undo toast and
+// of its own: the reading column stays by the list at 1920 px, Done slides the row out with an undo toast and
 // z brings it back, archive and Trash say what they did with nothing to undo, a late answer
 // or a scroll moves no row it should not, an empty Your turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
-import { appErrors, capture, equal, openPage, type Relay, SIZES, WAIT_MS } from './record.ts'
+import {
+  appErrors,
+  boxOf,
+  capture,
+  captureC2,
+  equal,
+  openPage,
+  overlaps,
+  type Relay,
+  ROW_HEIGHT,
+  SIZES,
+  WAIT_MS,
+} from './record.ts'
 
 const yourTurn = (page: Page) => page.locator('[role="listbox"][aria-label="Your turn"] [role="option"]')
 const rowIds = (page: Page) => yourTurn(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
@@ -37,61 +49,69 @@ const rowWhenCountDrops = (page: Page, id: string) =>
     id,
   )
 
-/** At 1920 px the reader fills its pane: toolbar and messages 40 px in from each side, plain text capped near 72ch. */
+/**
+ * At 1920 px the reading column keeps its width but stays within 64 px of the list, and the
+ * toolbar, subject, messages and reply bar all start on its edge. Plain text is capped at 62ch.
+ */
 async function checkReaderLayout(page: Page) {
   await page.setViewportSize(SIZES.full)
   await yourTurn(page).first().click()
-  await page.locator('[data-message="open"] [data-field="body"] p').first().waitFor()
-  const box = async (selector: string) => {
-    const found = await page.locator(selector).first().boundingBox()
-    if (!found) throw new Error(`the reader shows no ${selector}`)
-    return { left: found.x, right: found.x + found.width, width: found.width }
+  const paragraph = '[data-message="open"] [data-field="body"] p'
+  await page.locator(paragraph).first().waitFor()
+  const list = await boxOf(page, 'section[aria-label="People"]')
+  const subject = await boxOf(page, '[data-field="reader-subject"]')
+  const edges = {
+    toolbar: (await boxOf(page, 'section[aria-label="Reader"] button[aria-keyshortcuts="d"]')).left,
+    folded: (await boxOf(page, '[data-message="folded"]')).left,
+    open: (await boxOf(page, '[data-message="open"]')).left,
+    body: (await boxOf(page, paragraph)).left,
+    reply: (await boxOf(page, '[data-field="reply-bar"]')).left,
   }
-  const pane = await box('section[aria-label="Reader"]')
-  const paragraph = await box('[data-message="open"] [data-field="body"] p')
-  // 72ch in the paragraph's own font.
-  const measure = await page
-    .locator('[data-message="open"] [data-field="body"] p')
+  equal(
+    subject.left - list.right <= 64,
+    true,
+    `1920 px: the reading column starts ${subject.left - list.right} px from the list, at most 64`,
+  )
+  equal(
+    Object.entries(edges).filter(([, left]) => Math.abs(left - subject.left) > 0.5),
+    [],
+    "1920 px: the toolbar, messages, body and reply bar start on the subject's edge",
+  )
+  const search = await boxOf(page, 'section[aria-label="Reader"] form[role="search"]')
+  equal(Math.round(search.right - subject.left), 720, "1920 px: search ends on the 720 px column's right edge")
+  // 62ch in the paragraph's own font.
+  const capped = await page
+    .locator(paragraph)
     .first()
     .evaluate((element) => {
       const ruler = document.createElement('span')
-      ruler.style.cssText = 'position:absolute;width:72ch;height:0'
+      ruler.style.cssText = 'position:absolute;width:62ch;height:0'
       element.append(ruler)
-      const width = ruler.getBoundingClientRect().width
+      const measure = ruler.getBoundingClientRect().width
       ruler.remove()
-      return width
+      return Math.abs(element.getBoundingClientRect().width - measure) < 1
     })
-  const scrollbar = await page
-    .locator('article[aria-label="Conversation"] > div')
-    .evaluate((element) => element.getBoundingClientRect().width - element.clientWidth)
-  const layout = {
-    leftGap: (await box('section[aria-label="Reader"] [role="group"][aria-label="Reply"]')).left - pane.left,
-    searchGap: pane.right - (await box('section[aria-label="Reader"] form[role="search"]')).right,
-    timeGap: pane.right - (await box('[data-message="open"] [data-field="message-time"]')).right,
-    scrollbar,
-    paragraph: paragraph.width,
-    paragraphLeft: paragraph.left,
-    bodyLeft: (await box('[data-message="open"] [data-field="body"]')).left,
-    measure,
-  }
-  equal(
-    layout.leftGap <= 40,
-    true,
-    `1920 px: Reply, the toolbar's first control, sits at the pane's left edge (${layout.leftGap} px in)`,
-  )
-  equal(layout.searchGap <= 40, true, `1920 px: search sits at the pane's right edge (${layout.searchGap} px in)`)
-  equal(
-    layout.timeGap <= 40 + layout.scrollbar,
-    true,
-    `1920 px: the message time lines up with the same right margin (${layout.timeGap} px in)`,
-  )
-  equal(
-    Math.abs(layout.paragraph - layout.measure) < 1,
-    true,
-    `1920 px: a plain-text paragraph is capped at 72ch (${Math.round(layout.paragraph)} px of ${Math.round(layout.measure)} px)`,
-  )
-  equal(layout.paragraphLeft, layout.bodyLeft, '1920 px: the capped paragraph stays left-aligned')
+  equal(capped, true, '1920 px: a plain-text paragraph is capped at 62ch')
   await capture(page, 'reader')
+}
+
+/** Checks the toast floats over the reader and covers no list row, at `size`. */
+async function checkToastClear(page: Page, size: keyof typeof SIZES) {
+  await page.setViewportSize(SIZES[size])
+  const box = await boxOf(page, '[role="status"]:has([data-field="toast"])')
+  const reader = await boxOf(page, 'section[aria-label="Reader"]')
+  const rows = await page.locator('[role="option"]').evaluateAll((found) =>
+    found.map((row) => {
+      const { left, top, right, bottom } = row.getBoundingClientRect()
+      return { left, top, right, bottom }
+    }),
+  )
+  equal(
+    [rows.filter((row) => overlaps(box, row)).length, box.left >= reader.left && box.right <= reader.right],
+    [0, true],
+    `${size}: the toast sits over the reader and covers no list row`,
+  )
+  await page.setViewportSize(SIZES.wide)
 }
 
 /** Done: the row slides out with a toast, the next one opens, and z puts it back, open. */
@@ -116,9 +136,13 @@ async function checkDoneAndUndo(page: Page) {
   equal(await count(page), `${before.length}`, 'z restores the Your turn count')
   equal(await toast(page).count(), 0, 'z takes the toast down')
 
-  // Done again, for the picture.
+  // Done again, for the pictures, once the row has folded away.
   await page.keyboard.press('d')
   await toast(page).waitFor()
+  await page.locator(`[data-row="${first}"]`).waitFor({ state: 'detached' })
+  await checkToastClear(page, 'wide')
+  await checkToastClear(page, 'narrow')
+  await captureC2(page, 'done-1440')
   await capture(page, 'done-toast')
 }
 
@@ -281,7 +305,7 @@ async function checkScrollDuringExit(page: Page) {
   // Once the row starts to slide, scroll ten rows down, then report whether the row is
   // still there when the list first renders the moved window (its top spacer changes).
   const placed = page.locator('[data-list="mail"]').evaluate(
-    (list, leaving) =>
+    (list, [leaving, rowHeight]) =>
       new Promise<boolean>((resolve) => {
         const row = list.querySelector(`[data-row="${leaving}"]`)
         const spacer = list.firstElementChild
@@ -295,11 +319,11 @@ async function checkScrollDuringExit(page: Page) {
             resolve(list.querySelector(`[data-row="${leaving}"]`) !== null)
           })
           observer.observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
-          list.scrollTop += 10 * 73
+          list.scrollTop += 10 * rowHeight
         }
         scroll()
       }),
-    id,
+    [id, ROW_HEIGHT] as const,
   )
   await page.keyboard.press('e')
   equal(await placed, false, 'scrolling during an exit drops the leaving row from the moved window')

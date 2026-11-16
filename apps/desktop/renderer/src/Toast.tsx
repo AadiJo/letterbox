@@ -1,8 +1,9 @@
-// The toast at the bottom of the list pane: what the last action did, and Undo (z) when it
-// can be undone. undo.ts decides what it says and for how long.
+// The toast, raised over the bottom of the reader and never over the list's rows: what the last
+// action did, and Undo (z) when it can be undone. undo.ts decides what it says and for how long.
 
-import { Check, Clock } from 'lucide-react'
+import { CircleCheck, Clock } from 'lucide-react'
 import { useSecondsUntil } from './clock.ts'
+import { Key } from './Key.tsx'
 import { type Notice, UNDO_KEY, useNotice } from './undo.ts'
 
 export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
@@ -13,26 +14,27 @@ export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
       // A new offer is a new toast, so it rises again.
       key={notice.serial}
       role="status"
-      className={`absolute bottom-4 left-1/2 z-10 flex h-[34px] -translate-x-1/2 animate-rise items-center gap-2.5 rounded-[10px] border border-key bg-raised pl-3 ${notice.undo ? 'pr-1.5' : 'pr-3'} text-[12.5px] whitespace-nowrap shadow-[0_8px_24px_rgb(0_0_0/0.5)]`}
+      className={`absolute bottom-6 left-1/2 z-30 flex h-11 -translate-x-1/2 animate-rise items-center gap-2.5 rounded-xl bg-float pl-3.5 ${notice.undo ? 'pr-[7px]' : 'pr-4'} text-row font-medium whitespace-nowrap shadow-float`}
     >
       {notice.label === 'Sending' ? (
-        <Clock className="size-3.5 text-fg2" strokeWidth={2} aria-hidden />
+        <Clock className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
       ) : (
-        <Check className="size-3.5 text-green" strokeWidth={2} aria-hidden />
+        <CircleCheck className="size-[17px] text-green" strokeWidth={2} aria-hidden />
       )}
       <span data-field="toast">{notice.label}</span>
       {notice.label === 'Sending' && <Countdown notice={notice} />}
       {notice.undo && (
-        <button
-          type="button"
-          onClick={() => void onUndo()}
-          className="inline-flex h-6 items-center gap-1.5 rounded-md border border-line2 bg-pill px-2 text-xs font-medium text-fg hover:bg-hover"
-        >
-          Undo
-          <kbd className="rounded border border-key px-[5px] font-mono text-[11px] leading-4 text-faint">
-            {UNDO_KEY.toUpperCase()}
-          </kbd>
-        </button>
+        <>
+          <span aria-hidden className="mx-0.5 h-[18px] w-px bg-hover" />
+          <button
+            type="button"
+            onClick={() => void onUndo()}
+            className="inline-flex h-[30px] items-center gap-2 rounded-lg bg-pill pr-2 pl-2.5 text-fg hover:bg-hover"
+          >
+            Undo
+            <Key>{UNDO_KEY.toUpperCase()}</Key>
+          </button>
+        </>
       )}
     </div>
   )
@@ -41,5 +43,5 @@ export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
 /** The seconds left in a send's undo window, from the time the core gave it. */
 function Countdown({ notice }: { notice: Extract<Notice, { label: 'Sending' }> }) {
   const seconds = useSecondsUntil(notice.until)
-  return <span className="-ml-1 text-muted tabular-nums">in {seconds} s</span>
+  return <span className="-ml-1 font-normal text-muted tabular-nums">in {seconds} s</span>
 }

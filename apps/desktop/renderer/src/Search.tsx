@@ -4,6 +4,7 @@
 import { Search as SearchIcon } from 'lucide-react'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
+import { Key } from './Key.tsx'
 
 type Props = {
   /** The search that is showing, or '' for none. */
@@ -39,9 +40,9 @@ export function Search({ query, onSearch }: Props) {
         type="button"
         aria-label="Search"
         onClick={focus}
-        className={`size-7 items-center justify-center rounded-md text-fg2 hover:bg-hover wide:hidden ${open ? 'hidden' : 'inline-flex'}`}
+        className={`size-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg wide:hidden ${open ? 'hidden' : 'inline-flex'}`}
       >
-        <SearchIcon className="size-4" strokeWidth={1.75} aria-hidden />
+        <SearchIcon className="size-[17px]" strokeWidth={1.75} aria-hidden />
       </button>
       <form
         role="search"
@@ -49,7 +50,8 @@ export function Search({ query, onSearch }: Props) {
           event.preventDefault()
           onSearch(draft.trim())
         }}
-        className={`h-7 w-[220px] items-center gap-[7px] rounded-[7px] border border-line bg-raised px-2.5 text-[12.5px] text-muted wide:flex ${open ? 'flex' : 'hidden'}`}
+        // Unboxed until it has focus, when it sinks into a well like the reply field.
+        className={`h-8 w-[188px] items-center gap-2 rounded-lg pr-1 pl-2 text-row text-muted focus-within:bg-well focus-within:shadow-well wide:flex ${open ? 'flex' : 'hidden'}`}
       >
         <SearchIcon className="size-4 flex-none" strokeWidth={1.75} aria-hidden />
         <input
@@ -67,7 +69,7 @@ export function Search({ query, onSearch }: Props) {
           }}
           className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-muted"
         />
-        <kbd className="rounded border border-key px-[5px] font-mono text-[11px] leading-4 text-faint">⌘K</kbd>
+        <Key>⌘K</Key>
       </form>
     </>
   )

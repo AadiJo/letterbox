@@ -17,7 +17,7 @@ import type { Browser, Page } from 'playwright'
 import { logChildrenTo, stopChildren } from '../children.ts'
 import { buildCore, type Paths } from '../core.ts'
 import { startServer } from '../server.ts'
-import { appErrors, capture, equal, openPage, root } from './record.ts'
+import { appErrors, capture, captureC2, equal, openPage, root } from './record.ts'
 
 const seed = devSeeds['people-first']
 const STATE = join(root, '.letterbox/ui-check-reply')
@@ -27,12 +27,12 @@ const ME = seed.seed.address
 const GROUP = {
   key: 'group-1',
   mailboxes: ['inbox'],
-  from: { name: 'Maya Lindqvist', address: 'maya@lindqvist.example' },
+  from: { name: 'Maya Lindqvist', address: 'maya@haldenstudio.test' },
   to: [
     { name: 'Robin Vale', address: ME },
-    { name: 'Tomas Okafor', address: 'tomas.okafor@fernway.example' },
+    { name: 'Tomas Okafor', address: 'tomas.okafor@fernmail.test' },
   ],
-  cc: [{ name: 'Priya Raman', address: 'priya@ramanstudio.example' }],
+  cc: [{ name: 'Priya Raman', address: 'priya@ramanpress.test' }],
   subject: 'Picnic on Sunday',
   text: 'Hi all, can each of you bring something on Sunday?',
   sentAt: new Date(Date.parse(seed.now) - 10 * 60_000).toISOString(),
@@ -40,6 +40,7 @@ const GROUP = {
 
 const dock = (page: Page) => page.locator('section[aria-label="Reply"]')
 const bar = (page: Page) => page.locator('[data-field="reply-bar"]')
+const replyAll = (page: Page) => page.getByRole('button', { name: 'Reply all', exact: true })
 const body = (page: Page) => dock(page).getByRole('textbox', { name: 'Message' })
 const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
 const reason = (page: Page) => page.locator('[data-field="reason"]').textContent()
@@ -94,22 +95,45 @@ export async function checkReply(browser: Browser) {
     ] as const)
     await yourTurn(page).first().waitFor()
 
-    // R opens the dock on the open conversation, to the person who wrote last, and the cursor is in the body.
+    // Maya wrote to the user alone, so the bar offers Reply and no Reply all.
     await open(page, 'Notes from Thursday')
+    equal(await replyAll(page).count(), 0, 'a message to the user alone offers no Reply all')
+
+    // R opens the dock on the open conversation, to the person who wrote last, and the cursor is in the body.
     await page.keyboard.press('r')
     await dock(page).waitFor()
-    equal(await chips(page, 'to'), ['Maya Lindqvist <maya@lindqvist.example>'], 'R fills To with the last sender')
+    equal(await chips(page, 'to'), ['Maya Lindqvist <maya@haldenstudio.test>'], 'R fills To with the last sender')
     equal(await dock(page).locator('[data-address-line="cc"]').count(), 0, 'Reply has no Cc line to show')
     equal(await body(page).evaluate((element) => element === document.activeElement), true, 'the body has focus')
-    const share = await page.evaluate(() => {
-      const reply = document.querySelector('section[aria-label="Reply"]')
-      const pane = reply?.closest('article')
-      return reply && pane ? reply.getBoundingClientRect().height / pane.getBoundingClientRect().height : 0
-    })
-    equal(share > 0.35 && share < 0.45, true, `the dock takes about 40% of the reader (${Math.round(share * 100)}%)`)
+    equal(
+      await page.locator('[class*="lucide-paperclip"], [data-field="attach"]').count(),
+      0,
+      'the editor has no attachment control',
+    )
+    /** The dock's share of the reader, and the editor's height, as the text grows. */
+    const sizes = () =>
+      page.evaluate(() => {
+        const reply = document.querySelector('section[aria-label="Reply"]')
+        const pane = reply?.closest('article')
+        const editor = reply?.querySelector('textarea')
+        if (!reply || !pane || !editor) throw new Error('the reply editor is not in the reader')
+        return {
+          share: reply.getBoundingClientRect().height / pane.getBoundingClientRect().height,
+          editor: editor.getBoundingClientRect().height,
+        }
+      })
+    const empty = await sizes()
+    equal(Math.round(empty.editor), 120, 'an empty editor is 120 px tall')
     const mayaText =
-      "Hi Maya,\n\nThe 22nd works for me, let's put that in the summary. You're right about the cover, it was counted twice, so the total drops by 140.\n\nPlease take the venue. I hadn't started anything there.\n\nRobin"
+      'Hi Maya,\n\nNorthfield confirmed the week of the 24th this morning. I’ll forward you their note so you have it in writing.\n\n12 interviews is fine. Let’s keep the budget where it is and revisit after the first six.'
     await body(page).fill(mayaText)
+    const written = await sizes()
+    equal(written.editor > empty.editor, true, `the editor grows with its text (${Math.round(written.editor)} px)`)
+    await body(page).fill(`${mayaText}\n\n${'More to say.\n'.repeat(40)}`)
+    const long = await sizes()
+    equal(long.share <= 0.401, true, `a long reply stops at 40% of the reader (${Math.round(long.share * 100)}%)`)
+    await body(page).fill(mayaText)
+    await captureC2(page, 'reply-1440')
     await capture(page, 'reply-dock')
 
     // Esc folds it to a bar and keeps the draft.
@@ -119,28 +143,33 @@ export async function checkReply(browser: Browser) {
     equal((await bar(page).textContent())?.startsWith('Reply to MayaHi Maya'), true, 'the bar keeps the draft')
 
     // Another conversation keeps a draft of its own.
-    await open(page, 'Can you sign the lease addendum?')
-    equal(await bar(page).count(), 0, 'a conversation with no draft shows no bar')
+    await open(page, 'Lease addendum for 4B')
+    equal(await bar(page).textContent(), 'Reply to TomasR', 'a conversation with no draft offers an empty reply')
     await page.keyboard.press('r')
     await body(page).fill('Signed, sending it back today.')
     await open(page, 'Notes from Thursday')
     await bar(page).click()
     equal(await body(page).inputValue(), mayaText, "Maya's draft is still Maya's")
-    await open(page, 'Can you sign the lease addendum?')
+    await open(page, 'Lease addendum for 4B')
     equal(await body(page).inputValue(), 'Signed, sending it back today.', "Tomas's draft is still Tomas's")
     await dock(page).getByRole('button', { name: 'Discard' }).click()
-    equal([await dock(page).count(), await bar(page).count()], [0, 0], 'Discard throws the draft away')
+    equal(
+      [await dock(page).count(), await bar(page).textContent()],
+      [0, 'Reply to TomasR'],
+      'Discard throws the draft away',
+    )
 
     // Shift+R copies everyone else on the message, never the user.
     await page.evaluate(() => window.letterboxDev?.deliver(1))
     await nav(page, 'All mail').click()
     await open(page, 'Picnic on Sunday')
+    equal(await replyAll(page).count(), 1, 'a message to others too offers Reply all')
     await page.keyboard.press('Shift+R')
     await dock(page).waitFor()
-    equal(await chips(page, 'to'), ['Maya Lindqvist <maya@lindqvist.example>'], 'Reply all sends to the sender')
+    equal(await chips(page, 'to'), ['Maya Lindqvist <maya@haldenstudio.test>'], 'Reply all sends to the sender')
     equal(
       await chips(page, 'cc'),
-      ['Tomas Okafor <tomas.okafor@fernway.example>', 'Priya Raman <priya@ramanstudio.example>'],
+      ['Tomas Okafor <tomas.okafor@fernmail.test>', 'Priya Raman <priya@ramanpress.test>'],
       'Reply all copies the others, and not me',
     )
 
@@ -203,7 +232,9 @@ export async function checkReply(browser: Browser) {
     await nav(page, 'People').waitFor()
     await page.locator('[role="listbox"][aria-label="Waiting on others"] [role="option"]').first().waitFor()
     await open(page, 'Notes from Thursday')
-    const delivered = page.locator('[data-message="open"][data-delivery="delivered"]', { hasText: 'The 22nd works' })
+    const delivered = page.locator('[data-message="open"][data-delivery="delivered"]', {
+      hasText: 'Northfield confirmed',
+    })
     await delivered.waitFor()
     equal(await page.locator('[data-field="delivery"]').count(), 0, 'past its window the reply looks like any other')
     equal([mailbox.calls().send, mailbox.sent().length], [1, 1], 'the provider got it exactly once')
@@ -211,7 +242,7 @@ export async function checkReply(browser: Browser) {
 
     // A send the provider refuses says so on the message, and can be written again.
     mailbox.refuseNextSend('refused-by-provider')
-    await open(page, 'Draft cover for the zine')
+    await open(page, 'Cover draft for issue 12')
     await page.keyboard.press('r')
     await body(page).fill('Here is the cover with the new title.')
     await page.keyboard.press('Control+Enter')
@@ -227,7 +258,7 @@ export async function checkReply(browser: Browser) {
     await dock(page).waitFor()
     equal(
       [await body(page).inputValue(), await chips(page, 'to')],
-      ['Here is the cover with the new title.', ['Priya Raman <priya@ramanstudio.example>']],
+      ['Here is the cover with the new title.', ['Priya Raman <priya@ramanpress.test>']],
       'Edit and send again opens its text, to the same person',
     )
     equal(mailbox.sent().length, 1, 'the refused reply left nothing at the provider')
