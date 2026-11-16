@@ -226,8 +226,7 @@ impl GmailAdapter {
 
     /// Changes many messages' labels. The reference does not say what batchModify does with
     /// an id Gmail no longer has, so on a 404 each message is modified alone (rule 5).
-    /// Returns how many of `ids` still existed.
-    async fn modify_many(&self, ids: &[String], add: &[String], remove: &[String]) -> Result<usize, CallError> {
+    async fn modify_many(&self, ids: &[String], add: &[String], remove: &[String]) -> Progress {
         let mut found = 0;
         for chunk in ids.chunks(BATCH_LIMIT) {
             let body = Modify {
@@ -242,18 +241,29 @@ impl GmailAdapter {
                         match self.modify_one(id, add, remove).await {
                             Ok(()) => found += 1,
                             Err(error) if error.is_not_found() => {}
-                            Err(error) => return Err(error),
+                            Err(error) => {
+                                return Progress {
+                                    found,
+                                    stopped: Some(error),
+                                };
+                            }
                         }
                     }
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    return Progress {
+                        found,
+                        stopped: Some(error),
+                    };
+                }
             }
         }
-        Ok(found)
+        Progress { found, stopped: None }
     }
 
     async fn apply_mutation(&self, mutation: Mutation) -> Outcome<ApplyResult> {
         let refused = |reason| Ok(ApplyResult::Refused { reason });
+        let unconfirmed = |failure| Ok(ApplyResult::Unconfirmed { failure });
         if !self.modify {
             return refused(ProviderRefusal::NotPermitted);
         }
@@ -267,32 +277,64 @@ impl GmailAdapter {
             return refused(ProviderRefusal::NotSupported);
         }
         // Each step stays within the 100-label limit. A step that finds no message, or fails, ends it.
-        let mut found = Ok(0);
+        let mut last = Progress {
+            found: 0,
+            stopped: None,
+        };
+        // True once a step or a chunk changed a message: Gmail then holds part of the mutation.
+        let mut landed = false;
         for (add, remove) in labels::in_steps(&add, &remove) {
-            found = match ids.as_slice() {
-                [id] => self.modify_one(id, add, remove).await.map(|()| 1),
+            last = match ids.as_slice() {
+                [id] => match self.modify_one(id, add, remove).await {
+                    Ok(()) => Progress {
+                        found: 1,
+                        stopped: None,
+                    },
+                    Err(error) => Progress {
+                        found: 0,
+                        stopped: Some(error),
+                    },
+                },
                 _ => self.modify_many(&ids, add, remove).await,
             };
-            if !matches!(found, Ok(count) if count > 0) {
+            landed |= last.found > 0;
+            if last.stopped.is_some() || last.found == 0 {
                 break;
             }
         }
-        match found {
-            Ok(0) => refused(ProviderRefusal::UnknownTarget),
-            Ok(_) => Ok(ApplyResult::Applied { moved: Vec::new() }),
-            // Setting labels again does no harm, so a lost answer is offline here.
-            Err(error @ (CallError::Failure(_) | CallError::Lost | CallError::Unreadable)) => Err(error.failure()),
+        let Some(error) = last.stopped else {
+            return match last.found {
+                0 => refused(ProviderRefusal::UnknownTarget),
+                _ => Ok(ApplyResult::Applied { moved: Vec::new() }),
+            };
+        };
+        let failure = error.failure();
+        match error {
             // Over a usage limit, not refused: the core keeps the change and tries it again later.
-            Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),
-            Err(CallError::Status { status, .. }) => match status {
-                StatusCode::NOT_FOUND => refused(ProviderRefusal::UnknownTarget),
-                StatusCode::BAD_REQUEST => refused(ProviderRefusal::RefusedByProvider),
-                StatusCode::CONFLICT => refused(ProviderRefusal::Conflict),
-                StatusCode::FORBIDDEN => refused(ProviderRefusal::NotPermitted),
-                _ => Err(AdapterFailure::ProviderError),
+            _ if error.is_usage_limit() => {}
+            CallError::Status { status, .. } => match status {
+                StatusCode::NOT_FOUND => return refused(ProviderRefusal::UnknownTarget),
+                StatusCode::BAD_REQUEST => return refused(ProviderRefusal::RefusedByProvider),
+                StatusCode::CONFLICT => return refused(ProviderRefusal::Conflict),
+                StatusCode::FORBIDDEN => return refused(ProviderRefusal::NotPermitted),
+                // Gmail failed while it handled the call, so it may have acted on it.
+                _ if status.is_server_error() => return unconfirmed(failure),
+                _ => {}
             },
+            // The request went out, and the answer was lost or not read whole (adapter rule 11).
+            CallError::Lost | CallError::Unreadable => return unconfirmed(failure),
+            CallError::Failure(_) => {}
         }
+        // This call surely did not reach Gmail, or Gmail turned it away. Earlier ones may have.
+        if landed { unconfirmed(failure) } else { Err(failure) }
     }
+}
+
+/// How far changing some messages' labels got: how many it changed, and the error that
+/// stopped it, if one did.
+struct Progress {
+    found: usize,
+    stopped: Option<CallError>,
 }
 
 impl Adapter for GmailAdapter {

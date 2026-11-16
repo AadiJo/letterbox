@@ -149,4 +149,11 @@ scenario('an undo of a change the provider refused is refused as a conflict', as
   const undo = await core.command({ kind: 'undo', change: flag })
   t.equal(undo.kind === 'rejected' && undo.reason, 'conflict', 'the undo is refused: the change is rolled back already')
   t.equal(await targetRow(core), row, 'the row is as it was')
+  // Another client flags it, so it holds what the refused flag asked for. The undo would take
+  // that client's flag off, so it is still refused.
+  box.setFlags('review', { flagged: true })
+  await sync(core)
+  const again = await core.command({ kind: 'undo', change: flag })
+  t.equal(again.kind === 'rejected' && again.reason, 'conflict', 'it is refused once another client flagged it too')
+  t.equal(truthOf(box, 'review')?.flagged, true, 'the other client’s flag stays')
 })

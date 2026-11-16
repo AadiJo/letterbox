@@ -10,7 +10,7 @@ use letterbox_protocol::{
 };
 
 use crate::Inner;
-use crate::changes::{Edit, resolve, targets};
+use crate::changes::{Edit, mode_of, resolve, targets};
 use crate::effect::{Effect, MessageEffect, TurnEffect};
 use crate::world::{ChangeOutcome, ChangeRecord, Op, ThreadRecord, put_change, put_thread};
 
@@ -23,6 +23,15 @@ impl Inner {
         self.send(CoreMessage::Accepted {
             change: change.clone(),
             rev,
+        });
+    }
+
+    /// Refuses the command behind `change`, which leaves no trace.
+    pub(crate) fn reject(&self, change: ChangeId, reason: Refusal) {
+        self.send(CoreMessage::Rejected {
+            change,
+            reason,
+            conflict: None,
         });
     }
 
@@ -53,7 +62,7 @@ impl Inner {
                     let sets: Vec<_> = target.thread_ids.into_iter().map(|id| (id, turn.fixed())).collect();
                     self.set_turns(change, target.account_id, &sets, None)
                 }
-                Err(reason) => self.send(CoreMessage::Rejected { change, reason }),
+                Err(reason) => self.reject(change, reason),
             };
         }
 
@@ -62,16 +71,13 @@ impl Inner {
             return match &command {
                 Command::Send { draft } => self.send_draft(change, draft),
                 Command::Undo { change: target } => self.undo(change, target),
-                _ => self.send(CoreMessage::Rejected {
-                    change,
-                    reason: Refusal::NotSupported,
-                }),
+                _ => self.reject(change, Refusal::NotSupported),
             };
         };
         let resolved = resolve(&self.state.borrow().world, thread_ids, edit);
         match resolved {
             Ok((account_id, op)) => self.accept_messages(change, account_id, vec![op], None),
-            Err(reason) => self.send(CoreMessage::Rejected { change, reason }),
+            Err(reason) => self.reject(change, reason),
         }
     }
 
@@ -125,7 +131,7 @@ impl Inner {
     }
 
     /// Accepts a change to flags or mailboxes and queues a pass to carry it to the provider.
-    /// One with no Ops, as an undo of a change that altered nothing, is done at once.
+    /// One that alters nothing, as an undo of a change that altered nothing, is done at once.
     /// `undoes` names the change it reverses, for an undo.
     pub(crate) fn accept_messages(
         self: &Rc<Self>,
@@ -134,8 +140,16 @@ impl Inner {
         ops: Vec<Op>,
         undoes: Option<ChangeId>,
     ) {
-        let nothing = ops.is_empty();
-        let effect = MessageEffect::new(&self.state.borrow().world, ops, undoes);
+        let effect = {
+            let state = self.state.borrow();
+            let account = state.world.accounts.get(&account_id);
+            account.map(|account| Effect::Messages(MessageEffect::new(&state.world, mode_of(account), &ops, undoes)))
+        };
+        let Some(effect) = effect else {
+            return self.reject(change, Refusal::UnknownTarget);
+        };
+        // A change that alters nothing does nothing (effect.rs), so it is done at once.
+        let nothing = effect.ops().is_empty();
         let rev = self.commit_then(
             |world, tx, at| {
                 let done = ChangeOutcome {
@@ -148,7 +162,7 @@ impl Inner {
                     ChangeRecord {
                         id: change.clone(),
                         account_id: account_id.clone(),
-                        effect: Effect::Messages(effect),
+                        effect,
                         accepted_rev: at,
                         outcome: nothing.then_some(done),
                     },

@@ -12,7 +12,7 @@ use letterbox_protocol::{AccountId, Command, MailboxId, MessageId, Refusal, Role
 
 use crate::adapter::{MailboxRef, Mutation};
 use crate::maps::{HashMap, IndexMap};
-use crate::world::{AccountRecord, MailboxMode, MessageRecord, MessageState, Op, World};
+use crate::world::{AccountRecord, MailboxMode, MailboxRecord, MessageRecord, MessageState, Op, World};
 
 /// Lays one Op over a message's state. Returns the state unchanged if the Op does not name the message.
 pub fn overlay(state: &MessageState, op: &Op, id: &MessageId) -> MessageState {
@@ -225,9 +225,15 @@ pub fn resolve(world: &World, thread_ids: &[ThreadId], edit: Edit<'_>) -> Result
         }
         Edit::Trash => {
             let trash = with_role(Role::Trash).ok_or(Refusal::NotSupported)?;
+            // With labels the provider sets Sent and Drafts itself, and Gmail takes neither off
+            // a message. A trash that took them off would record what never happens, and its
+            // undo would read the provider keeping them as a change made since (undo.rs).
+            let provider_set = |mailbox: &MailboxRecord| {
+                mode == MailboxMode::Sets && matches!(mailbox.role, Some(Role::Sent | Role::Drafts))
+            };
             let others = own
                 .iter()
-                .filter(|mailbox| mailbox.id != trash)
+                .filter(|mailbox| mailbox.id != trash && !provider_set(mailbox))
                 .map(|mailbox| mailbox.id.clone())
                 .collect();
             mailboxes(vec![trash], others)

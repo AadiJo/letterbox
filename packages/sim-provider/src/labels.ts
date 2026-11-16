@@ -59,7 +59,7 @@ export const labelsEngine = (store: Store): Engine => {
     },
     flagsChanged: (message) => void log.push({ kind: 'updated', ref: message.ref }),
     expunged: (message) => void log.push({ kind: 'removed', ref: message.ref }),
-    mailboxCreated: () => void log.push({ kind: 'mailbox' }),
+    mailboxesChanged: () => void log.push({ kind: 'mailbox' }),
     expire: () => {
       generation += 1
       log = []

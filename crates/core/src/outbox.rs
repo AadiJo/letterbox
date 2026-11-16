@@ -103,7 +103,7 @@ impl Inner {
         let prepared = prepare(&self.state.borrow().world, draft, &now, self.env.random());
         let prepared = match prepared {
             Ok(prepared) => prepared,
-            Err(reason) => return self.send(CoreMessage::Rejected { change, reason }),
+            Err(reason) => return self.reject(change, reason),
         };
         let window = TimeDelta::from_std(self.undo_window).unwrap_or(TimeDelta::MAX);
         let until = iso(parse(&now).checked_add_signed(window).unwrap_or(parse(&now)));
@@ -156,7 +156,7 @@ impl Inner {
     pub(crate) fn undo_send(self: &Rc<Self>, change: ChangeId, record: ChangeRecord) {
         let Effect::Send(outbound) = &record.effect else {
             let reason = Refusal::NotSupported;
-            return self.send(CoreMessage::Rejected { change, reason });
+            return self.reject(change, reason);
         };
         // The saved deadline decides, not whether its timer has run yet: the clock can pass
         // it first, and a restart starts the timers again only after it opens the store.
@@ -167,7 +167,7 @@ impl Inner {
         // Mail cannot be unsent once its window ends, and it can be undone only once.
         if !open {
             let reason = Refusal::Conflict;
-            return self.send(CoreMessage::Rejected { change, reason });
+            return self.reject(change, reason);
         }
         let message_id = outbound.message_id.clone();
         self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));

@@ -33,6 +33,13 @@
 //!      A provider offers no way to send a message only once, so after `unconfirmed`, or a
 //!      core that stopped during the call, the core never calls `send` for it again. It calls
 //!      `find` with its Message-ID instead (see outbox.rs).
+//!  11. `apply` answers a failure only when the mutation surely did not reach the provider,
+//!      or the provider turned it away before acting on it. It answers `unconfirmed` when the
+//!      provider may have acted on it, all of it or part: the request went out and no whole
+//!      answer came back, the provider failed while handling it, or an earlier call for it
+//!      went through. The core tries it again later either way, since `apply` sets values
+//!      (rule 6). It differs in what an undo does meanwhile: it cancels a change the provider
+//!      surely has none of, and reverses one it may hold (see undo.rs).
 //!
 //! The core runs on one thread, so adapters and their futures need not be `Send`.
 
@@ -262,6 +269,11 @@ pub enum ApplyResult {
     },
     Refused {
         reason: ProviderRefusal,
+    },
+    /// The provider may have acted on it, all of it or part, without saying so. See rule 11.
+    /// `failure` is how the account's health reads meanwhile.
+    Unconfirmed {
+        failure: AdapterFailure,
     },
 }
 

@@ -13,7 +13,7 @@ use letterbox_protocol::{
 
 use tokio::sync::oneshot;
 
-use crate::adapter::{AdapterFailure, ApplyResult, ChangesResult};
+use crate::adapter::{AdapterFailure, ApplyResult, ChangesResult, ProviderRefusal};
 use crate::changes::{overlay, plan};
 use crate::effect::Effect;
 use crate::reconcile::{Incoming, reconcile};
@@ -24,29 +24,6 @@ use crate::world::{
 use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
-
-/// A change whose call to the provider is under way. Dropping it ends that (see `Inner::in_flight`).
-struct InFlight {
-    core: Rc<Inner>,
-    id: ChangeId,
-}
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.core.state.borrow_mut().in_flight.remove(&self.id);
-    }
-}
-
-/// The change marked as one the provider holds part of, or None if it is marked already.
-fn reached(change: &ChangeRecord) -> Option<ChangeRecord> {
-    match &change.effect {
-        Effect::Messages(effect) if !effect.reached() => Some(ChangeRecord {
-            effect: Effect::Messages(effect.clone().now_reached()),
-            ..change.clone()
-        }),
-        _ => None,
-    }
-}
 
 /// What a sync-now's pass hands back from the queue: how the pass ended (None when a
 /// backfill held the pull), the wait for the backfill it left or found running, and
@@ -155,22 +132,43 @@ impl Inner {
                 self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));
                 continue;
             };
-            let _in_flight = self.in_flight(&change.id);
+            // True once the provider may hold part of it: from an earlier pass, or a call in this one.
+            let mut known = matches!(&change.effect, Effect::Messages(effect) if effect.reached());
             let mut refused = None;
+            let total = steps.len();
+            let mut gone = 0;
             for step in steps {
-                let outcome = adapter.apply(step.mutation).await?;
+                // Saved before the call: from here on the provider may take it, whatever the
+                // answer, so an undo reverses it instead of cancelling it (undo.rs).
+                change = self.set_reached(change, true);
+                let outcome = adapter.apply(step.mutation).await;
                 if !self.still_current(account_id, linked) {
-                    return Ok(());
+                    return outcome.map(drop);
                 }
                 match outcome {
-                    ApplyResult::Refused { reason } => {
+                    // It surely did not reach the provider (adapter rule 11), so unless an earlier
+                    // call may have, the provider holds none of it.
+                    Err(failure) => {
+                        if !known {
+                            self.set_reached(change, false);
+                        }
+                        return Err(failure);
+                    }
+                    // It may have. It stays reached, and a later pass sets the same values again.
+                    Ok(ApplyResult::Unconfirmed { failure }) => return Err(failure),
+                    // None of this step's messages exist any more (adapter rule 5). A change needs
+                    // several steps when its messages need different values, so the rest go on.
+                    Ok(ApplyResult::Refused {
+                        reason: ProviderRefusal::UnknownTarget,
+                    }) => gone += 1,
+                    Ok(ApplyResult::Refused { reason }) => {
                         refused = Some(reason);
                         break;
                     }
-                    ApplyResult::Applied { moved } => {
+                    Ok(ApplyResult::Applied { moved }) => {
+                        known = true;
                         // The provider now holds this part of the change, so it becomes part of
-                        // what the provider reported, and the change is one an undo must reverse.
-                        let reached = reached(&change);
+                        // what the provider reported.
                         self.commit(|world, tx, _| {
                             for id in &step.message_ids {
                                 let Some(record) = world.messages.get(id).cloned() else {
@@ -194,28 +192,42 @@ impl Inner {
                                     },
                                 );
                             }
-                            if let Some(reached) = &reached {
-                                put_change(world, tx, reached.clone());
-                            }
                         });
-                        change = reached.unwrap_or(change);
                     }
                 }
             }
+            let refused = refused.or((total > 0 && gone == total).then_some(ProviderRefusal::UnknownTarget));
             let result = refused.map_or(ChangeResult::Done, |reason| ChangeResult::Failed(reason.into()));
             self.settle(change, result);
         }
         Ok(())
     }
 
-    /// Counts a change as on its way to the provider until the returned guard drops, so an
-    /// undo meanwhile reverses it instead of cancelling it (see undo.rs).
-    fn in_flight(self: &Rc<Self>, id: &ChangeId) -> InFlight {
-        self.state.borrow_mut().in_flight.insert(id.clone());
-        InFlight {
-            core: Rc::clone(self),
-            id: id.clone(),
+    /// True when a change for the account has not settled and the provider may hold part of it.
+    fn unsure(&self, account_id: &AccountId) -> bool {
+        let state = self.state.borrow();
+        state.world.changes.values().any(|change| {
+            &change.account_id == account_id
+                && change.outcome.is_none()
+                && matches!(&change.effect, Effect::Messages(effect) if effect.reached())
+        })
+    }
+
+    /// Saves whether the provider may hold part of `change`, a change to messages, and returns
+    /// it as saved. Any other change is returned as it is.
+    fn set_reached(self: &Rc<Self>, change: ChangeRecord, reached: bool) -> ChangeRecord {
+        let Effect::Messages(effect) = &change.effect else {
+            return change;
+        };
+        if effect.reached() == reached {
+            return change;
         }
+        let saved = ChangeRecord {
+            effect: Effect::Messages(effect.clone().with_reached(reached)),
+            ..change
+        };
+        self.commit(|world, tx, _| put_change(world, tx, saved.clone()));
+        saved
     }
 
     /// Fetches what changed at the provider. Lists one snapshot page instead while a snapshot
@@ -283,7 +295,16 @@ impl Inner {
             self.state.borrow_mut().syncing.insert(account_id.clone());
             self.commit(|_, _, _| {});
         }
-        let mut result = self.push(&account_id, &linked).await;
+        // A change the provider may hold part of without having said so (adapter rule 11) may
+        // have moved messages under refs the core does not know yet. Pull first, so the push
+        // plans from what the provider holds now and does not ask again for what it did.
+        let mut result = Ok(());
+        if self.unsure(&account_id) && !self.backfilling(&account_id) {
+            result = self.pull(&account_id, &linked).await.map(drop);
+        }
+        if result.is_ok() {
+            result = self.push(&account_id, &linked).await;
+        }
         // Synced once the core is in step with the provider, which a backfill is only at its last page.
         let mut synced = false;
         if result.is_ok() && with_pull {

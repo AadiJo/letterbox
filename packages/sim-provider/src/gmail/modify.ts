@@ -2,6 +2,7 @@
 // at most two applies on the labels mailbox, one for the flags and one for the mailboxes.
 
 import type { MessageRef, Mutation } from '../adapter.ts'
+import type { AnswerDamage } from '../contract.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { isRecord } from '../wire.ts'
 import type { Call, CallResult } from '../wire.ts'
@@ -41,19 +42,30 @@ const REFUSAL_STATUS = {
 /** The most labels one modify or batchModify body may add, and the most it may remove. */
 const LABEL_LIMIT = 100
 
+/** A modify the mailbox carried out, and how its answer goes wrong on the way back, if it does. */
+export type Modified = { damage: AnswerDamage | null }
+
 /** Applies the mutations in order and stops at the first that fails. */
-const applyAll = async (entry: MailboxEntry, mutations: Mutation[]): Promise<Failure | null> => {
+const applyAll = async (
+  entry: MailboxEntry,
+  mutations: Mutation[],
+  damage: AnswerDamage | null = null,
+): Promise<Failure | Modified> => {
   const [first, ...rest] = mutations
-  if (first === undefined) return null
-  const result = await ask(entry, { method: 'apply', arg: first })
+  if (first === undefined) return { damage }
+  const { result, how } = await new Promise<{ result: CallResult; how: AnswerDamage | null }>((resolve) =>
+    entry.respond({ method: 'apply', arg: first }, (answer, damaged) =>
+      resolve({ result: answer, how: damaged ?? null }),
+    ),
+  )
   if (result.method !== 'apply' || !result.outcome.ok) return { status: 503, message: 'Backend error' }
   if (result.outcome.kind === 'refused')
     return { status: REFUSAL_STATUS[result.outcome.reason], message: result.outcome.reason }
-  return applyAll(entry, rest)
+  return applyAll(entry, rest, damage ?? how)
 }
 
-/** Applies one modify body to `refs`. Null when it is done. */
-export const modify = (entry: MailboxEntry, refs: MessageRef[], body: unknown): Promise<Failure | null> => {
+/** Applies one modify body to `refs`. */
+export const modify = (entry: MailboxEntry, refs: MessageRef[], body: unknown): Promise<Failure | Modified> => {
   const add = strings(body, 'addLabelIds')
   const remove = strings(body, 'removeLabelIds')
   // "You can add up to 100 labels with each update", and the same for removing.

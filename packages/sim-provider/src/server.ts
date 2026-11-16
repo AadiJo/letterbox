@@ -5,7 +5,7 @@
 import { rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import type { Socket } from 'node:net'
-import type { SendDamage, SimProvider, StartSimProvider } from './contract.ts'
+import type { AnswerDamage, SimProvider, StartSimProvider } from './contract.ts'
 import { createMailboxEntry } from './mailbox.ts'
 import type { MailboxEntry } from './mailbox.ts'
 import { encode, failedCall, isRequest, lineReader } from './wire.ts'
@@ -78,7 +78,7 @@ export const startSimProvider: StartSimProvider = (socketPath) => {
       }
       case 'call': {
         const entry = mailboxes.get(request.address)
-        const reply = (result: CallResult, damage?: SendDamage) => {
+        const reply = (result: CallResult, damage?: AnswerDamage) => {
           collectOpaque(result.outcome, handedOut)
           const line = encode({ id: request.id, kind: 'result', result })
           if (damage === undefined) return send(socket, { id: request.id, kind: 'result', result })

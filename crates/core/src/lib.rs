@@ -195,7 +195,6 @@ impl Core {
                     attempts: Attempts::default(),
                     backfills: HashMap::default(),
                     checks: HashSet::default(),
-                    in_flight: HashSet::default(),
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -274,8 +273,6 @@ struct State {
     backfills: HashMap<AccountId, Backfill>,
     /// Sends with a check booked (see confirm.rs). Each has at most one at a time.
     checks: HashSet<ChangeId>,
-    /// Changes with a call to the provider under way (see `Inner::in_flight` in sync.rs).
-    in_flight: HashSet<ChangeId>,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }

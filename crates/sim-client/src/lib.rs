@@ -23,6 +23,7 @@ use letterbox_core::adapter::{
 };
 use letterbox_protocol::SignInMethod;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -32,7 +33,8 @@ use tokio_util::task::TaskTracker;
 
 pub use crate::keychain::FileKeychain;
 use crate::wire::{
-    Call, CallResult, Dialect, Reply, RequestBody, Session, encode, outcome, send_outcome, sign_in_result,
+    Call, CallResult, Dialect, Reply, RequestBody, Session, apply_outcome, encode, outcome, send_outcome,
+    sign_in_result,
 };
 
 /// One open socket to the server. Cloning shares the socket.
@@ -222,6 +224,22 @@ impl SimAdapter {
         }
     }
 
+    /// Forwards a call the server may act on without saying so: `read` reads a whole answer,
+    /// and `unconfirmed` stands for none. No socket means the server surely did not get it.
+    async fn call_untrusted<T>(&self, call: Call, read: fn(Value) -> Outcome<T>, unconfirmed: T) -> Outcome<T> {
+        let _in_flight = self.calls.token();
+        let link = self.reach().await.ok_or(AdapterFailure::Offline)?;
+        let method = call.method();
+        let body = RequestBody::Call {
+            address: self.session.address.clone(),
+            call,
+        };
+        match link.ask(&body).await {
+            Some(Reply::Result { result, .. }) if result.method == method => read(result.outcome),
+            _ => Ok(unconfirmed),
+        }
+    }
+
     async fn call<T: DeserializeOwned>(&self, call: Call) -> Outcome<T> {
         let _in_flight = self.calls.token();
         let method = call.method();
@@ -253,26 +271,19 @@ impl Adapter for SimAdapter {
         Box::pin(self.call(Call::Body(r#ref)))
     }
 
+    /// As `send`, read by `apply_outcome` (adapter rule 11).
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {
-        Box::pin(self.call(Call::Apply(mutation)))
+        let unconfirmed = ApplyResult::Unconfirmed {
+            failure: AdapterFailure::Offline,
+        };
+        Box::pin(self.call_untrusted(Call::Apply(mutation), apply_outcome, unconfirmed))
     }
 
     /// No socket means the server surely did not get it. Once the request went out, only a
     /// whole answer that reads as one counts: a dropped socket, a cut-off line or an answer
     /// that does not decode means it may have arrived (adapter rule 10, `send_outcome`).
     fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>> {
-        Box::pin(async move {
-            let _in_flight = self.calls.token();
-            let link = self.reach().await.ok_or(AdapterFailure::Offline)?;
-            let body = RequestBody::Call {
-                address: self.session.address.clone(),
-                call: Call::Send(message),
-            };
-            match link.ask(&body).await {
-                Some(Reply::Result { result, .. }) if result.method == "send" => send_outcome(result.outcome),
-                _ => Ok(SendResult::Unconfirmed),
-            }
-        })
+        Box::pin(self.call_untrusted(Call::Send(message), send_outcome, SendResult::Unconfirmed))
     }
 
     fn find(&self, message_id: String) -> LocalFuture<'_, Outcome<Found>> {

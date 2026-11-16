@@ -17,7 +17,7 @@ import type {
 import type {
   CallCounts,
   Dialect,
-  SendDamage,
+  AnswerDamage,
   SentCopy,
   SimMailbox,
   Seed,
@@ -48,7 +48,7 @@ export type MailboxEntry = {
   session: Session
   isOffline(): boolean
   /** Answers one adapter call through `reply`. A body, apply, send or snapshot call waits while its method is held. */
-  respond(call: Call, reply: (result: CallResult, damage?: SendDamage) => void): void
+  respond(call: Call, reply: (result: CallResult, damage?: AnswerDamage) => void): void
 }
 
 /** Where a snapshot page starts: below this delivery count, with the first page's cursor. */
@@ -115,7 +115,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let offline = false
   let refusal: Refusal | null = null
   let sendRefusal: SendRefusal | null = null
-  let sendDamage: SendDamage | null = null
+  let sendDamage: AnswerDamage | null = null
+  let applyDamage: AnswerDamage | null = null
   let findFails = false
   let searchLags = false
   // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
@@ -225,7 +226,20 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     },
     createMailbox: (mailbox) => {
       addBox(mailbox)
-      engine.mailboxCreated()
+      engine.mailboxesChanged()
+    },
+    deleteMailbox: (key) => {
+      const box = boxOf(store, key)
+      const holding = [...store.messages.values()].filter((message) => message.mailboxes.includes(key))
+      if (dialect === 'folders' && holding.length > 0)
+        throw new Error(`sim provider: folder "${key}" still holds messages, so it cannot be deleted`)
+      for (const message of holding)
+        refile(
+          message,
+          message.mailboxes.filter((kept) => kept !== box.key),
+        )
+      store.boxes.delete(key)
+      engine.mailboxesChanged()
     },
     expireCursors: () => engine.expire(),
     setOffline: (value) => {
@@ -239,6 +253,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     },
     damageNextSendAnswer: (how) => {
       sendDamage = how
+    },
+    damageNextApplyAnswer: (how) => {
+      applyDamage = how
     },
     failNextFind: () => {
       findFails = true
@@ -407,9 +424,10 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     respond: (call, reply) => {
       const answerNow = () => {
         const result = answer(call)
-        const damage = call.method === 'send' ? sendDamage : null
+        const damage = call.method === 'send' ? sendDamage : call.method === 'apply' ? applyDamage : null
         if (damage === null) return reply(result)
-        sendDamage = null
+        if (call.method === 'send') sendDamage = null
+        else applyDamage = null
         reply(result, damage)
       }
       const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]

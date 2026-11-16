@@ -33,7 +33,7 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import type { MessageRef, PageToken } from '../adapter.ts'
-import type { Seed, SendDamage, SimMailbox } from '../contract.ts'
+import type { Seed, AnswerDamage, SimMailbox } from '../contract.ts'
 import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { ask, modify, parse, strings } from './modify.ts'
@@ -112,7 +112,7 @@ const send = (response: ServerResponse, status: number, body?: unknown): void =>
  * then the connection ends before any of it, or halfway through it, or the body arrives
  * whole but is not JSON.
  */
-const damaged = (response: ServerResponse, body: string, how: SendDamage): void => {
+const damaged = (response: ServerResponse, body: string, how: AnswerDamage): void => {
   const sent = how === 'invalid-json' ? '{"id": ' : body
   response.writeHead(200, {
     'Content-Type': 'application/json; charset=UTF-8',
@@ -273,8 +273,10 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     if (method === 'POST' && modified !== undefined) {
       const stored = messageOfId(store, modified)
       if (!stored) return fail(response, 404, 'Requested entity was not found.')
-      const failed = await modify(entry, [stored.ref], parse(body))
-      if (failed) return fail(response, failed.status, failed.message)
+      const done = await modify(entry, [stored.ref], parse(body))
+      if ('status' in done) return fail(response, done.status, done.message)
+      // A damaged answer to a modify is a connection that drops before any of it: the change is made.
+      if (done.damage !== null) return void response.socket?.destroy()
       return send(response, 200, minimalOf(store, stored, history()))
     }
     if (method === 'POST' && path === 'messages/batchModify') {
@@ -283,12 +285,13 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       if (ids.length === 0 || ids.length > 1000) return fail(response, 400, 'ids must hold 1 to 1000 ids')
       const found = ids.map((id) => messageOfId(store, id))
       if (found.some((stored) => stored === undefined)) return fail(response, 404, 'Requested entity was not found.')
-      const failed = await modify(
+      const done = await modify(
         entry,
         found.flatMap((stored) => (stored ? [stored.ref] : [])),
         parsed,
       )
-      if (failed) return fail(response, failed.status, failed.message)
+      if ('status' in done) return fail(response, done.status, done.message)
+      if (done.damage !== null) return void response.socket?.destroy()
       return send(response, 204)
     }
     return fail(response, 404, `No such endpoint: ${method} ${path}`)

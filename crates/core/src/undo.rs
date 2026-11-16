@@ -7,23 +7,26 @@
 //!   - A change the provider may hold, all of it or part, is reversed by a new change: the undo
 //!     itself. It puts back what the change altered on each message and nothing else, and goes
 //!     through the pipeline like any change: shown at once, saved, carried in order, settled.
-//!     A turn correction is reversed the same way, and settles at once.
-//!   - It is refused `conflict` when a later change that has not failed or been undone altered
-//!     a field the change altered, since undoing it would overwrite that change. It is refused
-//!     `conflict` too when the change failed (the provider refused it, so it is rolled back
-//!     already) or was undone already, so a change is undone once.
+//!     "May hold" is saved with the change before each call to the provider, and kept through
+//!     a lost answer or a restart (see `push` in sync.rs). A turn correction is reversed the
+//!     same way, and settles at once.
+//!   - It is refused `conflict`, naming the field, when a field the change set no longer holds
+//!     what it set: a later change here or at the provider changed it, or its message or
+//!     conversation is gone. Undoing it then would overwrite that change. It is refused
+//!     `conflict`, naming the mailbox, when it would put a message back in a mailbox that is gone.
+//!   - It is refused `conflict` when the change failed (the provider refused it, so it is rolled
+//!     back already), or when an undo of it is pending or done, so a change is undone once.
 //!   - It is refused `not-supported` for an undo, which cannot be undone itself, and for a change
 //!     a core accepted before changes recorded what they altered.
 //!   - The same undo sent twice has one effect, as every command does (guarantee 4).
 
 use std::rc::Rc;
 
-use letterbox_protocol::{ChangeId, ChangeResult, CoreMessage, Refusal, ThreadId, Turn};
+use letterbox_protocol::{ChangeId, ChangeResult, CoreMessage, Refusal, ThreadId, Turn, UndoConflict};
 
 use crate::Inner;
 use crate::changes::mode_of;
-use crate::effect::{Effect, overwritten};
-use crate::maps::HashSet;
+use crate::effect::Effect;
 use crate::store::Transaction;
 use crate::world::{ChangeOutcome, ChangeRecord, Op, World, put_change};
 
@@ -38,37 +41,54 @@ enum Answer {
     ReverseTurns(Vec<(ThreadId, Option<Turn>)>),
 }
 
-/// How to undo `target`, or why it cannot be undone. `in_flight` holds the changes with a call
-/// to the provider under way, which may land however the undo answers, so those are reversed.
-fn answer(world: &World, in_flight: &HashSet<ChangeId>, target: &ChangeRecord) -> Result<Answer, Refusal> {
+/// Why an undo is refused, and the field or mailbox that says why, when one does.
+type Refused = (Refusal, Option<UndoConflict>);
+
+/// How to undo `target`, or why it cannot be undone.
+fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
+    let refuse = |reason| Err((reason, None));
     if target.effect.undoes().is_some() {
-        return Err(Refusal::NotSupported);
+        return refuse(Refusal::NotSupported);
     }
     if let Effect::Send(_) = target.effect {
         return Ok(Answer::Window);
     }
     if let Some(ChangeResult::Failed(_) | ChangeResult::Undone) = target.outcome.map(|outcome| outcome.result) {
-        return Err(Refusal::Conflict);
+        return refuse(Refusal::Conflict);
     }
-    if overwritten(world, target) {
-        return Err(Refusal::Conflict);
+    if undone(world, &target.id) {
+        return refuse(Refusal::Conflict);
+    }
+    if let Some(conflict) = target.effect.conflict(world) {
+        return Err((Refusal::Conflict, Some(conflict)));
     }
     match &target.effect {
-        Effect::Turns(effect) => Ok(Answer::ReverseTurns(effect.reversal(world))),
-        Effect::Messages(effect)
-            if target.outcome.is_none() && !effect.reached() && !in_flight.contains(&target.id) =>
-        {
-            Ok(Answer::Cancel)
-        }
+        Effect::Turns(effect) => Ok(Answer::ReverseTurns(effect.reversal())),
+        Effect::Messages(effect) if target.outcome.is_none() && !effect.reached() => Ok(Answer::Cancel),
         Effect::Messages(effect) => {
-            let account = world.accounts.get(&target.account_id).ok_or(Refusal::UnknownTarget)?;
+            let account = world.accounts.get(&target.account_id);
+            let account = account.ok_or((Refusal::UnknownTarget, None))?;
             if !account.capabilities.modify {
-                return Err(Refusal::NotPermitted);
+                return refuse(Refusal::NotPermitted);
             }
-            Ok(Answer::Reverse(effect.reversal(world, mode_of(account))))
+            let reversal = effect.reversal(world, mode_of(account));
+            Ok(Answer::Reverse(
+                reversal.map_err(|gone| (Refusal::Conflict, Some(gone)))?,
+            ))
         }
-        Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } => Err(Refusal::NotSupported),
+        Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } => refuse(Refusal::NotSupported),
     }
+}
+
+/// True when an undo of `target` is pending or done. One that failed leaves it to undo again.
+fn undone(world: &World, target: &ChangeId) -> bool {
+    world.changes.values().any(|change| {
+        change.effect.undoes() == Some(target)
+            && matches!(
+                change.outcome.map(|outcome| outcome.result),
+                None | Some(ChangeResult::Done)
+            )
+    })
 }
 
 impl Inner {
@@ -77,15 +97,18 @@ impl Inner {
         let found = {
             let state = self.state.borrow();
             let record = state.world.changes.get(target).cloned();
-            record.map(|record| (answer(&state.world, &state.in_flight, &record), record))
+            record.map(|record| (answer(&state.world, &record), record))
         };
         let Some((answer, record)) = found else {
-            let reason = Refusal::UnknownTarget;
-            return self.send(CoreMessage::Rejected { change, reason });
+            return self.reject(change, Refusal::UnknownTarget);
         };
         let account_id = record.account_id.clone();
         match answer {
-            Err(reason) => self.send(CoreMessage::Rejected { change, reason }),
+            Err((reason, conflict)) => self.send(CoreMessage::Rejected {
+                change,
+                reason,
+                conflict,
+            }),
             Ok(Answer::Window) => self.undo_send(change, record),
             Ok(Answer::Cancel) => self.cancel(change, record, |_, _| {}),
             Ok(Answer::Reverse(ops)) => self.accept_messages(change, account_id, ops, Some(target.clone())),

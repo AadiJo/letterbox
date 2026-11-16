@@ -93,11 +93,11 @@ export type CallCounts = {
 }
 
 /**
- * How the answer to a delivered send can go wrong on its way back: the connection drops
- * before any answer (over HTTP, after the status line), the answer is cut off halfway, or
- * it arrives whole but is not JSON.
+ * How the answer to a send or an apply the provider carried out can go wrong on its way back:
+ * the connection drops before any answer (over HTTP, a send's after the status line, an
+ * apply's before it), the answer is cut off halfway, or it arrives whole but is not JSON.
  */
-export type SendDamage = 'disconnect' | 'truncated' | 'invalid-json'
+export type AnswerDamage = 'disconnect' | 'truncated' | 'invalid-json'
 
 /** One message the core sent through this mailbox, as the provider delivered it. */
 export type SentCopy = {
@@ -126,6 +126,8 @@ export interface SimMailbox {
   /** Removes the message for good. */
   expunge(key: string): void
   createMailbox(mailbox: SeedMailbox): void
+  /** Deletes a mailbox. With labels, every message in it loses it. With folders it must be empty. */
+  deleteMailbox(key: string): void
 
   // Things the provider does.
   /** Every cursor handed out so far stops working. `changes` answers cursor-expired. */
@@ -139,7 +141,9 @@ export interface SimMailbox {
   /** The next `send` answers refused with this reason and delivers nothing. */
   refuseNextSend(reason: 'not-permitted' | 'refused-by-provider'): void
   /** The next `send` delivers the message, then its answer reaches the core damaged this way. */
-  damageNextSendAnswer(how: SendDamage): void
+  damageNextSendAnswer(how: AnswerDamage): void
+  /** The next `apply` changes the mailbox, then its answer reaches the core damaged this way. */
+  damageNextApplyAnswer(how: AnswerDamage): void
   /** The next `find` fails, as a provider's search does when it is briefly down. */
   failNextFind(): void
   /** While true, `find` finds nothing, as a provider's search does before its index catches up. */

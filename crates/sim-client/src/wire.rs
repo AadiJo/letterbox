@@ -7,7 +7,7 @@
 //! scenario approves or denies it. Closing the socket cancels a pending oauth attempt.
 
 use letterbox_core::adapter::{
-    AdapterFailure, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult, SignInFailure,
+    AdapterFailure, ApplyResult, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult, SignInFailure,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -124,18 +124,34 @@ pub fn outcome<T: DeserializeOwned>(value: Value) -> Outcome<T> {
     ok_or::<T, AdapterFailure>(value)
 }
 
-/// Reads the outcome of a send without trusting it, the one place that decides for the sim:
-/// only a whole `sent` or `refused`, or a failure the server reports before it acts, says what
-/// happened. Anything else is `unconfirmed`, since the server may have filed the message first.
-pub fn send_outcome(value: Value) -> Outcome<SendResult> {
+/// Reads the outcome of a call the server may have acted on without trusting it, the one place
+/// that decides for the sim: only a whole answer that reads as one, or a failure the server
+/// reports before it acts, says what happened. Anything else is `unconfirmed`, since the server
+/// may have acted first (adapter rules 10 and 11).
+fn untrusted<T: DeserializeOwned>(value: Value, unconfirmed: T) -> Outcome<T> {
     #[derive(Deserialize)]
     struct Failed {
         failure: AdapterFailure,
     }
     if value.get("ok") == Some(&Value::Bool(true)) {
-        return Ok(serde_json::from_value(value).unwrap_or(SendResult::Unconfirmed));
+        return Ok(serde_json::from_value(value).unwrap_or(unconfirmed));
     }
-    serde_json::from_value::<Failed>(value).map_or(Ok(SendResult::Unconfirmed), |failed| Err(failed.failure))
+    serde_json::from_value::<Failed>(value).map_or(Ok(unconfirmed), |failed| Err(failed.failure))
+}
+
+/// Reads the outcome of a send (see `untrusted`).
+pub fn send_outcome(value: Value) -> Outcome<SendResult> {
+    untrusted(value, SendResult::Unconfirmed)
+}
+
+/// Reads the outcome of an apply (see `untrusted`).
+pub fn apply_outcome(value: Value) -> Outcome<ApplyResult> {
+    untrusted(
+        value,
+        ApplyResult::Unconfirmed {
+            failure: AdapterFailure::Offline,
+        },
+    )
 }
 
 /// Reads the result of a sign-in: `{"ok": true, "session": ...}` or a failure.

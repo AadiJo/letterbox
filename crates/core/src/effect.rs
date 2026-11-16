@@ -1,20 +1,26 @@
 //! What each change does, and what it altered, so an undo takes back exactly that (undo.rs).
 //!
 //! Every change record carries one `Effect`. A change that alters messages or turns records,
-//! when it is accepted, what it altered: for each message, the mailboxes it put it in and took
-//! it out of, and the read and flag state it had, for the fields the change really changed.
-//! The records are built only by `MessageEffect::new` and `TurnEffect::new`, which read the
-//! world as the user sees it then, so no change is stored without them. A message the change
-//! named but did not alter is left out, so its undo never touches it: undoing an archive puts
-//! Inbox back on the messages that left it, never on sent or already archived mail.
+//! when it is accepted, each field it changed with both ends. For a message: the mailboxes it
+//! put it in (it was out of them before) and took it out of (it was in them), and the read and
+//! flag state it had before, for each of the two it changed (it set the other value). For a
+//! conversation: the turn the user had set before, and the one set now. The records are built
+//! only by `MessageEffect::new` and `TurnEffect::new`, which read the world as the user sees it
+//! then. A message the change named but did not alter is left out, so its undo never touches it.
+//!
+//! What a change carries to the provider is built from that record too, so a change does only
+//! what it recorded. One that altered nothing does nothing, even if the change before it, which
+//! it took as done, is refused later. An undo is accepted only while every field the change set
+//! still holds what it set (`Effect::conflict`), so it never overwrites a later change, made
+//! here or at the provider.
 
-use letterbox_protocol::{ChangeId, ChangeResult, MailboxId, MessageId, ThreadId, Turn};
+use letterbox_protocol::{ChangeId, MailboxId, MessageId, ThreadId, Turn, UndoConflict};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::changes::{Pending, overlay};
 use crate::maps::IndexSet;
 use crate::outbox::Outbound;
-use crate::world::{ChangeRecord, MailboxMode, Op, World};
+use crate::world::{MailboxMode, MessageState, Op, World};
 
 /// What one change does. Its kind decides how an undo answers (see undo.rs).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,19 +68,29 @@ impl Effect {
         }
     }
 
-    /// True when both changes altered one field: the same mailbox, read or flag state of
-    /// one message, or the turn of one thread.
-    fn overlaps(&self, other: &Effect) -> bool {
-        match (self, other) {
-            (Effect::Messages(mine), Effect::Messages(theirs)) => mine.altered.iter().any(|one| {
-                let same = |other: &&Altered| other.message_id == one.message_id;
-                theirs.altered.iter().filter(same).any(|other| one.overlaps(other))
-            }),
-            (Effect::Turns(mine), Effect::Turns(theirs)) => mine
+    /// The first field this change set that no longer holds what it set, as the user sees it
+    /// now: changed since, by a change here or at the provider, or gone with its message or
+    /// conversation. None when every field holds, and for a change that sets none.
+    pub fn conflict(&self, world: &World) -> Option<UndoConflict> {
+        match self {
+            Effect::Messages(effect) => {
+                let pending = Pending::of(world);
+                effect.altered.iter().find_map(|altered| {
+                    let now = world.messages.get(&altered.message_id);
+                    altered.conflict(now.map(|record| pending.view_state(record)).as_deref())
+                })
+            }
+            Effect::Turns(effect) => effect
                 .altered
                 .iter()
-                .any(|one| theirs.altered.iter().any(|other| other.thread_id == one.thread_id)),
-            _ => false,
+                .find(|altered| {
+                    let now = world.threads.get(&altered.thread_id);
+                    now.is_none_or(|thread| thread.turn_override != altered.now)
+                })
+                .map(|altered| UndoConflict::Turn {
+                    thread_id: altered.thread_id.clone(),
+                }),
+            Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } => None,
         }
     }
 }
@@ -83,15 +99,19 @@ impl Effect {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageEffect {
+    /// What a pass carries to the provider, built from `altered` alone.
     ops: Vec<Op>,
     altered: Vec<Altered>,
-    /// True once the provider may hold part of it: an undo then reverses it instead of cancelling.
+    /// True once the provider may hold part of it: an undo then reverses it instead of
+    /// cancelling it. A pass saves it before each call, and clears it only when that call
+    /// surely did not reach the provider and no earlier one may have (see sync.rs).
     reached: bool,
     undoes: Option<ChangeId>,
 }
 
-/// What one change altered on one message: the mailboxes it added and removed, and the read
-/// and flag state the message had before, for each of the two it changed.
+/// What one change altered on one message. It put the message in `added`, which it was not in,
+/// and took it out of `removed`, which it was in. `was_unread` and `was_flagged` hold the value
+/// each had, for the ones the change set to the other value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Altered {
@@ -103,25 +123,76 @@ pub struct Altered {
 }
 
 impl Altered {
-    fn overlaps(&self, other: &Altered) -> bool {
-        let mine: IndexSet<&MailboxId> = self.added.iter().chain(&self.removed).collect();
-        other
+    /// The Ops that set each field as the change left it, or as it was if `back`.
+    fn ops(&self, mode: MailboxMode, back: bool) -> [Option<Op>; 2] {
+        let (into, out_of) = if back {
+            (&self.removed, &self.added)
+        } else {
+            (&self.added, &self.removed)
+        };
+        let boxes = match mode {
+            MailboxMode::Sets => (!into.is_empty() || !out_of.is_empty()).then(|| (into.clone(), out_of.clone())),
+            // A move took the message out of one folder and into another.
+            MailboxMode::Move => into
+                .first()
+                .zip(out_of.first())
+                .map(|(to, from)| (vec![to.clone()], vec![from.clone()])),
+        };
+        let mailboxes = boxes.map(|(add, remove)| Op::Mailboxes {
+            mode,
+            message_ids: vec![self.message_id.clone()],
+            add,
+            remove,
+        });
+        let value = |was: Option<bool>| if back { was } else { was.map(|value| !value) };
+        let flags = (self.was_unread.is_some() || self.was_flagged.is_some()).then(|| Op::Flags {
+            message_ids: vec![self.message_id.clone()],
+            unread: value(self.was_unread),
+            flagged: value(self.was_flagged),
+        });
+        [mailboxes, flags]
+    }
+
+    /// The first field that no longer holds what the change set, given the message as the user
+    /// sees it now, or None for a message that is gone, whose fields then all count.
+    fn conflict(&self, now: Option<&MessageState>) -> Option<UndoConflict> {
+        let message_id = self.message_id.clone();
+        let mailbox = |mailbox_id: &MailboxId| UndoConflict::Mailbox {
+            message_id: message_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+        };
+        // True when the change set the flag to the other value, and it no longer holds it.
+        let lost = |was: Option<bool>, now: Option<bool>| was.is_some_and(|was| now.is_none_or(|now| now == was));
+        let moved = self
             .added
             .iter()
-            .chain(&other.removed)
-            .any(|mailbox| mine.contains(mailbox))
-            || (self.was_unread.is_some() && other.was_unread.is_some())
-            || (self.was_flagged.is_some() && other.was_flagged.is_some())
+            .find(|id| now.is_none_or(|now| !now.mailboxes.contains(id)))
+            .or_else(|| {
+                let back_in = |id: &&MailboxId| now.is_none_or(|now| now.mailboxes.contains(id));
+                self.removed.iter().find(back_in)
+            });
+        if let Some(id) = moved {
+            return Some(mailbox(id));
+        }
+        if lost(self.was_unread, now.map(|now| now.unread)) {
+            return Some(UndoConflict::Unread {
+                message_id: message_id.clone(),
+            });
+        }
+        lost(self.was_flagged, now.map(|now| now.flagged)).then(|| UndoConflict::Flagged {
+            message_id: message_id.clone(),
+        })
     }
 }
 
 impl MessageEffect {
-    /// The effect of `ops` on the messages as the user sees them now, pending changes
-    /// included. `undoes` names the change it reverses, when it is an undo.
-    pub fn new(world: &World, ops: Vec<Op>, undoes: Option<ChangeId>) -> MessageEffect {
+    /// The effect of `ops` on the messages as the user sees them now, pending changes included,
+    /// on an account whose mailboxes change by `mode`. `undoes` names the change it reverses,
+    /// when it is an undo.
+    pub fn new(world: &World, mode: MailboxMode, ops: &[Op], undoes: Option<ChangeId>) -> MessageEffect {
         let pending = Pending::of(world);
         let named: IndexSet<&MessageId> = ops.iter().flat_map(Op::message_ids).collect();
-        let altered = named
+        let altered: Vec<Altered> = named
             .into_iter()
             .filter_map(|id| world.messages.get(id))
             .filter_map(|record| {
@@ -155,7 +226,7 @@ impl MessageEffect {
             })
             .collect();
         MessageEffect {
-            ops,
+            ops: ops_for(&altered, mode, false),
             altered,
             reached: false,
             undoes,
@@ -166,67 +237,51 @@ impl MessageEffect {
         self.reached
     }
 
-    /// The same effect, marked as one the provider may hold part of.
-    pub fn now_reached(self) -> MessageEffect {
-        MessageEffect { reached: true, ..self }
+    /// The same effect, with `reached` set as given.
+    pub fn with_reached(self, reached: bool) -> MessageEffect {
+        MessageEffect { reached, ..self }
     }
 
-    /// The Ops that put back what this change altered on the messages still here, and
-    /// nothing else. Messages that need the same values share one Op.
-    pub fn reversal(&self, world: &World, mode: MailboxMode) -> Vec<Op> {
-        let mut ops: Vec<Op> = Vec::new();
-        for altered in self
-            .altered
-            .iter()
-            .filter(|altered| world.messages.contains_key(&altered.message_id))
-        {
-            let back = match mode {
-                MailboxMode::Sets => Some((altered.removed.clone(), altered.added.clone())),
-                // A move put the message in one folder. It goes back to the one it left.
-                MailboxMode::Move => altered
-                    .removed
-                    .first()
-                    .filter(|_| !altered.added.is_empty())
-                    .map(|source| (vec![source.clone()], altered.added.clone())),
-            };
-            if let Some((add, remove)) = back.filter(|(add, remove)| !add.is_empty() || !remove.is_empty()) {
-                let op = Op::Mailboxes {
-                    mode,
-                    message_ids: vec![],
-                    add,
-                    remove,
-                };
-                join(&mut ops, op, &altered.message_id);
-            }
-            if altered.was_unread.is_some() || altered.was_flagged.is_some() {
-                let op = Op::Flags {
-                    message_ids: vec![],
-                    unread: altered.was_unread,
-                    flagged: altered.was_flagged,
-                };
-                join(&mut ops, op, &altered.message_id);
-            }
+    /// The Ops that put back what this change altered, and nothing else. Refused with the
+    /// mailbox when it would put a message back in one that no longer exists.
+    pub fn reversal(&self, world: &World, mode: MailboxMode) -> Result<Vec<Op>, UndoConflict> {
+        let restored = self.altered.iter().flat_map(|altered| &altered.removed);
+        if let Some(gone) = restored.into_iter().find(|id| !world.mailboxes.contains_key(*id)) {
+            return Err(UndoConflict::MailboxGone {
+                mailbox_id: gone.clone(),
+            });
         }
-        ops
+        Ok(ops_for(&self.altered, mode, true))
     }
 }
 
-/// Adds `id` to the Op in `ops` that sets what `op` sets, or adds `op` for it alone.
-fn join(ops: &mut Vec<Op>, mut op: Op, id: &MessageId) {
+/// The Ops that set every altered field as the change left it, or as it was if `back`.
+/// Messages that need the same values share one Op.
+fn ops_for(altered: &[Altered], mode: MailboxMode, back: bool) -> Vec<Op> {
+    let mut ops: Vec<Op> = Vec::new();
+    for op in altered.iter().flat_map(|altered| altered.ops(mode, back)).flatten() {
+        join(&mut ops, op);
+    }
+    ops
+}
+
+/// Adds the messages `op` names to the Op in `ops` that sets what it sets, or adds `op` itself.
+fn join(ops: &mut Vec<Op>, mut op: Op) {
     fn ids_of(op: &mut Op) -> &mut Vec<MessageId> {
         match op {
             Op::Flags { message_ids, .. } | Op::Mailboxes { message_ids, .. } => message_ids,
         }
     }
+    let ids = std::mem::take(ids_of(&mut op));
     let sets_the_same = |existing: &&mut Op| {
         let mut bare = (**existing).clone();
         ids_of(&mut bare).clear();
         bare == op
     };
     match ops.iter_mut().find(sets_the_same) {
-        Some(existing) => ids_of(existing).push(id.clone()),
+        Some(existing) => ids_of(existing).extend(ids),
         None => {
-            ids_of(&mut op).push(id.clone());
+            *ids_of(&mut op) = ids;
             ops.push(op);
         }
     }
@@ -240,12 +295,14 @@ pub struct TurnEffect {
     undoes: Option<ChangeId>,
 }
 
-/// One thread whose turn a correction changed, and the turn the user had set before (None: the rule's).
+/// One conversation whose turn a correction changed: the turn the user had set before, and
+/// the one it set (None: the rule's).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnAltered {
     thread_id: ThreadId,
     was: Option<Turn>,
+    now: Option<Turn>,
 }
 
 impl TurnEffect {
@@ -258,39 +315,20 @@ impl TurnEffect {
                 (was != *value).then(|| TurnAltered {
                     thread_id: id.clone(),
                     was,
+                    now: *value,
                 })
             })
             .collect();
         TurnEffect { altered, undoes }
     }
 
-    /// The turn each thread this change altered had before, for the threads still here.
-    pub fn reversal(&self, world: &World) -> Vec<(ThreadId, Option<Turn>)> {
+    /// The turn each conversation this change altered had before.
+    pub fn reversal(&self) -> Vec<(ThreadId, Option<Turn>)> {
         self.altered
             .iter()
-            .filter(|altered| world.threads.contains_key(&altered.thread_id))
             .map(|altered| (altered.thread_id.clone(), altered.was))
             .collect()
     }
-}
-
-/// True when a change accepted after `target`, and not failed or undone, altered a field
-/// `target` altered. Undoing `target` would then overwrite that later change.
-pub fn overwritten(world: &World, target: &ChangeRecord) -> bool {
-    let in_effect = |change: &&ChangeRecord| {
-        matches!(
-            change.outcome.map(|outcome| outcome.result),
-            None | Some(ChangeResult::Done)
-        )
-    };
-    let later = world
-        .changes
-        .values()
-        .skip_while(|change| change.id != target.id)
-        .skip(1);
-    later
-        .filter(in_effect)
-        .any(|change| target.effect.overlaps(&change.effect))
 }
 
 /// Reads a change record's effect, or the `op` a store from before effects saved in its place.

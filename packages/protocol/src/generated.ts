@@ -180,6 +180,13 @@ export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "co
 export type ChangeResult = "done" | "undone" | { "failed": Refusal };
 
 /**
+ * Why an undo was refused `conflict`, when one field or mailbox says why: something the
+ * change set no longer holds what it set, changed since on this device or at the provider,
+ * or the undo would put a message back in a mailbox that is gone.
+ */
+export type UndoConflict = { "kind": "mailbox", messageId: MessageId, mailboxId: MailboxId, } | { "kind": "unread", messageId: MessageId, } | { "kind": "flagged", messageId: MessageId, } | { "kind": "turn", threadId: ThreadId, } | { "kind": "mailbox-gone", mailboxId: MailboxId, };
+
+/**
  * A way to add an account. The UI lists these and never hard-codes a provider.
  */
 export type SignInOption = { id: SignInOptionId, label: string, method: SignInMethod, };
@@ -236,6 +243,6 @@ export type BlobError = "offline" | "gone" | "not-supported";
 
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
 
 export type ProtocolErrorReason = "version-mismatch" | "malformed";
