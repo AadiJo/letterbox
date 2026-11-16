@@ -1,7 +1,8 @@
 // The UI check for the reader's layout and the done states, over a `people-first` dev host
 // of its own: the reader fills a 1920 px pane, Done slides the row out with an undo toast and
-// z brings it back, archive and Trash offer the same undo through the core, a late answer
-// or a scroll moves no row it should not, an empty Your turn says so, and reduced motion is instant.
+// z brings it back, archive and Trash offer the same undo through the core, trash from Sent
+// keeps its row on a labels account, a late answer or a scroll moves no row it should not, an
+// empty Your turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
 import { appErrors, capture, equal, openPage, type Relay, SIZES, WAIT_MS } from './record.ts'
@@ -280,6 +281,35 @@ async function checkArchiveAndTrashUndo(page: Page) {
 }
 
 /**
+ * Trash on a labels account keeps Sent, as the core does, so trash from Sent keeps its row,
+ * whole and still. Undo then shows it as it was, even once any exit has ended.
+ */
+async function checkTrashFromSent(page: Page) {
+  await nav(page, 'Sent').click()
+  await mailRows(page).first().locator('[data-field="subject"]').waitFor()
+  const total = await conversations(page)
+  const id = await mailRows(page).first().getAttribute('data-row')
+  const row = page.locator(`[data-list="mail"] [data-row="${id}"]`)
+  const looks = () =>
+    row.evaluate((element) => ({
+      moving: element.getAnimations().length,
+      shown: element.getBoundingClientRect().height > 0 && getComputedStyle(element).opacity === '1',
+    }))
+  await row.click()
+  await page.keyboard.press('#')
+  await toast(page).filter({ hasText: 'Moved to Trash' }).waitFor()
+  await settle(page)
+  equal(await looks(), { moving: 0, shown: true }, 'trash from Sent keeps the row, whole and still')
+  equal(await conversations(page), total, 'trash from Sent keeps the Sent count')
+  // Lets any exit run to its end, so the undo below finds it ended.
+  await row.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
+  await page.keyboard.press('z')
+  await toast(page).waitFor({ state: 'detached' })
+  await settle(page)
+  equal(await looks(), { moving: 0, shown: true }, 'undo after trash shows the row as it was')
+}
+
+/**
  * A scroll while a row leaves a windowed list ends its exit at once. The row is never
  * placed in the window the scroll moved to, which would set it among rows it never sat
  * beside and add a row past the window's size.
@@ -335,6 +365,7 @@ export async function checkDone(browser: Browser, url: string) {
   await checkLateArchive(page, relay)
   await checkLeaveDuringExit(page)
   await checkArchiveAndTrashUndo(page)
+  await checkTrashFromSent(page)
   await checkScrollDuringExit(page)
 
   // Clearing Your turn leaves the empty state.

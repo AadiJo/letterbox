@@ -99,7 +99,7 @@ impl Effect {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageEffect {
-    /// What a pass carries to the provider, built from `altered` alone.
+    /// What a pass carries to the provider while the change is pending, built from `altered` alone.
     ops: Vec<Op>,
     altered: Vec<Altered>,
     /// True once the provider may hold part of it: an undo then reverses it instead of
@@ -111,7 +111,8 @@ pub struct MessageEffect {
 
 /// What one change altered on one message. It put the message in `added`, which it was not in,
 /// and took it out of `removed`, which it was in. `was_unread` and `was_flagged` hold the value
-/// each had, for the ones the change set to the other value.
+/// each had, for the ones the change set to the other value. `partly` marks a message the
+/// provider may hold either value of, from a step turned away after part of it went through.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Altered {
@@ -120,6 +121,8 @@ pub struct Altered {
     removed: Vec<MailboxId>,
     was_unread: Option<bool>,
     was_flagged: Option<bool>,
+    #[serde(default)]
+    partly: bool,
 }
 
 impl Altered {
@@ -154,8 +157,12 @@ impl Altered {
     }
 
     /// The first field that no longer holds what the change set, given the message as the user
-    /// sees it now, or None for a message that is gone, whose fields then all count.
+    /// sees it now, or None for a message that is gone, whose fields then all count. Only a
+    /// message that is gone counts for one marked `partly`: either value may be its own.
     fn conflict(&self, now: Option<&MessageState>) -> Option<UndoConflict> {
+        if self.partly && now.is_some() {
+            return None;
+        }
         let message_id = self.message_id.clone();
         let mailbox = |mailbox_id: &MailboxId| UndoConflict::Mailbox {
             message_id: message_id.clone(),
@@ -217,6 +224,7 @@ impl MessageEffect {
                         .collect(),
                     was_unread: changed(before.unread, after.unread),
                     was_flagged: changed(before.flagged, after.flagged),
+                    partly: false,
                 };
                 let untouched = altered.added.is_empty()
                     && altered.removed.is_empty()
@@ -242,6 +250,39 @@ impl MessageEffect {
         MessageEffect { reached, ..self }
     }
 
+    /// The effect of a change that failed: only the fields the Ops in `applied`, which went
+    /// through, and in `partly`, which may have, set. Messages `partly` names are marked so.
+    /// It is reached when any are left, and then an undo reverses exactly those (undo.rs).
+    pub fn applied_part(self, applied: &[Op], partly: &[Op]) -> MessageEffect {
+        let altered: Vec<Altered> = self
+            .altered
+            .into_iter()
+            .filter_map(|altered| {
+                let id = &altered.message_id;
+                let (went, maybe) = (fields_set(applied, id), fields_set(partly, id));
+                let [mailboxes, unread, flagged] = [0, 1, 2].map(|field| went[field] || maybe[field]);
+                let kept = Altered {
+                    added: if mailboxes { altered.added } else { Vec::new() },
+                    removed: if mailboxes { altered.removed } else { Vec::new() },
+                    was_unread: altered.was_unread.filter(|_| unread),
+                    was_flagged: altered.was_flagged.filter(|_| flagged),
+                    partly: maybe.contains(&true),
+                    message_id: altered.message_id,
+                };
+                let empty = kept.added.is_empty()
+                    && kept.removed.is_empty()
+                    && kept.was_unread.is_none()
+                    && kept.was_flagged.is_none();
+                (!empty).then_some(kept)
+            })
+            .collect();
+        MessageEffect {
+            reached: !altered.is_empty(),
+            altered,
+            ..self
+        }
+    }
+
     /// The Ops that put back what this change altered, and nothing else. Refused with the
     /// mailbox when it would put a message back in one that no longer exists.
     pub fn reversal(&self, world: &World, mode: MailboxMode) -> Result<Vec<Op>, UndoConflict> {
@@ -253,6 +294,25 @@ impl MessageEffect {
         }
         Ok(ops_for(&self.altered, mode, true))
     }
+}
+
+/// Which fields of message `id` the Ops in `ops` set: its mailboxes, read state and flag.
+fn fields_set(ops: &[Op], id: &MessageId) -> [bool; 3] {
+    ops.iter().filter(|op| op.message_ids().contains(id)).fold(
+        [false; 3],
+        |[mailboxes, unread, flagged], op| match op {
+            Op::Mailboxes { .. } => [true, unread, flagged],
+            Op::Flags {
+                unread: sets_unread,
+                flagged: sets_flagged,
+                ..
+            } => [
+                mailboxes,
+                unread || sets_unread.is_some(),
+                flagged || sets_flagged.is_some(),
+            ],
+        },
+    )
 }
 
 /// The Ops that set every altered field as the change left it, or as it was if `back`.

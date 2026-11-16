@@ -24,13 +24,13 @@ export const UNDO_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a change counts as reached only once its call answers, so an undo during the call cancels it',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '                change = self.set_reached(change, true);\n',
     replace: '',
     scenarios: 'on its way reverses',
     also: [
       {
-        file: core('sync.rs'),
+        file: core('push.rs'),
         find: '                        known = true;\n',
         replace:
           '                        known = true;\n                        change = self.set_reached(change, true);\n',
@@ -39,13 +39,13 @@ export const UNDO_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a restart during a call forgets the change may have reached the provider, so its undo cancels it',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '                change = self.set_reached(change, true);\n',
     replace: '',
     scenarios: 'a restart during an archive',
     also: [
       {
-        file: core('sync.rs'),
+        file: core('push.rs'),
         find: '                        known = true;\n',
         replace:
           '                        known = true;\n                        change = self.set_reached(change, true);\n',
@@ -54,7 +54,7 @@ export const UNDO_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a lost answer counts as not reached, so the undo cancels a change the provider took',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '                    Ok(ApplyResult::Unconfirmed { failure }) => return Err(failure),',
     replace:
       '                    Ok(ApplyResult::Unconfirmed { failure }) => {\n                        self.set_reached(change, false);\n                        return Err(failure);\n                    }',
@@ -62,14 +62,14 @@ export const UNDO_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a call that surely never arrived still counts as reached, so a change that never left goes out and back',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '                        if !known {',
     replace: '                        if false {',
     scenarios: 'cancels a change still waiting',
   },
   {
     name: 'a call that surely never arrived clears reached, though an earlier call of the change landed',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '                        if !known {',
     replace: '                        if true {',
     scenarios: 'part of a change reached',
@@ -97,7 +97,7 @@ export const UNDO_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a pass pushes a change an undo cancelled while an earlier change was on its way',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: 'let Some(mut change) = found.filter(|change| change.outcome.is_none()) else {',
     replace: 'let Some(mut change) = found else {',
     scenarios: 'waiting behind another',
@@ -176,7 +176,7 @@ export const UNDO_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a change fails when the messages of one of its steps are gone, though the others took it',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '                    }) => gone += 1,',
     replace:
       '                    }) => {\n                        gone += 1;\n                        refused = Some(ProviderRefusal::UnknownTarget);\n                        break;\n                    }',
@@ -192,8 +192,8 @@ export const UNDO_MUTATIONS: Mutation[] = [
   {
     name: 'a change the provider refused can be undone, reversing what never happened',
     file: core('undo.rs'),
-    find: 'Some(ChangeResult::Failed(_) | ChangeResult::Undone) = target',
-    replace: 'Some(ChangeResult::Undone) = target',
+    find: '        Some(ChangeResult::Failed(_)) if !reached => return refuse(Refusal::Conflict),',
+    replace: '        Some(ChangeResult::Failed(_)) if false => return refuse(Refusal::Conflict),',
     scenarios: 'provider refused is refused',
   },
   {
@@ -217,5 +217,62 @@ export const UNDO_MUTATIONS: Mutation[] = [
     replace:
       "pub fn put_change(world: &mut World, tx: &Transaction<'_>, record: ChangeRecord) {\n    if record.effect.undoes().is_none() {\n        tx.put(&record);\n    }",
     scenarios: 'accepted before a restart',
+  },
+  {
+    name: 'a lost move goes again before the refresh that shows where it went has ended',
+    file: core('sync.rs'),
+    find: '            let refreshed = !self.unsure(&account_id) || matches!(pulled, Some(Pulled::Done));',
+    replace: '            let refreshed = true;',
+    scenarios: 'lost move waits',
+  },
+  {
+    name: 'a change on the messages of a held change goes ahead of it, so an undo outruns its change',
+    file: core('push.rs'),
+    find: '            if !refreshed && (was_reached || change.effect.named().any(|id| held.contains(id))) {',
+    replace: '            if !refreshed && was_reached {',
+    scenarios: 'lost move waits',
+  },
+  {
+    name: 'the sim answers a deleted mailbox as messages gone, so a step it turns away counts as done',
+    file: 'packages/sim-provider/src/mailbox.ts',
+    find: "    if (add === undefined || remove === undefined) return refused('unknown-mailbox')",
+    replace: "    if (add === undefined || remove === undefined) return refused('unknown-target')",
+    scenarios: 'names a mailbox deleted',
+  },
+  {
+    name: 'a step that names a missing mailbox counts as gone, so the change settles done',
+    file: core('push.rs'),
+    find: '                        reason: ProviderRefusal::UnknownTarget,\n',
+    replace: '                        reason: ProviderRefusal::UnknownTarget | ProviderRefusal::UnknownMailbox,\n',
+    scenarios: 'names a mailbox deleted',
+  },
+  {
+    name: 'gmail forgets that an earlier request of a step went through when a later one is turned away',
+    file: 'crates/gmail/src/adapter.rs',
+    find: '        let refused = |reason| Ok(ApplyResult::Refused { reason, landed });',
+    replace: '        let refused = |reason| Ok(ApplyResult::Refused { reason, landed: landed && false });',
+    scenarios: 'earlier request of it went through',
+  },
+  {
+    name: 'a step turned away after part of it went through still shows as never sent, so its undo puts nothing back',
+    file: core('push.rs'),
+    find: '                            self.lay_over(&step.message_ids, &step.part, &[]);\n',
+    replace: '',
+    scenarios: 'earlier request of it went through',
+  },
+  {
+    name: 'a change turned away after one of its steps went through cannot be undone, so that step stays',
+    file: core('undo.rs'),
+    find: '        Some(ChangeResult::Failed(_)) if !reached => return refuse(Refusal::Conflict),',
+    replace: '        Some(ChangeResult::Failed(_)) => return refuse(Refusal::Conflict),',
+    scenarios: 'turned away after one of its steps',
+  },
+  {
+    name: 'a failed change keeps the steps that never went through, so its undo is refused over them',
+    file: core('push.rs'),
+    find: '            self.settle(\n                failed_in_part(change, &applied, &partly),\n                ChangeResult::Failed(reason.into()),\n            );',
+    replace:
+      '            drop((applied, partly));\n            self.settle(change, ChangeResult::Failed(reason.into()));',
+    scenarios: 'turned away after one of its steps',
   },
 ]

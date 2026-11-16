@@ -18,6 +18,7 @@ const REFUSAL_STATUS = {
   'refused-by-provider': 400,
   'not-supported': 400,
   'unknown-target': 404,
+  'unknown-mailbox': 400,
   conflict: 409,
 }
 

@@ -262,7 +262,7 @@ impl GmailAdapter {
     }
 
     async fn apply_mutation(&self, mutation: Mutation) -> Outcome<ApplyResult> {
-        let refused = |reason| Ok(ApplyResult::Refused { reason });
+        let refused = |reason| Ok(ApplyResult::Refused { reason, landed: false });
         let unconfirmed = |failure| Ok(ApplyResult::Unconfirmed { failure });
         if !self.modify {
             return refused(ProviderRefusal::NotPermitted);
@@ -302,6 +302,8 @@ impl GmailAdapter {
                 break;
             }
         }
+        // Turned away, after any earlier step or chunk went through (adapter rule 11).
+        let refused = |reason| Ok(ApplyResult::Refused { reason, landed });
         let Some(error) = last.stopped else {
             return match last.found {
                 0 => refused(ProviderRefusal::UnknownTarget),

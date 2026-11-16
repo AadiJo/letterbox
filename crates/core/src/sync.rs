@@ -1,4 +1,4 @@
-//! The sync pass. A pass pushes an account's pending changes to the provider, pulls
+//! The sync pass. A pass pushes an account's pending changes to the provider (push.rs), pulls
 //! what changed there, or one snapshot page (see snapshot.rs), and records how it went.
 //! It runs in the account's queue, and stops writing once a sign-out or a new sign-in
 //! takes the account (`still_current`). Bodies load here too, one fetch per message
@@ -6,21 +6,14 @@
 
 use std::rc::Rc;
 
-use letterbox_protocol::{
-    AccountId, Answer, ChangeId, ChangeResult, CoreMessage, Empty, MessageId, Refusal, RequestId, Response,
-    SyncNowError,
-};
+use letterbox_protocol::{AccountId, Answer, Empty, MessageId, RequestId, Response, SyncNowError};
 
 use tokio::sync::oneshot;
 
-use crate::adapter::{AdapterFailure, ApplyResult, ChangesResult, ProviderRefusal};
-use crate::changes::{overlay, plan};
-use crate::effect::Effect;
+use crate::adapter::{AdapterFailure, ChangesResult};
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
-use crate::world::{
-    AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, Origin, put_account, put_change, put_message,
-};
+use crate::world::{AccountRecord, Health, MessageRecord, put_account, put_message};
 use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
@@ -70,25 +63,6 @@ impl Inner {
         }
     }
 
-    pub(crate) fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
-        let id = change.id.clone();
-        let rev = self.commit(|world, tx, at| {
-            put_change(
-                world,
-                tx,
-                ChangeRecord {
-                    outcome: Some(ChangeOutcome { rev: at, result }),
-                    ..change
-                },
-            );
-        });
-        self.send(CoreMessage::Settled {
-            change: id,
-            rev,
-            result,
-        });
-    }
-
     /// True while `linked` still serves the account. A sign-out unlinks it and a new sign-in
     /// links another. A pass checks this after every provider call and writes nothing once
     /// it is false, so it cannot bring back records a sign-out deleted, or overwrite the
@@ -99,135 +73,6 @@ impl Inner {
             .adapters
             .get(account_id)
             .is_some_and(|current| current.link == linked.link)
-    }
-
-    /// Carries every pending change for one account to the provider, oldest first. A send
-    /// still in its undo window is passed by (see outbox.rs). Stops when the provider is unreachable.
-    async fn push(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
-        let adapter = &linked.adapter;
-        let waiting: Vec<ChangeId> = self
-            .state
-            .borrow()
-            .world
-            .changes
-            .values()
-            .filter(|change| &change.account_id == account_id && change.outcome.is_none())
-            .map(|change| change.id.clone())
-            .collect();
-        for id in waiting {
-            if !self.still_current(account_id, linked) {
-                return Ok(());
-            }
-            // Read again, since an undo may have cancelled it while an earlier change was on its way.
-            let found = self.state.borrow().world.changes.get(&id).cloned();
-            let Some(mut change) = found.filter(|change| change.outcome.is_none()) else {
-                continue;
-            };
-            if let Effect::Send(outbound) = change.effect.clone() {
-                self.deliver(account_id, linked, change, outbound).await?;
-                continue;
-            }
-            let planned = plan(&self.state.borrow().world, change.effect.ops());
-            let Some(steps) = planned else {
-                self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));
-                continue;
-            };
-            // True once the provider may hold part of it: from an earlier pass, or a call in this one.
-            let mut known = matches!(&change.effect, Effect::Messages(effect) if effect.reached());
-            let mut refused = None;
-            let total = steps.len();
-            let mut gone = 0;
-            for step in steps {
-                // Saved before the call: from here on the provider may take it, whatever the
-                // answer, so an undo reverses it instead of cancelling it (undo.rs).
-                change = self.set_reached(change, true);
-                let outcome = adapter.apply(step.mutation).await;
-                if !self.still_current(account_id, linked) {
-                    return outcome.map(drop);
-                }
-                match outcome {
-                    // It surely did not reach the provider (adapter rule 11), so unless an earlier
-                    // call may have, the provider holds none of it.
-                    Err(failure) => {
-                        if !known {
-                            self.set_reached(change, false);
-                        }
-                        return Err(failure);
-                    }
-                    // It may have. It stays reached, and a later pass sets the same values again.
-                    Ok(ApplyResult::Unconfirmed { failure }) => return Err(failure),
-                    // None of this step's messages exist any more (adapter rule 5). A change needs
-                    // several steps when its messages need different values, so the rest go on.
-                    Ok(ApplyResult::Refused {
-                        reason: ProviderRefusal::UnknownTarget,
-                    }) => gone += 1,
-                    Ok(ApplyResult::Refused { reason }) => {
-                        refused = Some(reason);
-                        break;
-                    }
-                    Ok(ApplyResult::Applied { moved }) => {
-                        known = true;
-                        // The provider now holds this part of the change, so it becomes part of
-                        // what the provider reported.
-                        self.commit(|world, tx, _| {
-                            for id in &step.message_ids {
-                                let Some(record) = world.messages.get(id).cloned() else {
-                                    continue;
-                                };
-                                let Some(old) = record.provider_ref().cloned() else {
-                                    continue;
-                                };
-                                let r#ref = moved
-                                    .iter()
-                                    .find(|pair| pair.from == old)
-                                    .map_or(old, |pair| pair.to.clone());
-                                let server = overlay(&record.server, &step.part, id);
-                                put_message(
-                                    world,
-                                    tx,
-                                    MessageRecord {
-                                        origin: Origin::Provider { r#ref },
-                                        server,
-                                        ..record
-                                    },
-                                );
-                            }
-                        });
-                    }
-                }
-            }
-            let refused = refused.or((total > 0 && gone == total).then_some(ProviderRefusal::UnknownTarget));
-            let result = refused.map_or(ChangeResult::Done, |reason| ChangeResult::Failed(reason.into()));
-            self.settle(change, result);
-        }
-        Ok(())
-    }
-
-    /// True when a change for the account has not settled and the provider may hold part of it.
-    fn unsure(&self, account_id: &AccountId) -> bool {
-        let state = self.state.borrow();
-        state.world.changes.values().any(|change| {
-            &change.account_id == account_id
-                && change.outcome.is_none()
-                && matches!(&change.effect, Effect::Messages(effect) if effect.reached())
-        })
-    }
-
-    /// Saves whether the provider may hold part of `change`, a change to messages, and returns
-    /// it as saved. Any other change is returned as it is.
-    fn set_reached(self: &Rc<Self>, change: ChangeRecord, reached: bool) -> ChangeRecord {
-        let Effect::Messages(effect) = &change.effect else {
-            return change;
-        };
-        if effect.reached() == reached {
-            return change;
-        }
-        let saved = ChangeRecord {
-            effect: Effect::Messages(effect.clone().with_reached(reached)),
-            ..change
-        };
-        self.commit(|world, tx, _| put_change(world, tx, saved.clone()));
-        saved
     }
 
     /// Fetches what changed at the provider. Lists one snapshot page instead while a snapshot
@@ -296,20 +141,32 @@ impl Inner {
             self.commit(|_, _, _| {});
         }
         // A change the provider may hold part of without having said so (adapter rule 11) may
-        // have moved messages under refs the core does not know yet. Pull first, so the push
-        // plans from what the provider holds now and does not ask again for what it did.
+        // have moved messages under refs the core does not know yet. Such a pass pulls first,
+        // and the push carries that change only once the core is in step with the provider:
+        // a change set, or a snapshot's last page, a backfill's included. Until then the push
+        // passes it by, and every change after it on the same messages (see `push`).
         let mut result = Ok(());
+        let mut pulled = None;
         if self.unsure(&account_id) && !self.backfilling(&account_id) {
-            result = self.pull(&account_id, &linked).await.map(drop);
+            match self.pull(&account_id, &linked).await {
+                Ok(done) => pulled = Some(done),
+                Err(failure) => result = Err(failure),
+            }
         }
         if result.is_ok() {
-            result = self.push(&account_id, &linked).await;
+            let refreshed = !self.unsure(&account_id) || matches!(pulled, Some(Pulled::Done));
+            result = self.push(&account_id, &linked, refreshed).await;
         }
-        // Synced once the core is in step with the provider, which a backfill is only at its last page.
+        // Synced once the core is in step with the provider, which a backfill is only at its
+        // last page. A pass that pulled first pulls no more: a snapshot's next page is queued.
         let mut synced = false;
         if result.is_ok() && with_pull {
-            match self.pull(&account_id, &linked).await {
-                Ok(pulled) => synced = matches!(pulled, Pulled::Done),
+            let done = match pulled {
+                Some(done) => Ok(done),
+                None => self.pull(&account_id, &linked).await,
+            };
+            match done {
+                Ok(done) => synced = matches!(done, Pulled::Done),
                 Err(failure) => result = Err(failure),
             }
         }

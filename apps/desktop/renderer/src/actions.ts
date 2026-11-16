@@ -23,13 +23,17 @@ const byKey = new Map<string, Action>(ALL.map((action) => [SHORTCUTS[action], ac
 export const actionForKey = (key: string) => byKey.get(key)
 
 /**
- * Whether `command` takes a conversation out of the mailbox `mailboxId`. Trash moves it out
- * of every mailbox but Trash, and set-mailboxes out of each one it removes.
+ * Whether `command` takes a conversation out of the mailbox `mailboxId`, as the core does it.
+ * Set-mailboxes takes it out of each one it removes. Trash moves it out of every mailbox but
+ * Trash, except on a labels account, where it keeps Sent and Drafts, which the provider sets.
  */
-export function leavesMailbox(command: Command, mailboxId: MailboxId, mailboxes: readonly Mailbox[]) {
+export function leavesMailbox(command: Command, mailboxId: MailboxId, mail: Mail) {
   if (command.kind === 'set-mailboxes') return command.remove.includes(mailboxId)
-  if (command.kind === 'trash') return mailboxes.find((mailbox) => mailbox.id === mailboxId)?.role !== 'trash'
-  return false
+  if (command.kind !== 'trash') return false
+  const mailbox = mail.mailboxes.find((candidate) => candidate.id === mailboxId)
+  const account = mail.accounts.find((candidate) => candidate.id === mailbox?.accountId)
+  const kept: (Mailbox['role'] | undefined)[] = account?.can.multipleMailboxes ? ['trash', 'sent', 'drafts'] : ['trash']
+  return !kept.includes(mailbox?.role)
 }
 
 /**

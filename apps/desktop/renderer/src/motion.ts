@@ -91,12 +91,15 @@ export async function leave(id: ThreadId) {
   )
 }
 
-/** Stops a row leaving and shows it as it was, as for an undo that lands while it still moves. */
+/**
+ * Stops a row leaving and shows it as it was, as for an undo that lands while it still moves.
+ * Its row on screen shows as it was too, even after its exit ended: the exit's last frame
+ * stays on an element the list kept, as when the core kept the conversation in the list.
+ */
 export function release(id: ThreadId) {
-  leaving
-    .get(id)
-    ?.getAnimations()
-    .forEach((animation) => animation.cancel())
+  for (const element of new Set([leaving.get(id), elements.get(id)])) {
+    element?.getAnimations().forEach((animation) => animation.cancel())
+  }
   setLeaving(id, null)
 }
 

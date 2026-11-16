@@ -33,6 +33,7 @@ export const ask = (entry: MailboxEntry, call: Call): Promise<CallResult> =>
 /** The status for an apply the mailbox refused. */
 const REFUSAL_STATUS = {
   'unknown-target': 404,
+  'unknown-mailbox': 400,
   'not-permitted': 403,
   conflict: 409,
   'refused-by-provider': 400,

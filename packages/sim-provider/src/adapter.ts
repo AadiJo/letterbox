@@ -164,7 +164,14 @@ export type ApplyResult =
   | { kind: 'applied'; moved: { from: MessageRef; to: MessageRef }[] }
   | {
       kind: 'refused'
-      reason: 'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider'
+      /** `unknown-target` when no message it names exists, `unknown-mailbox` when a mailbox it names does not. */
+      reason:
+        | 'not-permitted'
+        | 'not-supported'
+        | 'unknown-target'
+        | 'unknown-mailbox'
+        | 'conflict'
+        | 'refused-by-provider'
     }
 
 /** One message for the provider to deliver, written whole by the core. */

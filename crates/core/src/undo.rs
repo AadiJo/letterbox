@@ -14,8 +14,10 @@
 //!     what it set: a later change here or at the provider changed it, or its message or
 //!     conversation is gone. Undoing it then would overwrite that change. It is refused
 //!     `conflict`, naming the mailbox, when it would put a message back in a mailbox that is gone.
-//!   - It is refused `conflict` when the change failed (the provider refused it, so it is rolled
-//!     back already), or when an undo of it is pending or done, so a change is undone once.
+//!   - A change the provider turned away after some of its steps went through settles failed,
+//!     and keeps only what those steps set. Its undo reverses exactly that. One it turned away
+//!     before any did is rolled back already, and its undo is refused `conflict`. So is the undo
+//!     of a change an undo of which is pending or done, so a change is undone once.
 //!   - It is refused `not-supported` for an undo, which cannot be undone itself, and for a change
 //!     a core accepted before changes recorded what they altered.
 //!   - The same undo sent twice has one effect, as every command does (guarantee 4).
@@ -53,8 +55,13 @@ fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
     if let Effect::Send(_) = target.effect {
         return Ok(Answer::Window);
     }
-    if let Some(ChangeResult::Failed(_) | ChangeResult::Undone) = target.outcome.map(|outcome| outcome.result) {
-        return refuse(Refusal::Conflict);
+    // A failed change keeps only what went through before the provider turned it away (sync.rs).
+    // With nothing, it is rolled back already, and nothing is left to take back.
+    let reached = matches!(&target.effect, Effect::Messages(effect) if effect.reached());
+    match target.outcome.map(|outcome| outcome.result) {
+        Some(ChangeResult::Undone) => return refuse(Refusal::Conflict),
+        Some(ChangeResult::Failed(_)) if !reached => return refuse(Refusal::Conflict),
+        _ => {}
     }
     if undone(world, &target.id) {
         return refuse(Refusal::Conflict);

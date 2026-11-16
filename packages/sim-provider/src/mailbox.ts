@@ -347,7 +347,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     if (dialect === 'folders' && !isMove) return refused('not-supported')
     const add = boxesOf(mutation.add)?.map((box) => box.key)
     const remove = boxesOf(mutation.remove)?.map((box) => box.key)
-    if (add === undefined || remove === undefined) return refused('unknown-target')
+    if (add === undefined || remove === undefined) return refused('unknown-mailbox')
     // A folders ref that is not in the source mailbox is not a target of the move, so it is skipped.
     const movable =
       dialect === 'folders'

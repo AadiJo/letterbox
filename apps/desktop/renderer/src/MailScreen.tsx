@@ -35,7 +35,7 @@ export function MailScreen({ title, filter, chrome, accounts }: Props) {
   const selection = useSelection(
     order,
     chrome.mail,
-    (command) => mailboxId !== undefined && leavesMailbox(command, mailboxId, chrome.mail.mailboxes),
+    (command) => mailboxId !== undefined && leavesMailbox(command, mailboxId, chrome.mail),
   )
   const total = slice?.total ?? 0
   return (

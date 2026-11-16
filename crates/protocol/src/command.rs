@@ -45,9 +45,9 @@ pub enum Command {
     /// A send is cancelled only inside its undo window, and refused `conflict` after it.
     /// Refused `conflict`, naming what in `conflict`, when a field the change set no longer
     /// holds what it set (changed since, here or at the provider, or its message or thread is
-    /// gone), or when a mailbox the undo would put a message back in no longer exists. Refused
-    /// `conflict` too when the change failed (it is rolled back already), or an undo of it is
-    /// pending or done. Refused `not-supported` for an undo, which cannot itself be undone.
+    /// gone), or when a mailbox the undo would put a message back in no longer exists. A change
+    /// that failed after part of it went through is undone in that part. Refused `conflict` when
+    /// it failed before any did (it is rolled back already), or an undo of it is pending or done. Refused `not-supported` for an undo, which cannot itself be undone.
     /// Sending the same undo twice has one effect (guarantee 4).
     Undo {
         change: ChangeId,

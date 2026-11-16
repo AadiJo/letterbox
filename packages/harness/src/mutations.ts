@@ -63,14 +63,14 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'offline changes reach the provider newest first',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '        for id in waiting {\n            if !self.still_current(account_id, linked) {',
     replace: '        for id in waiting.into_iter().rev() {\n            if !self.still_current(account_id, linked) {',
     scenarios: 'replay in order',
   },
   {
     name: 'settled is sent before the refused change is undone',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '        let id = change.id.clone();\n        let rev = self.commit(',
     replace:
       '        let id = change.id.clone();\n        let early = self.store.rev() + 1;\n        self.send(CoreMessage::Settled { change: id.clone(), rev: early, result });\n        let rev = self.commit(',
@@ -78,9 +78,9 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a refused change is reported as done',
-    file: core('sync.rs'),
-    find: 'refused.map_or(ChangeResult::Done, |reason| ChangeResult::Failed(reason.into()))',
-    replace: 'refused.map_or(ChangeResult::Done, |_| ChangeResult::Done)',
+    file: core('push.rs'),
+    find: '            self.settle(\n                failed_in_part(change, &applied, &partly),\n                ChangeResult::Failed(reason.into()),\n            );',
+    replace: '            drop((reason, applied, partly));\n            self.settle(change, ChangeResult::Done);',
     scenarios: 'refuses is undone',
   },
   {
@@ -177,7 +177,7 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a second change uses the ref the first change replaced',
-    file: core('sync.rs'),
+    file: core('push.rs'),
     find: '.find(|pair| pair.from == old)',
     replace: '.find(|_| false)',
     scenarios: 'second change follows',
