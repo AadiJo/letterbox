@@ -54,6 +54,10 @@
       "rules": { "letterbox/renderer-clock": "error" }
     },
     {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-motion/**"],
+      "rules": { "letterbox/renderer-motion": "error" }
+    },
+    {
       "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-thread-lists/**"],
       "rules": { "letterbox/renderer-thread-lists": "error" }
     },

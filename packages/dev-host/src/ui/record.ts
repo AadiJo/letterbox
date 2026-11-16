@@ -9,9 +9,10 @@ import type { Browser, BrowserContext, Page } from 'playwright'
 export const root = fileURLToPath(new URL('../../../../', import.meta.url))
 export const ARTIFACTS = join(root, 'artifacts/ui')
 
-/** The two window sizes every scene is captured at. */
+/** The window sizes every scene is captured at. */
 export const SIZES = {
   wide: { width: 1440, height: 900 },
+  full: { width: 1920, height: 1080 },
   narrow: { width: 1024, height: 700 },
 } as const
 
@@ -45,6 +46,15 @@ export function summarize() {
     `\n${checks.filter((check) => check.ok).length} of ${checks.length} UI checks passed. Screenshots, timings and traces are in artifacts/ui/.`,
   )
 }
+
+/**
+ * The page's errors, without those an HTML body's frame logs when its sandbox and policy
+ * refuse its script, loads and links. Those are the protection working.
+ */
+export const appErrors = (errors: readonly string[]) =>
+  errors.filter(
+    (error) => !/Content Security Policy|in a sandboxed frame|sandboxed and the 'allow-scripts'/.test(error),
+  )
 
 /** True for a URL that leaves this machine. */
 const isRemote = (url: string) => {
@@ -125,11 +135,17 @@ export async function openPage(browser: Browser, url: string, trace: string) {
   }
 }
 
-/** Screenshots the page at both sizes as `<name>.png` and `<name>-narrow.png`, and leaves it wide. */
+/**
+ * Screenshots the page at each size as `<name>.png`, `<name>-1920.png` and `<name>-narrow.png`,
+ * and leaves it wide. Animations are finished first, so a capture never catches one midway.
+ */
 export async function capture(page: Page, name: string) {
-  await page.setViewportSize(SIZES.wide)
-  await page.screenshot({ path: join(ARTIFACTS, `${name}.png`) })
-  await page.setViewportSize(SIZES.narrow)
-  await page.screenshot({ path: join(ARTIFACTS, `${name}-narrow.png`) })
+  const shot = async (size: (typeof SIZES)[keyof typeof SIZES], file: string) => {
+    await page.setViewportSize(size)
+    await page.screenshot({ path: join(ARTIFACTS, file), animations: 'disabled' })
+  }
+  await shot(SIZES.wide, `${name}.png`)
+  await shot(SIZES.full, `${name}-1920.png`)
+  await shot(SIZES.narrow, `${name}-narrow.png`)
   await page.setViewportSize(SIZES.wide)
 }

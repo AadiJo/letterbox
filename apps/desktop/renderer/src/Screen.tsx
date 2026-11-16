@@ -5,9 +5,12 @@ import type { Account, Command, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Action, actionForKey, type Mail, markRead, run } from './actions.ts'
+import { leave, restore, shake } from './motion.ts'
 import { Reader } from './Reader.tsx'
 import { threadRecord, useThread } from './threads.ts'
+import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
+import { offerUndo, undo, UNDO_KEY, withdraw } from './undo.ts'
 
 /** What App hands every screen. */
 export type Chrome = {
@@ -25,17 +28,20 @@ const typing = (target: EventTarget | null) =>
 
 /**
  * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
- * and actions.ts's keys act on the open conversation. `leaves` says whether a command takes
- * a conversation out of this list. When it does, the next one opens in its place.
+ * actions.ts's keys act on the open conversation, and z undoes the last undoable action.
+ * `leaves` says whether a command takes a conversation out of this list. When it does, the
+ * row slides out and the next one opens in its place.
  */
 export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
   // Rises on every selection and when the screen goes, so an action that resumes after a
   // wait can tell whether anything moved on meanwhile.
   const generation = useRef(0)
+  // An undo offer belongs to the screen it was made on.
   useEffect(
     () => () => {
       generation.current += 1
+      withdraw()
     },
     [],
   )
@@ -49,8 +55,9 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   }
 
   /**
-   * Runs `action` on the open conversation. Once the core accepts a command that takes it out
-   * of this list, the next one opens, unless anything was selected or the screen left
+   * Runs `action` on the open conversation. A refused action shakes its row. Once the core
+   * accepts a command that takes the conversation out of this list, its row slides out and,
+   * as the row folds, the next one opens, unless anything was selected or the screen left
    * meanwhile. The list has not changed yet when the action starts, so the rows around the
    * open one are where they were.
    */
@@ -61,7 +68,20 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     const next = index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null)
     const started = generation.current
     const command = await run(action, thread, mail)
-    if (command && leaves(command) && generation.current === started) select(next)
+    if (!command) return shake(thread.id)
+    offerUndo(action, thread, command, mail)
+    if (!leaves(command)) return
+    await leave(thread.id)
+    if (generation.current === started) select(next)
+  }
+
+  /** Undoes the offered action. Once the core accepts, its conversation is back and opens again. */
+  const undoLast = async () => {
+    const started = generation.current
+    const id = await undo()
+    if (!id) return
+    restore(id)
+    if (generation.current === started) select(id)
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {
@@ -71,6 +91,11 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     if (step !== undefined) {
       const next = order[index === -1 ? 0 : index + step]
       if (next) select(next)
+      event.preventDefault()
+      return
+    }
+    if (event.key === UNDO_KEY) {
+      void undoLast()
       event.preventDefault()
       return
     }
@@ -85,7 +110,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     return () => window.removeEventListener('keydown', listener)
   }, [])
 
-  return { selected, select, act }
+  return { selected, select, act, undo: undoLast }
 }
 
 type ScreenProps = {
@@ -103,7 +128,7 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
   const thread = useThread(selection.selected)
   return (
     <>
-      <section aria-label={title} className="flex min-h-0 w-[384px] flex-none flex-col border-r border-line">
+      <section aria-label={title} className="relative flex min-h-0 w-[384px] flex-none flex-col border-r border-line">
         <header className="flex h-[72px] flex-none items-center gap-2.5 pr-3 pl-[18px]">
           <button
             type="button"
@@ -122,6 +147,7 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
         </header>
         <SyncStrip accounts={accounts} />
         {children}
+        <Toast onUndo={selection.undo} />
       </section>
       <section aria-label="Reader" className="flex min-w-0 flex-1 flex-col">
         <Toolbar thread={thread} mail={chrome.mail} onAct={selection.act} search={chrome.search} />
