@@ -290,8 +290,9 @@ impl Inner {
         (ran, self.join_backfill(&account_id))
     }
 
-    /// Syncs each account in turn and answers once all have finished, a backfill included.
-    /// The first pass is queued before this returns, so it runs ahead of anything the
+    /// Syncs each account in turn and answers once all have finished, a backfill included,
+    /// plus one pass after a backfill, so the answer covers what the provider held when the
+    /// request came, even when the backfill's cursor is older. The first pass is queued before this returns, so it runs ahead of anything the
     /// client sends after this request.
     pub(crate) fn sync_now(self: &Rc<Self>, id: RequestId, account_id: Option<AccountId>) {
         let accounts: Vec<AccountId> = match account_id {
@@ -316,10 +317,14 @@ impl Inner {
                         Some(end) => end.await.ok(),
                         None => None,
                     };
-                    match ran {
-                        Some(result) => break ended.unwrap_or(result),
-                        // A backfill held the pull. It has ended, so run the pass now.
-                        None => pass = start(&core, account_id.clone()).1,
+                    match (ran, ended) {
+                        // A backfill ended well, but its cursor can be older than this request:
+                        // it was queued earlier, or resumed a snapshot saved before it. Pass once
+                        // more, so the answer covers what the provider held when it was asked.
+                        (_, Some(Ok(()))) => pass = start(&core, account_id.clone()).1,
+                        (Some(result), ended) => break ended.unwrap_or(result),
+                        // A backfill held the pull and ended in a failure. Run the pass now.
+                        (None, _) => pass = start(&core, account_id.clone()).1,
                     }
                 };
                 offline |= result == Err(AdapterFailure::Offline);

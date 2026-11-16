@@ -82,6 +82,27 @@ scenario('a failure in the middle of the first sync keeps the pages before it', 
   t.equal(box.calls().snapshot, 3, 'it asked for the third page only, not the first two again')
 })
 
+scenario('a sync-now that resumes a saved snapshot also brings changes made before it was sent', async (t) => {
+  const box = t.mailbox(standardSeed(t.dialect, { pageSize: 2 }))
+  box.holdSnapshots()
+  const core = t.startCore()
+  await core.hello()
+  const accounts = core.subscribe({ view: 'accounts' })
+  await signIn(t, core, ME, PASSWORD)
+  await box.snapshotHeld()
+  await nextPage(box)
+  box.setOffline(true)
+  box.releaseSnapshots()
+  await untilAccounts(accounts, (list) => ['offline', 'error'].includes(list[0]?.status.state ?? ''))
+  t.equal((await thread(core, 'Budget numbers')).unread, true, 'page 1 stored the message as unread')
+  // Read on another device after page 1 was listed, and before the sync-now is sent.
+  box.setOffline(false)
+  box.setFlags('fyi', { unread: false })
+  await sync(core)
+  t.equal(subjects(await threads(core)), ALL, 'the sync-now finished the snapshot')
+  t.equal((await thread(core, 'Budget numbers')).unread, false, 'and it shows the read made before it was sent')
+})
+
 scenario('a restart in the middle of the first sync resumes from the saved page', async (t) => {
   const first = await signInHeld(t)
   await nextPage(first.box)

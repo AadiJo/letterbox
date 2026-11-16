@@ -11,27 +11,7 @@
 // its name says. run.ts rebuilds the Rust core before each run, so each break costs a
 // short incremental build.
 
-import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { CORE_DID_NOT_BUILD } from './client.ts'
-
-type Edit = {
-  file: string
-  /** Text that must appear exactly once in the file. */
-  find: string
-  replace: string
-}
-
-type Mutation = Edit & {
-  /** What goes wrong, in a user's or a reviewer's words. */
-  name: string
-  /** Runs only the scenarios whose name contains this. */
-  scenarios: string
-  /** More edits, for a break that needs more than one place changed. Applied in order after the first. */
-  also?: Edit[]
-}
+import { type Mutation, runBreaks } from './breaks.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
 const gmail = (file: string) => `crates/gmail/src/${file}`
@@ -272,6 +252,13 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'answered cancelled when the core stops',
   },
   {
+    name: 'a sync-now that resumes a saved snapshot answers without the changes made before it',
+    file: core('sync.rs'),
+    find: '                        (_, Some(Ok(()))) => pass = start(&core, account_id.clone()).1,\n',
+    replace: '',
+    scenarios: 'resumes a saved snapshot',
+  },
+  {
     name: 'a sign-out waits behind the work already queued for the account',
     file: core('accounts.rs'),
     find: '    pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {\n',
@@ -444,53 +431,4 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-const ROOT = join(import.meta.dirname, '..', '..', '..')
-const SCRATCH = mkdtempSync(join(tmpdir(), 'letterbox-mutations-'))
-
-/** Applies one mutation, runs its scenarios, restores the files. True when the scenarios failed, as they should. */
-function caught(mutation: Mutation): { ok: boolean; why: string } {
-  // Each file's text before the first edit to it, to put back afterwards.
-  const originals = new Map<string, string>()
-  const restore = () => {
-    for (const [path, text] of originals) writeFileSync(path, text)
-  }
-  for (const edit of [mutation, ...(mutation.also ?? [])]) {
-    const path = join(ROOT, edit.file)
-    const text = readFileSync(path, 'utf8')
-    if (!originals.has(path)) originals.set(path, text)
-    const count = text.split(edit.find).length - 1
-    if (count !== 1) {
-      restore()
-      return {
-        ok: false,
-        why: `its text appears ${count} times in ${edit.file}. Update the entry to match the code.`,
-      }
-    }
-    writeFileSync(path, text.replace(edit.find, edit.replace))
-  }
-  try {
-    const run = spawnSync(process.execPath, ['packages/harness/src/run.ts', mutation.scenarios], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      timeout: 120_000,
-      // Transcripts of broken code go to a throwaway folder, never over the real run's.
-      env: { ...process.env, LETTERBOX_ARTIFACTS: SCRATCH },
-    })
-    const summary = run.stdout.trim().split('\n').at(-1) ?? ''
-    if (run.status === CORE_DID_NOT_BUILD)
-      return { ok: false, why: `the broken code does not compile. Update the entry so it builds.\n${run.stderr}` }
-    return run.status === 0 ? { ok: false, why: `the scenarios still pass: ${summary}` } : { ok: true, why: summary }
-  } finally {
-    restore()
-  }
-}
-
-let missed = 0
-for (const mutation of MUTATIONS) {
-  const result = caught(mutation)
-  if (!result.ok) missed += 1
-  console.log(`${result.ok ? 'caught' : 'MISSED'}  ${mutation.name}${result.ok ? '' : `\n        ${result.why}`}`)
-}
-console.log(`\n${MUTATIONS.length - missed} of ${MUTATIONS.length} breaks were caught.`)
-rmSync(SCRATCH, { recursive: true, force: true })
-process.exit(missed === 0 ? 0 : 1)
+runBreaks(MUTATIONS)
