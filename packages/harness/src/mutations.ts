@@ -296,6 +296,21 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'saved before it exits',
   },
   {
+    name: 'closing the core waits out a gmail rate limit, so it does not exit for minutes',
+    file: core('lib.rs'),
+    find: '            linked.adapter.stop_waiting();\n',
+    replace: '',
+    scenarios: 'stop during a rate-limit wait',
+  },
+  {
+    name: 'closing the core closes the adapters first, so work queued behind a call fails offline',
+    file: core('lib.rs'),
+    find: '            linked.adapter.stop_waiting();\n',
+    replace:
+      '            let adapter = Rc::clone(&linked.adapter);\n            tokio::task::spawn_local(async move { adapter.close().await });\n',
+    scenarios: 'saved before it exits',
+  },
+  {
     name: 'the mailbox filter reads what the provider holds and misses pending changes',
     file: core('views.rs'),
     find: 'records().any(|record| pending.view_state(record).mailboxes.contains(mailbox))',

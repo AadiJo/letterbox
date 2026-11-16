@@ -182,10 +182,15 @@ impl Core {
     /// adapters and the store. Idle accounts are not work: an adapter waiting for
     /// nothing does not hold this up. A backfill stops after the page in flight, and the
     /// account's next sync pass resumes it from the saved page. A sign-in still waiting for the user is
-    /// cancelled first, so it is answered `cancelled` instead of holding up the close.
+    /// cancelled first, so it is answered `cancelled` instead of holding up the close. Every adapter
+    /// stops waiting too (see `Adapter::stop_waiting`), so a call waiting out a rate limit answers
+    /// offline at once. The change or page it was for stays saved, and the next start does it.
     pub async fn close(self) {
         self.inner.state.borrow().attempts.cancel_all();
         self.inner.work.close();
+        for linked in self.inner.state.borrow().adapters.values() {
+            linked.adapter.stop_waiting();
+        }
         self.inner.work.wait().await;
         let adapters: Vec<_> = self.inner.state.borrow_mut().adapters.drain().collect();
         for (_, linked) in adapters {

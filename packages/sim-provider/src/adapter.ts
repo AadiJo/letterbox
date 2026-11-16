@@ -169,7 +169,16 @@ export interface Adapter {
   body(ref: MessageRef): Promise<Outcome<BodyResult>>
   /** Pushes one change. The core calls this one at a time, in the order the user acted. */
   apply(mutation: Mutation): Promise<Outcome<ApplyResult>>
-  /** Releases sockets and timers. The adapter is not used again. */
+  /**
+   * Ends every wait the adapter adds between tries of a call, such as a rate-limit backoff,
+   * now and from now on. A call that was waiting answers `offline`. Calls in flight still
+   * finish and later calls still reach the provider, so a closing core's work ends soon.
+   */
+  stopWaiting(): void
+  /**
+   * Stops waiting as `stopWaiting` does and releases sockets and timers. A call still in
+   * flight may finish or answer `offline`. The adapter is not used again.
+   */
   close(): Promise<void>
 }
 
