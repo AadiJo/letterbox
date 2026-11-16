@@ -108,7 +108,7 @@ const slotColors = (page: Page, section: string) =>
     .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).color))
 
 export async function checkPeopleFirst(browser: Browser, url: string) {
-  const { page, errors, remote, blocked, close } = await openPage(browser, url, 'trace-people-first.zip')
+  const { page, relay, errors, remote, blocked, close } = await openPage(browser, url, 'trace-people-first.zip')
 
   // People, as the core sorts and the renderer filters it.
   const mine = fresh('mine')
@@ -283,6 +283,61 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     await page.locator(`[data-row="${second}"] [aria-label="Flagged"]`).count(),
     1,
     'the core holds the flag the toolbar shows',
+  )
+
+  // An archive the core answers late opens the next conversation only if nothing moved on
+  // meanwhile. The relay holds the core's answer, and all after it, while the user moves.
+  const settle = async () => {
+    // Twice: the first answer lets any reaction to the released answer reach the core, the second waits for it.
+    await page.evaluate(() => window.letterboxDev?.settle())
+    await page.evaluate(() => window.letterboxDev?.settle())
+  }
+  const inboxRows = async () => {
+    await page.locator('[data-list="mail"] [role="option"] [data-field="subject"]').first().waitFor()
+    return rows.evaluateAll((elements) =>
+      elements.map((element) => ({
+        id: element.getAttribute('data-row') ?? '',
+        unread: element.getAttribute('data-unread') === 'true',
+        subject: element.querySelector('[data-field="subject"]')?.textContent ?? '',
+      })),
+    )
+  }
+
+  // (a) The user leaves the screen before the core answers.
+  const before = await inboxRows()
+  const unreadAt = before.findIndex((row, index) => index > 0 && row.unread)
+  const [left, waiting] = [before[unreadAt - 1], before[unreadAt]]
+  if (!left || !waiting) throw new Error('Inbox shows no unread conversation below another')
+  await page.locator(`[data-row="${left.id}"]`).click()
+  const pausedA = relay.pauseAtAccepted()
+  await page.keyboard.press('e')
+  await pausedA
+  await nav(page, 'All mail').click()
+  relay.resume()
+  await settle()
+  await nav(page, 'Inbox').click()
+  await page.locator(`[data-row="${waiting.id}"] [data-field="subject"]`).waitFor()
+  equal(
+    await page.locator(`[data-row="${waiting.id}"]`).getAttribute('data-unread'),
+    'true',
+    'an archive answered after leaving the screen marks nothing read',
+  )
+
+  // (b) The user opens another conversation and comes back before the core answers.
+  const [back, other] = await inboxRows()
+  if (!back || !other) throw new Error('Inbox shows fewer than two conversations')
+  await page.locator(`[data-row="${back.id}"]`).click()
+  const pausedB = relay.pauseAtAccepted()
+  await page.keyboard.press('e')
+  await pausedB
+  await page.locator(`[data-row="${other.id}"]`).click()
+  await page.locator(`[data-row="${back.id}"]`).click()
+  relay.resume()
+  await settle()
+  equal(
+    await page.locator('[data-field="reader-subject"]').textContent(),
+    back.subject,
+    'an archive answered after the user came back leaves the conversation open',
   )
 
   // Each search starts with nothing open.

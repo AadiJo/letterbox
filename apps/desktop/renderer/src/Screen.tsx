@@ -30,12 +30,19 @@ const typing = (target: EventTarget | null) =>
  */
 export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
-  // The open conversation as event handlers see it, including a handler that resumes after a wait.
-  const open = useRef<ThreadId | null>(null)
+  // Rises on every selection and when the screen goes, so an action that resumes after a
+  // wait can tell whether anything moved on meanwhile.
+  const generation = useRef(0)
+  useEffect(
+    () => () => {
+      generation.current += 1
+    },
+    [],
+  )
 
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
-    open.current = id
+    generation.current += 1
     setSelected(id)
     const thread = id === null ? undefined : threadRecord(id)
     if (thread) markRead(thread, mail)
@@ -43,16 +50,18 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
 
   /**
    * Runs `action` on the open conversation. Once the core accepts a command that takes it out
-   * of this list, the next one opens, unless the user opened another meanwhile. The list has
-   * not changed yet when the action starts, so the rows around the open one are where they were.
+   * of this list, the next one opens, unless anything was selected or the screen left
+   * meanwhile. The list has not changed yet when the action starts, so the rows around the
+   * open one are where they were.
    */
   const act = async (action: Action) => {
     const thread = selected ? threadRecord(selected) : undefined
     if (!thread) return
     const index = order.indexOf(thread.id)
     const next = index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null)
+    const started = generation.current
     const command = await run(action, thread, mail)
-    if (command && leaves(command) && open.current === thread.id) select(next)
+    if (command && leaves(command) && generation.current === started) select(next)
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {

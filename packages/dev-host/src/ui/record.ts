@@ -53,6 +53,41 @@ const isRemote = (url: string) => {
 }
 
 /**
+ * Relays the page's `/core` socket, so a check can make the core slow on cue. After
+ * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
+ * in order. The returned promise resolves once the relay holds that `accepted`.
+ */
+async function relayCore(page: Page) {
+  let armed: (() => void) | undefined
+  let held: string[] | undefined
+  let toPage: ((message: string) => void) | undefined
+  await page.routeWebSocket(/\/core$/, (socket) => {
+    const core = socket.connectToServer()
+    socket.onMessage((message) => core.send(message))
+    toPage = (message) => socket.send(message)
+    core.onMessage((frame) => {
+      const message = frame.toString()
+      if (held) return void held.push(message)
+      if (armed && message.includes('"kind":"accepted"')) {
+        held = [message]
+        armed()
+        armed = undefined
+        return
+      }
+      socket.send(message)
+    })
+  })
+  return {
+    pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
+    resume: () => {
+      const queued = held ?? []
+      held = undefined
+      for (const message of queued) toPage?.(message)
+    },
+  }
+}
+
+/**
  * A page at a fixed locale and time zone, so dates read the same on every machine. It
  * collects page errors and remote requests. Chromium reports a load that a frame's
  * Content Security Policy refused as a request that failed with "csp" before it reached
@@ -74,9 +109,11 @@ export async function openPage(browser: Browser, url: string, trace: string) {
     if (request.failure()?.errorText === 'csp') blocked.push(request.url())
     else remote.push(request.url())
   })
+  const relay = await relayCore(page)
   await page.goto(url)
   return {
     page,
+    relay,
     errors,
     remote,
     blocked,
