@@ -176,8 +176,8 @@ export interface Adapter {
    */
   stopWaiting(): void
   /**
-   * Stops waiting as `stopWaiting` does, lets calls in flight finish, and releases sockets
-   * and timers. The adapter is not used again.
+   * Stops waiting as `stopWaiting` does and releases sockets and timers. A call still in
+   * flight may finish or answer `offline`. The adapter is not used again.
    */
   close(): Promise<void>
 }

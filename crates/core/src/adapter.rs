@@ -300,8 +300,8 @@ pub trait Adapter {
     /// now and from now on. A call that was waiting answers `offline`. Calls in flight still
     /// finish and later calls still reach the provider, so a closing core's work ends soon.
     fn stop_waiting(&self);
-    /// Stops waiting as `stop_waiting` does, lets calls in flight finish, and releases sockets
-    /// and timers. The adapter is not used again.
+    /// Stops waiting as `stop_waiting` does and releases sockets and timers. A call still in
+    /// flight may finish or answer `offline`. The adapter is not used again.
     fn close(&self) -> LocalFuture<'_, ()>;
 }
 
