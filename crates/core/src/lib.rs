@@ -29,6 +29,7 @@ mod accounts;
 pub mod adapter;
 mod changes;
 pub mod clock;
+mod confirm;
 mod dispatch;
 mod draft;
 mod live_view;
@@ -57,7 +58,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use letterbox_protocol::{AccountId, CoreMessage, MessageId, Query, SignInOption, SignInOptionId, SubscriptionId};
+use letterbox_protocol::{
+    AccountId, ChangeId, CoreMessage, MessageId, Query, SignInOption, SignInOptionId, SubscriptionId,
+};
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
 
@@ -189,6 +192,7 @@ impl Core {
                     unreachable_bodies: HashSet::default(),
                     attempts: Attempts::default(),
                     backfills: HashMap::default(),
+                    checks: HashSet::default(),
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -264,6 +268,8 @@ struct State {
     attempts: Attempts,
     /// The accounts with a snapshot page job queued (see snapshot.rs).
     backfills: HashMap<AccountId, Backfill>,
+    /// Sends with a check booked (see confirm.rs). Each has at most one at a time.
+    checks: HashSet<ChangeId>,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }

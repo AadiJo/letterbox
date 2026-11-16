@@ -71,8 +71,8 @@ const readToken = (token: PageToken): PageStart | null => {
 const createHold = () => {
   // Answers waiting for `release`. Null while calls are not held.
   let waiting: (() => void)[] | null = null
-  // Callers of `held` waiting for the next call to be held.
-  const onHeld: (() => void)[] = []
+  // Callers of `held`, each checked again whenever another call is held.
+  let onHeld: (() => boolean)[] = []
   return {
     hold: () => {
       waiting ??= []
@@ -81,13 +81,14 @@ const createHold = () => {
     keep: (answerNow: () => void): boolean => {
       if (waiting === null) return false
       waiting.push(answerNow)
-      for (const notify of onHeld.splice(0)) notify()
+      onHeld = onHeld.filter((ready) => !ready())
       return true
     },
-    held: () =>
+    /** Resolves once at least `count` calls are waiting. */
+    held: (count = 1) =>
       new Promise<void>((resolve) => {
-        if (waiting !== null && waiting.length > 0) resolve()
-        else onHeld.push(resolve)
+        const ready = () => (waiting?.length ?? 0) >= count && (resolve(), true)
+        if (!ready()) onHeld.push(ready)
       }),
     release: () => {
       const now = waiting ?? []

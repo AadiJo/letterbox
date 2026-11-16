@@ -11,10 +11,10 @@
 //!     arrive puts it back to `Due`.
 //!   - A provider offers no way to send a message only once. So a send that may have arrived
 //!     without the core hearing so, because the answer was lost or the core stopped during
-//!     the call, is `Unconfirmed` and is never sent again (adapter rule 10). The core looks
-//!     its Message-ID up at once and a few times more across the confirm window. Found, it is
-//!     delivered. Not found by the end, it fails `unconfirmed`, and sending again is the
-//!     user's choice. A copy that turns up later still takes its place (see reconcile.rs).
+//!     the call, is `Unconfirmed` and is never sent again (adapter rule 10). Its checks
+//!     (confirm.rs) look its Message-ID up until its window ends, then fail it `unconfirmed`,
+//!     and sending again is the user's choice. A sync that brings its copy settles it too
+//!     (see reconcile.rs).
 //!   - Delivered, the same record takes the provider's ref in the commit that settles the
 //!     change, so the conversation never shows it twice or drops it for a moment.
 //!   - Refused, it stays in its conversation, marked failed with the reason.
@@ -63,7 +63,7 @@ pub enum Stage {
     /// finds it here, and treats it as `Unconfirmed`.
     Sending,
     /// It may have reached the provider without the core hearing so. It is never sent again:
-    /// passes look up its Message-ID until `until`, then it fails `unconfirmed`.
+    /// its checks look up its Message-ID until `until`, then it fails `unconfirmed` (confirm.rs).
     Unconfirmed { until: Time },
 }
 
@@ -72,9 +72,6 @@ pub enum Stage {
 /// settled change. The caller announces them once the commit is in.
 #[must_use = "each send settled here needs its `settled` message: pass it to `Inner::announce` after the commit"]
 pub struct Arrived(pub(crate) Vec<ChangeId>);
-
-/// How many more times an unconfirmed send is looked up after the first, spread across the window.
-const MORE_LOOKUPS: u32 = 4;
 
 /// What a send shows of itself on its message, or None once the provider holds it.
 pub fn delivery(world: &World, record: &MessageRecord) -> Option<Delivery> {
@@ -232,8 +229,7 @@ impl Inner {
 
     /// Picks up every send a restart found on its way. A held one restarts its undo window,
     /// and one whose window ended while the core was stopped becomes due at once. One that may
-    /// have reached the provider (sending or unconfirmed) is looked up at once: found it is
-    /// done, past its saved `until` and not found it fails, else its lookups go on.
+    /// have reached the provider (sending or unconfirmed) gets one check, at once (see confirm.rs).
     pub(crate) fn resume_outbox(self: &Rc<Self>) {
         let waiting: Vec<(ChangeRecord, Stage)> = self
             .state
@@ -250,12 +246,7 @@ impl Inner {
         for (change, stage) in waiting {
             match stage {
                 Stage::Held { until } => self.hold(change.id, &until),
-                Stage::Sending | Stage::Unconfirmed { .. } => {
-                    self.background(
-                        &change.account_id,
-                        Rc::clone(self).pass(change.account_id.clone(), false),
-                    );
-                }
+                Stage::Sending | Stage::Unconfirmed { .. } => self.book_check(&change.account_id, change.id, None),
                 Stage::Due => {}
             }
         }
@@ -289,7 +280,7 @@ impl Inner {
     }
 
     /// Moves a send to `stage` in one commit, and returns its record as stored.
-    fn restage(self: &Rc<Self>, record: ChangeRecord, outbound: &Outbound, stage: Stage) -> ChangeRecord {
+    pub(crate) fn restage(self: &Rc<Self>, record: ChangeRecord, outbound: &Outbound, stage: Stage) -> ChangeRecord {
         let op = Some(Op::Send(Outbound {
             stage,
             ..outbound.clone()
@@ -300,7 +291,8 @@ impl Inner {
     }
 
     /// Carries one send as far as its stage allows. Returns why the provider was not
-    /// reached, if it was not. The send then stays where it was.
+    /// reached, if it was not. The send then stays where it was. A send that may have reached
+    /// the provider is its checks' to settle (see confirm.rs): a pass only makes sure one is booked.
     pub(crate) async fn deliver(
         self: &Rc<Self>,
         account_id: &AccountId,
@@ -311,9 +303,10 @@ impl Inner {
         match outbound.stage.clone() {
             Stage::Held { .. } => Ok(()),
             Stage::Due => self.post(account_id, linked, record, outbound).await,
-            // A call started and the core stopped before its answer, so the provider may hold it.
-            Stage::Sending => self.unconfirmed(account_id, linked, record, outbound).await,
-            Stage::Unconfirmed { until } => self.confirm(account_id, linked, record, outbound, &until).await,
+            Stage::Sending | Stage::Unconfirmed { .. } => {
+                self.book_check(account_id, record.id, None);
+                Ok(())
+            }
         }
     }
 
@@ -356,87 +349,16 @@ impl Inner {
                 self.settle(record, ChangeResult::Failed(reason.into()));
                 Ok(())
             }
-            Ok(SendResult::Unconfirmed) => self.unconfirmed(account_id, linked, record, outbound).await,
-        }
-    }
-
-    /// Marks a send that may have reached the provider, with the end of its confirm window, and looks it up.
-    async fn unconfirmed(
-        self: &Rc<Self>,
-        account_id: &AccountId,
-        linked: &Linked,
-        record: ChangeRecord,
-        outbound: Outbound,
-    ) -> PassResult {
-        let window = TimeDelta::from_std(self.confirm_window).unwrap_or(TimeDelta::MAX);
-        let now = parse(&self.env.now());
-        let until = iso(now.checked_add_signed(window).unwrap_or(now));
-        let stage = Stage::Unconfirmed { until: until.clone() };
-        let record = self.restage(record, &outbound, stage);
-        self.confirm(account_id, linked, record, outbound, &until).await
-    }
-
-    /// Looks for an unconfirmed send at the provider. Found, it is delivered. Not found, it is
-    /// looked for again later, and once the window has ended it fails. It is never sent again.
-    async fn confirm(
-        self: &Rc<Self>,
-        account_id: &AccountId,
-        linked: &Linked,
-        record: ChangeRecord,
-        outbound: Outbound,
-        until: &Time,
-    ) -> PassResult {
-        let found = linked.adapter.find(outbound.header_id.clone()).await;
-        if !self.still_current(account_id, linked) {
-            return Ok(());
-        }
-        let found = match found {
-            Ok(found) => found,
-            // A failed lookup says nothing about the send, so the next check stays booked.
-            Err(failure) => {
-                self.look_again(account_id, until);
-                return Err(failure);
+            Ok(SendResult::Unconfirmed) => {
+                self.unconfirm(record, &outbound);
+                Ok(())
             }
-        };
-        match found.r#ref {
-            Some(r#ref) => self.delivered(account_id, record, &outbound, r#ref),
-            None if parse(&self.env.now()) >= parse(until) => {
-                self.settle(record, ChangeResult::Failed(Refusal::Unconfirmed));
-            }
-            None => self.look_again(account_id, until),
         }
-        Ok(())
-    }
-
-    /// Queues the next lookup of an unconfirmed send, a step into its window or at its end.
-    /// None once the window has ended: the next pass that looks decides. Like the undo
-    /// window, the wait is not work a closing core finishes.
-    fn look_again(self: &Rc<Self>, account_id: &AccountId, until: &Time) {
-        let step = TimeDelta::from_std(self.confirm_window / MORE_LOOKUPS).unwrap_or(TimeDelta::MAX);
-        let (now, until) = (parse(&self.env.now()), parse(until));
-        if now >= until {
-            return;
-        }
-        let next = now.checked_add_signed(step).unwrap_or(now).min(until);
-        self.check_at(account_id, &iso(next));
-    }
-
-    /// Queues a pass for the account once the clock reads `at`, so it carries its sends on.
-    fn check_at(self: &Rc<Self>, account_id: &AccountId, at: &Time) {
-        let wait = self.env.until(at);
-        let core = Rc::clone(self);
-        let account_id = account_id.clone();
-        spawn_local(async move {
-            wait.await;
-            if !core.work.is_closed() {
-                core.background(&account_id, Rc::clone(&core).pass(account_id.clone(), false));
-            }
-        });
     }
 
     /// Settles a send the provider holds under `ref`. Its outbox message becomes that copy in
     /// the same commit, so it keeps its id.
-    fn delivered(
+    pub(crate) fn delivered(
         self: &Rc<Self>,
         account_id: &AccountId,
         record: ChangeRecord,

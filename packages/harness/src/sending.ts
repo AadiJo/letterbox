@@ -2,7 +2,7 @@
 
 import type { AccountId, Draft, Message, MessageId, ThreadDetail, ThreadId } from '@letterbox/protocol'
 import type { CoreClient } from './client.ts'
-import { ME, PASSWORD, readThread, signIn, standardSeed, sync, thread } from './fixtures.ts'
+import { ME, PASSWORD, readThread, signIn, standardSeed, start, sync, thread } from './fixtures.ts'
 import type { CoreOptions, Scenario } from './scenario.ts'
 
 /** The subject of Ben's question in the standard seed. It is my turn there. */
@@ -41,3 +41,17 @@ export async function asked(core: CoreClient): Promise<{ threadId: ThreadId; que
 
 /** The ids of a conversation's messages, oldest first. */
 export const idsOf = (detail: ThreadDetail | null | undefined) => detail?.messages.map((message) => message.id)
+
+/**
+ * A reply whose one send the core never heard the end of: the provider holds the call while
+ * the core is killed. The provider still holds it, so a scenario decides when it lands.
+ */
+export async function cutOff(t: Scenario) {
+  const first = await start(t)
+  const { threadId, question } = await asked(first.core)
+  first.box.holdSends()
+  const send = await first.core.command({ kind: 'send', draft: draft(first.accountId, question.id) })
+  await first.box.sendHeld()
+  await first.core.kill()
+  return { box: first.box, accountId: first.accountId, threadId, change: send.change }
+}

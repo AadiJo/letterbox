@@ -57,9 +57,9 @@ export const SEND_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a send cut off by a crash is sent again instead of looked up, so the provider gets it twice',
-    file: core('outbox.rs'),
-    find: '            Stage::Sending => self.unconfirmed(account_id, linked, record, outbound).await,',
-    replace: '            Stage::Sending => self.post(account_id, linked, record, outbound).await,',
+    file: core('confirm.rs'),
+    find: '                let stage = Stage::Unconfirmed { until: until.clone() };\n                (self.restage(record, &outbound, stage), until)',
+    replace: '                self.restage(record, &outbound, Stage::Due);\n                return drop(until);',
     scenarios: 'cut off by a crash',
   },
   {
@@ -71,16 +71,17 @@ export const SEND_MUTATIONS: Mutation[] = [
   },
   {
     name: 'an empty lookup sends the message again while the first send may still land',
-    file: core('outbox.rs'),
-    find: '            None => self.look_again(account_id, until),',
-    replace: '            None => return Box::pin(self.post(account_id, linked, record, outbound)).await,',
+    file: core('confirm.rs'),
+    find: '            _ => {\n                let step =',
+    replace:
+      '            _ if true => {\n                self.restage(record, &outbound, Stage::Due);\n                self.background(&account_id, Rc::clone(&self).pass(account_id.clone(), false));\n            }\n            _ => {\n                let step =',
     scenarios: 'cut off by a crash',
   },
   {
     name: 'a send that never shows up stays unconfirmed for good',
-    file: core('outbox.rs'),
-    find: '            None if parse(&self.env.now()) >= parse(until) => {',
-    replace: '            None if false => {',
+    file: core('confirm.rs'),
+    find: '            _ if now >= parse(&until) =>',
+    replace: '            _ if false =>',
     scenarios: 'never found fails',
   },
   {
@@ -127,16 +128,16 @@ export const SEND_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a lookup that fails books no next check, so the send shows as sending for good',
-    file: core('outbox.rs'),
-    find: '                self.look_again(account_id, until);\n                return Err(failure);',
-    replace: '                return Err(failure);',
+    file: core('confirm.rs'),
+    find: '            _ if now >= parse(&until) =>',
+    replace: '            Err(_) if now < parse(&until) => {}\n            _ if now >= parse(&until) =>',
     scenarios: 'lookup that fails',
   },
   {
     name: 'a restart forgets a send that may have reached the provider',
     file: core('outbox.rs'),
-    find: '                    self.background(\n                        &change.account_id,\n                        Rc::clone(self).pass(change.account_id.clone(), false),\n                    );',
-    replace: '                    drop(change);',
+    find: '                Stage::Sending | Stage::Unconfirmed { .. } => self.book_check(&change.account_id, change.id, None),',
+    replace: '                Stage::Sending | Stage::Unconfirmed { .. } => drop(change),',
     scenarios: 'unconfirmed',
   },
   {
@@ -173,5 +174,19 @@ export const SEND_MUTATIONS: Mutation[] = [
     find: '      // A new account is online, so a fake that every account had left listens again.\n      listenWhileReachable()\n',
     replace: '',
     scenarios: 'added while every other',
+  },
+  {
+    name: 'a last lookup that fails after the window leaves the send waiting for good',
+    file: core('confirm.rs'),
+    find: '            _ if now >= parse(&until) =>',
+    replace: '            Err(_) if now >= parse(&until) => {}\n            _ if now >= parse(&until) =>',
+    scenarios: 'last lookup that fails',
+  },
+  {
+    name: 'every pass books another check for each unconfirmed send, so lookups multiply',
+    file: core('confirm.rs'),
+    find: '        if !self.state.borrow_mut().checks.insert(change.clone()) {\n            return;\n        }',
+    replace: '        self.state.borrow_mut().checks.insert(change.clone());',
+    scenarios: 'three unconfirmed sends',
   },
 ]

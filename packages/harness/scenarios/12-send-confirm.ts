@@ -31,7 +31,7 @@ scenario('a send cut off by a crash is looked up, never sent again, and settles 
   first.box.releaseSends()
   t.equal(first.box.sent().length, 1, 'the provider files the first send')
   await sync(core)
-  t.equal((await core.settled(send.change)).result, 'done', 'the next lookup finds it and it settles as done')
+  t.equal((await core.settled(send.change)).result, 'done', 'the sync that brings its copy settles it as done')
   const detail = await readThread(core, threadId)
   t.equal([detail?.messages.length, detail?.messages[1]?.delivery], [2, null], 'the conversation shows the copy once')
   t.equal([first.box.sent().length, first.box.calls().send], [1, 1], 'the provider was asked to send it once')

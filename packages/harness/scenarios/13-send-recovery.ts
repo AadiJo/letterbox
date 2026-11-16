@@ -5,7 +5,7 @@
 
 import { fromBen, readThread, start, standardSeed, sync, thread, threads } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
-import { asked, draft, idsOf } from '../src/sending.ts'
+import { cutOff, draft, idsOf } from '../src/sending.ts'
 
 /** Two hours on from where a fixed clock starts: past any window a scenario's first core opened. */
 const LATER = '2026-01-01T02:00:00.000Z'
@@ -21,17 +21,6 @@ scenario('a send whose answer comes back damaged is looked up, never sent again'
   }
   t.equal([box.calls().send, box.sent().length], [3, 3], 'each was sent once')
 })
-
-/** A send whose first call the core never heard the end of: it is held at the provider while the core is killed. */
-async function cutOff(t: Parameters<Parameters<typeof scenario>[1]>[0]) {
-  const first = await start(t)
-  const { threadId, question } = await asked(first.core)
-  first.box.holdSends()
-  const send = await first.core.command({ kind: 'send', draft: draft(first.accountId, question.id) })
-  await first.box.sendHeld()
-  await first.core.kill()
-  return { box: first.box, threadId, change: send.change }
-}
 
 scenario('a lookup that fails is tried again, and the send settles once its copy is found', async (t) => {
   const { box, change } = await cutOff(t)

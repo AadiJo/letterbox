@@ -162,8 +162,8 @@ export interface SimMailbox {
   releaseSnapshots(): void
   /** From now on, send calls wait and deliver nothing. Lets a scenario stop a core in the middle of a send. */
   holdSends(): void
-  /** Resolves once a send call is waiting, at once if one already is. */
-  sendHeld(): Promise<void>
+  /** Resolves once `count` send calls (1 unless given) are waiting, at once if they already are. */
+  sendHeld(count?: number): Promise<void>
   /** Delivers and answers every waiting send call, in the order they came, and stops holding. */
   releaseSends(): void
 
