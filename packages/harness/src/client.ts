@@ -46,7 +46,7 @@ const CORE_PROGRAM = fileURLToPath(new URL('../../../target/debug/core-sim', imp
  */
 const WAIT_MS = 5000
 
-/** The line core-sim writes to stderr once its input closes. crates/sim-client/src/main.rs writes it. */
+/** The line core-sim writes to stderr once its input closes. crates/host writes it, named for core-sim. */
 const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
 /** The line core-sim writes to stderr when a gmail rate-limit wait starts to hold. */
 const WAIT_HELD = 'core-sim: holding a gmail rate-limit wait until the adapter closes'

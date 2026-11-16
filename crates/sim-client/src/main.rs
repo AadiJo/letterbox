@@ -9,11 +9,11 @@
 //! browser's redirect arrives on a unix socket in `--gmail-redirects`. At least one is needed.
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
-//! A real app gets its own entry point with real adapters. Nothing here is test
-//! logic inside the core: this file only chooses which factories, clock and secret store it gets.
+//! The real app's program is `letterbox-core` in crates/host, which owns the stdio loop
+//! both run through. Nothing here is test logic inside the core: this file only chooses
+//! which factories, clock and secret store it gets.
 
 use std::cell::Cell;
-use std::io::Write;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -22,18 +22,12 @@ use std::time::Duration;
 
 use letterbox_core::adapter::{AdapterFactory, LocalFuture};
 use letterbox_core::clock::FixedEnvironment;
-use letterbox_core::{Core, CoreOptions};
 use letterbox_gmail::{GmailConfig, Loopback, gmail_factory};
+use letterbox_host::{Parts, run_stdio};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
-use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::task::LocalSet;
 
 const USAGE: &str =
     "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]";
-
-/// Written to stderr once stdin closes, before the core finishes its work and exits.
-const INPUT_CLOSED: &str = "core-sim: input closed, finishing the work in flight";
 
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
@@ -145,9 +139,8 @@ fn pause(wait: Duration) -> LocalFuture<'static, ()> {
 }
 
 #[expect(
-    clippy::disallowed_methods,
     clippy::disallowed_macros,
-    reason = "this program is the transport: it owns stdout for the protocol and stderr for the log"
+    reason = "core-sim says on stderr why it cannot start. The protocol has not begun"
 )]
 fn main() -> ExitCode {
     let Some(args) = parse_args() else {
@@ -161,53 +154,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // Time is on for the Gmail adapter's HTTP client (see GmailFactory::new). Nothing in the
-    // core or the adapters waits on a timer, so a run still repeats.
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .expect("a single-thread runtime starts");
-
     let mut factories = args.sim.as_deref().map(sim_adapter_factories).unwrap_or_default();
     factories.extend(args.gmail.map(|(url, redirects)| fake_gmail(url, redirects)));
-
-    LocalSet::new().block_on(&runtime, async move {
-        let options = CoreOptions {
+    // run_stdio turns time on for the Gmail adapter's HTTP client (see GmailFactory::new).
+    // Nothing in the core or the adapters waits on a timer, so a run still repeats.
+    run_stdio(
+        "core-sim",
+        Parts {
             secrets: Box::new(FileKeychain::new(args.data.join(KEYCHAIN_FILE))),
             data_path: args.data,
             env: Box::new(env),
             factories,
-            send: Box::new(|message| {
-                let mut out = std::io::stdout().lock();
-                serde_json::to_writer(&mut out, &message).expect("core messages are plain data");
-                out.write_all(b"\n").expect("stdout is open while the core runs");
-            }),
-        };
-        let core = match Core::new(options) {
-            Ok(core) => core,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::FAILURE;
-            }
-        };
-
-        let mut lines = BufReader::new(tokio::io::stdin()).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            // Text that is not JSON stays as a string. The core answers it with a protocol-error.
-            let value = serde_json::from_str(&line).unwrap_or(Value::String(line));
-            core.receive(value);
-            // Let the work this message started take its first steps before the next message
-            // is read, so work runs in the order the client asked for it.
-            tokio::task::yield_now().await;
-        }
-        // Stdin closed. Finish the work in flight, then stop. The harness waits for this line
-        // to know the core has read the end of its input (see packages/harness/src/client.ts).
-        eprintln!("{INPUT_CLOSED}");
-        core.close().await;
-        ExitCode::SUCCESS
-    })
+        },
+    )
 }
