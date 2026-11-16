@@ -69,21 +69,22 @@ scenario('each list filter agrees with the rows, pending changes included', asyn
   }
   await agree('synced')
 
-  // Offline, so the changes stay pending and each filter has to read them.
-  box.setOffline(true)
+  // The archive's call is held at the provider, so both changes stay pending and each filter
+  // has to read them. The flip waits behind it, so only its accept has shown it.
+  box.holdApplies()
   const target = await thread(core, SUBJECT)
-  const accounts = core.subscribe({ view: 'accounts' })
   const archive = await core.command({ kind: 'set-mailboxes', threadIds: [target.id], add: [], remove: [inbox.id] })
-  // Its push finds the provider unreachable and records that. Waiting for it fixes the revision of every answer after.
-  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
+  await box.applyHeld()
   const other = (await threads(core)).find((row) => row.id !== target.id)
   t.check(other !== undefined, 'there is a second conversation')
   if (!other) return
   const flip = await core.command({ kind: 'set-flags', threadIds: [other.id], unread: !other.unread })
   t.check((await thread(core, SUBJECT)).pending, 'the archive is still pending')
+  const flipped = (await threads(core)).find((row) => row.id === other.id)
+  t.equal([flipped?.unread, flipped?.pending], [!other.unread, true], 'the flip shows at once, pending')
   await agree('with pending changes')
 
-  box.setOffline(false)
+  box.releaseApplies()
   await sync(core)
   t.equal(
     [(await core.settled(archive.change)).result, (await core.settled(flip.change)).result],

@@ -39,10 +39,16 @@ impl GmailFactory {
     /// client starts a timer when a name has both IPv6 and IPv4 addresses, as Google's do.
     /// The adapter's own code never waits on a timer (clippy.toml).
     pub fn new(config: GmailConfig) -> Self {
+        let builder = reqwest::Client::builder();
+        let builder = if config.reuse_connections {
+            builder
+        } else {
+            builder.pool_max_idle_per_host(0)
+        };
         let http = config
             .hosts
             .iter()
-            .fold(reqwest::Client::builder(), |builder, (name, addresses)| {
+            .fold(builder, |builder, (name, addresses)| {
                 builder.resolve_to_addrs(name, addresses)
             })
             .build()
