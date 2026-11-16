@@ -5,6 +5,7 @@
 
 import type { Dialect, Seed, SeedMessage } from './contract.ts'
 import type { Time } from '@letterbox/protocol'
+import { many } from './seeds/many.ts'
 import { peopleFirst } from './seeds/people-first.ts'
 
 /** One conversation with a person, as a seed describes it. The core works out the turn itself. */
@@ -27,7 +28,7 @@ export type DevSeed = {
   conversations: readonly PersonConversation[]
 }
 
-export const devSeeds = { 'people-first': peopleFirst } satisfies Record<string, DevSeed>
+export const devSeeds = { 'people-first': peopleFirst, many } satisfies Record<string, DevSeed>
 
 export type DevSeedName = keyof typeof devSeeds
 
