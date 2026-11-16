@@ -104,7 +104,7 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
   return (
     <>
       <section aria-label={title} className="flex min-h-0 w-[384px] flex-none flex-col border-r border-line">
-        <header className="flex h-[52px] flex-none items-center gap-2.5 pr-3 pl-[18px]">
+        <header className="flex h-[64px] flex-none items-center gap-2.5 pr-3 pl-[18px]">
           <button
             type="button"
             aria-label="Show the sidebar"
