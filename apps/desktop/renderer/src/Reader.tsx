@@ -31,8 +31,8 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
   const now = useNow()
   const composer = useComposer(id)
   const pending = useShownPending(id)
-  // The dock is up: the editor, or the user's reply on its way, read only.
-  const docked = pending !== null || isComposing(composer)
+  // The dock is up: the editor, or with no draft, the user's reply on its way, read only.
+  const docked = isComposing(composer) || (composer === undefined && pending !== null)
   const labels = useLabels(thread?.mailboxIds ?? [])
   const [opened, setOpened] = useState<ReadonlySet<MessageId>>(new Set())
   const [scrolled, setScrolled] = useState(false)
@@ -61,12 +61,13 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
         </div>
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {/* Only once the conversation has scrolled: a fade under the band above, where text slides away. */}
+        {/* Only once the conversation has scrolled: a hairline under the band above, with a shadow
+            of 10 px at most, so text slides under it without dimming. */}
         {scrolled && (
           <div
             aria-hidden
-            data-field="scroll-fade"
-            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-linear-to-b from-reader to-transparent"
+            data-field="scroll-edge"
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-px bg-line shadow-band"
           />
         )}
         <div
@@ -104,10 +105,10 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
           </div>
         </div>
       </div>
-      {pending ? (
-        <PendingReply pending={pending} />
+      {composer && composer.state !== 'collapsed' ? (
+        <Editor id={thread.id} composer={composer} />
       ) : (
-        composer && composer.state !== 'collapsed' && <Editor id={thread.id} composer={composer} />
+        composer === undefined && pending && <PendingReply pending={pending} />
       )}
     </article>
   )

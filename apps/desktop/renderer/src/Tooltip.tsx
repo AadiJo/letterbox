@@ -25,7 +25,8 @@ export function Tooltip({ label, shortcut, children }: Props) {
         className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-30 hidden h-[22px] -translate-x-1/2 items-center gap-2 rounded-lg bg-float pr-1 pl-2.5 text-meta font-medium whitespace-nowrap text-fg shadow-float group-hover:flex group-has-focus-visible:flex"
       >
         {label}
-        <Key tone="tip">{shortcut.toUpperCase()}</Key>
+        {/* A letter key reads as its capital; a named key, such as Esc, as written. */}
+        <Key tone="tip">{shortcut.length === 1 ? shortcut.toUpperCase() : shortcut}</Key>
       </span>
     </span>
   )

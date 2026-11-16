@@ -5,6 +5,7 @@
 import type { Person, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { Flag, Hourglass } from 'lucide-react'
 import { useNow } from './clock.ts'
+import { cx } from './cx.ts'
 import { LabelChip, useLabels } from './Label.tsx'
 import { trackRow, useExit } from './motion.ts'
 import { useThread } from './threads.ts'
@@ -45,10 +46,11 @@ export function Row({ id, slot, selected, divider, onSelect, held }: Props) {
   const labels = useLabels(thread?.mailboxIds ?? [])
   useExit(id, held)
   // Clipped, so the row can fold closed when it leaves (motion.ts).
-  const base = 'relative mx-2 flex h-[78px] gap-1 overflow-hidden rounded-[9px] py-2.5 pr-3.5 pl-1'
-  const line = divider
-    ? "before:absolute before:top-0 before:right-3.5 before:left-[22px] before:h-px before:bg-line before:content-['']"
-    : ''
+  const base = cx('relative mx-2 flex h-[78px] gap-1 overflow-hidden rounded-[9px] py-2.5 pr-3.5 pl-1')
+  const line = cx(
+    divider &&
+      "before:absolute before:top-0 before:right-3.5 before:left-[22px] before:h-px before:bg-line before:content-['']",
+  )
   if (!thread) return <div ref={trackRow(id)} role="option" aria-selected={selected} data-row={id} className={base} />
 
   // The open conversation counts as read.

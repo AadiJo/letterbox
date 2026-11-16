@@ -2,6 +2,7 @@
 // looks the same in the sidebar, the reader and the composer.
 
 import { personHue, tint } from './hue.ts'
+import { cx } from './cx.ts'
 
 /**
  * Who an avatar shows. `isMe` marks the user, whom the app knows only by their account's
@@ -10,10 +11,10 @@ import { personHue, tint } from './hue.ts'
 export type Who = { name: string | null; address: string; isMe?: boolean }
 
 const SIZES = {
-  chip: 'size-5 text-tiny',
-  account: 'size-[22px] text-tiny',
-  folded: 'size-6 text-tiny',
-  open: 'size-8 text-caption',
+  chip: cx('size-5 text-tiny'),
+  account: cx('size-[22px] text-tiny'),
+  folded: cx('size-6 text-tiny'),
+  open: cx('size-8 text-caption'),
 } as const
 
 /** The name a person is shown by: their own, or their address before the @. */

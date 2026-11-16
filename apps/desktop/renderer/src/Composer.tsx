@@ -4,7 +4,8 @@
 // text up to 40% of the reader. Past that its lines and text scroll, and Send stays in view.
 // Esc folds it back to the bar and keeps the draft; Discard throws the draft away. drafts.ts
 // holds the draft, DraftText.tsx edits its text and sending.ts sends it. While a reply is on
-// its way, the dock shows that reply read only, with Undo, instead of a second draft.
+// its way, the dock shows that reply read only, with Undo, or keeps an existing draft with its
+// Send locked until that reply has gone.
 
 import type { ThreadDetail, ThreadId } from '@letterbox/protocol'
 import { ChevronDown, CircleAlert, Clock, Reply as ReplyIcon, ReplyAll, Trash2, X } from 'lucide-react'
@@ -14,6 +15,7 @@ import { Avatar } from './Avatar.tsx'
 import {
   collapse,
   commitTyping,
+  confirmBcc,
   type Composer,
   discard,
   edit,
@@ -30,7 +32,8 @@ import { DraftText } from './DraftText.tsx'
 import { chord, Key } from './Key.tsx'
 import { slideUp } from './motion.ts'
 import { useSecondsUntil } from './clock.ts'
-import { hidePending, type Pending, sendReply, startReply, undoSend } from './sending.ts'
+import { hidePending, type Pending, sendReply, startReply, undoSend, usePendingIn } from './sending.ts'
+import { Tooltip } from './Tooltip.tsx'
 import { UNDO_KEY } from './undo.ts'
 
 const SEND_KEY = chord('↵')
@@ -91,16 +94,16 @@ function arrive(element: HTMLElement | null, id: ThreadId, target: string) {
   const field = element.querySelector<HTMLElement>(target)
   field?.focus()
   // The caret goes after what is already written.
-  const selection = window.getSelection()
-  if (!field?.isContentEditable || !selection) return
-  selection.selectAllChildren(field)
-  selection.collapseToEnd()
+  if (field instanceof HTMLTextAreaElement) field.setSelectionRange(field.value.length, field.value.length)
 }
 
 export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { state: 'collapsed' }> }) {
   const { reply } = composer
   const problem = composer.state === 'open' ? composer.problem : null
   const busy = composer.state !== 'open'
+  // An earlier reply of this conversation still on its way, or a Bcc a reload lost, holds Send.
+  const earlier = usePendingIn(id)
+  const blocked = busy || earlier !== null || reply.bccLost
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
@@ -120,7 +123,7 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
         <>
           <button
             type="button"
-            disabled={busy}
+            disabled={blocked}
             onClick={() => void sendReply(id)}
             className="inline-flex h-8 flex-none items-center gap-2.5 rounded-[9px] bg-blue pr-1.5 pl-3.5 text-row font-semibold text-paper enabled:hover:brightness-110 disabled:opacity-60"
           >
@@ -135,6 +138,10 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
             <p role="alert" data-field="send-problem" className="flex min-w-0 items-center gap-1.5 text-row text-red">
               <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
               <span className="truncate">{problem.text}</span>
+            </p>
+          ) : earlier ? (
+            <p role="status" data-field="send-locked" className="truncate text-row text-fg2">
+              {earlier.until === null ? 'Your earlier reply is still sending' : <StillSending until={earlier.until} />}
             </p>
           ) : (
             <p className="truncate text-row text-muted">Sends after 10 s. Undo with {UNDO_KEY.toUpperCase()}.</p>
@@ -159,7 +166,8 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
           <button
             type="button"
             onClick={() => showExtra(id)}
-            className="flex-none rounded-md px-1.5 py-0.5 text-row whitespace-pre text-muted hover:bg-hover hover:text-fg"
+            // Its text ends where the line under it ends, as Discard's icon does below.
+            className="-mr-1.5 flex-none rounded-md px-1.5 py-0.5 text-row whitespace-pre text-muted hover:bg-hover hover:text-fg"
           >
             Cc{'  '}Bcc
           </button>
@@ -172,6 +180,18 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
         </>
       )}
       <DraftText id={id} text={reply.text} readOnly={busy} placeholder={`Reply to ${firstName(reply.to[0])}`} />
+      {reply.bccLost && (
+        <button
+          type="button"
+          data-field="bcc-notice"
+          title="Confirm the recipients"
+          onClick={() => confirmBcc(id)}
+          className="mx-4 mb-2 flex items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
+        >
+          <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
+          Bcc wasn't kept after the reload. Check recipients before sending.
+        </button>
+      )}
     </DockFrame>
   )
 }
@@ -209,24 +229,31 @@ function DockFrame({ onMount, onKeyDown, footer, children }: FrameProps) {
           >
             {children}
           </div>
-          <footer className="flex h-[50px] flex-none items-center gap-3 pr-2 pl-4 wide:pl-6">{footer}</footer>
+          {/* Its last icon ends where the address lines' dividers end: 16 or 24 px in, less the button's 8 px around its glyph. */}
+          <footer className="flex h-[50px] flex-none items-center gap-3 pr-2 pl-4 wide:pr-4 wide:pl-6">{footer}</footer>
         </div>
       </div>
     </section>
   )
 }
 
+/** Folds the dock away. Esc does the same, which its tooltip says. */
 function Minimize({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      aria-label="Minimize"
-      title="Minimize (Esc)"
-      onClick={onClick}
-      className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg"
-    >
-      <ChevronDown className="size-4" strokeWidth={1.75} aria-hidden />
-    </button>
+    <Tooltip label="Minimize" shortcut="Esc">
+      {(describedBy) => (
+        <button
+          type="button"
+          aria-label="Minimize"
+          aria-describedby={describedBy}
+          aria-keyshortcuts="Escape"
+          onClick={onClick}
+          className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg"
+        >
+          <ChevronDown className="size-4" strokeWidth={1.75} aria-hidden />
+        </button>
+      )}
+    </Tooltip>
   )
 }
 
@@ -276,7 +303,7 @@ export function PendingReply({ pending }: { pending: Pending }) {
           className="mx-4 border-b border-line wide:mx-6"
         >
           <div className="flex min-h-11 items-center gap-2.5 py-[9px]">
-            <span className="w-7 flex-none text-row text-muted">{line.label}</span>
+            <span className="flex-none text-row text-muted">{line.label}</span>
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
               {line.people.map((person, index) => (
                 <Chip key={`${person.address} ${index}`} person={person} onRemove={null} />
@@ -288,6 +315,11 @@ export function PendingReply({ pending }: { pending: Pending }) {
       <DraftText id={pending.threadId} text={reply?.text ?? ''} readOnly placeholder="" />
     </DockFrame>
   )
+}
+
+/** Why this draft cannot go yet: the conversation's earlier reply, and its seconds left by the core's deadline. */
+function StillSending({ until }: { until: string }) {
+  return <>Your earlier reply is still sending ({useSecondsUntil(until)} s)</>
 }
 
 /** How long the core will hold the reply, by its deadline. Display only: the core's update ends it. */
@@ -319,7 +351,7 @@ function AddressLine({ id, field, label, reply, problem, children }: LineProps) 
   return (
     <div data-address-line={field} className="mx-4 border-b border-line wide:mx-6">
       <div className="flex min-h-11 items-center gap-2.5 py-[9px]">
-        <label htmlFor={`${id}-${field}`} className="w-7 flex-none text-row text-muted">
+        <label htmlFor={`${id}-${field}`} className="flex-none text-row text-muted">
           {label}
         </label>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">

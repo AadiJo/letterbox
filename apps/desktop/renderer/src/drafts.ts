@@ -31,6 +31,11 @@ export type Reply = {
   bcc: readonly Recipient[]
   typing: Readonly<Record<Field, string>>
   text: string
+  /**
+   * True for a reply rebuilt from its message, which keeps no Bcc, until the user confirms the
+   * people on it. Until then it cannot be sent (`check`), so hidden recipients are never dropped unseen.
+   */
+  bccLost: boolean
 }
 
 /** What stops a reply going, and where to say so: under an address line, or beside Send for the core's refusal. */
@@ -140,6 +145,7 @@ export function newReply(thread: ThreadDetail, all: boolean, before?: Message): 
     cc: all ? others([...message.to, ...message.cc], to) : [],
     bcc: [],
     typing: EMPTY_TYPING,
+    bccLost: false,
     text: '',
   }
 }
@@ -182,6 +188,20 @@ export function edit(id: ThreadId, change: (reply: Reply) => Reply) {
   const current = drafts.get(id)
   if (current?.state !== 'open') return
   set(id, { ...current, reply: change(current.reply), problem: null })
+}
+
+/** The user has looked at the recipients of a reply rebuilt without its Bcc, so it can be sent. */
+export function confirmBcc(id: ThreadId) {
+  edit(id, (reply) => ({ ...reply, bccLost: false }))
+  showExtra(id)
+}
+
+/** Opens the editor on the draft with `text` beside Send, to say why something it asked for cannot happen yet. */
+export function refuse(id: ThreadId, text: string) {
+  const current = drafts.get(id)
+  if (current?.state !== 'open' && current?.state !== 'collapsed') return
+  opening = id
+  set(id, { ...current, state: 'open', problem: { at: 'send', text } })
 }
 
 /** Shows the Cc and Bcc lines. */
@@ -229,13 +249,14 @@ export function settle(id: ThreadId, problem: Problem | null) {
 
 /**
  * A reply saying again what `message`, one of the user's that was not sent, said: to the same
- * people, answering the message before it. Bcc is not kept on a message, so it starts empty.
+ * people, answering the message before it. Bcc is not kept on a message, so it starts empty
+ * and marked `bccLost` until the user confirms the recipients.
  */
 export function replyFrom(thread: ThreadDetail, message: Message): Reply | null {
   const base = newReply(thread, false, message)
   if (!base) return null
   const text = message.body.state === 'ready' ? message.body.text : ''
-  return { ...base, to: message.to.map(recipient), cc: message.cc.map(recipient), text }
+  return { ...base, to: message.to.map(recipient), cc: message.cc.map(recipient), text, bccLost: true }
 }
 
 /** `reply` with whatever was typed on each address line turned into chips. */
@@ -282,6 +303,7 @@ export function parseRecipients(text: string): Recipient[] {
 
 /** The draft for the core, or the first problem with it. Text still being typed on a line counts as its recipients. */
 export function check(reply: Reply): { draft: Draft } | { problem: Problem } {
+  if (reply.bccLost) return { problem: { at: 'send', text: "Check the recipients first: Bcc wasn't kept." } }
   const lines = {
     to: [...reply.to, ...parseRecipients(reply.typing.to)],
     cc: [...reply.cc, ...parseRecipients(reply.typing.cc)],

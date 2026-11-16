@@ -82,18 +82,39 @@ export async function checkC2(page: Page) {
     `search's key sits 8 px after its label, and the group ends at the key (${JSON.stringify(search)})`,
   )
 
-  // At rest the conversation has no fade over its subject. Scrolled, a fade sits at its top edge.
-  const fade = page.locator('[data-field="scroll-fade"]')
-  equal(await fade.count(), 0, 'an unscrolled conversation shows no fade')
-  await page.locator('[data-scroll]').evaluate((element) => element.scrollTo({ top: 120 }))
-  await fade.waitFor()
+  // At rest the conversation has nothing over its subject. Scrolled, a hairline marks its top
+  // edge, with a shadow of 10 px at most and no gradient, and the first line under it keeps its color.
+  const edge = page.locator('[data-field="scroll-edge"]')
+  equal(await edge.count(), 0, 'an unscrolled conversation has no edge over its subject')
+  await page.locator('[data-scroll]').evaluate((element) => element.scrollTo({ top: 300 }))
+  await edge.waitFor()
+  const scrolled = await page.locator('[data-scroll]').evaluate((scroller) => {
+    const region = scroller.getBoundingClientRect()
+    const line = scroller.parentElement?.querySelector<HTMLElement>('[data-field="scroll-edge"]')
+    const first = [...scroller.querySelectorAll<HTMLElement>('[data-field="body"] p')].find(
+      (paragraph) => paragraph.getBoundingClientRect().bottom > region.top + 1,
+    )
+    if (!line || !first) throw new Error('the scrolled conversation has no edge or no paragraph in view')
+    const gradients = [...document.querySelectorAll('section[aria-label="Reader"] *')].filter((element) =>
+      getComputedStyle(element).backgroundImage.includes('gradient'),
+    ).length
+    return {
+      edge: [line.getBoundingClientRect().height, Math.round(line.getBoundingClientRect().top - region.top)],
+      // Tailwind lists its unused ring shadows first. The band's own shadow is the last.
+      shadow: getComputedStyle(line)
+        .boxShadow.split(/,\s*(?=rgba)/)
+        .at(-1),
+      gradients,
+      firstLine: getComputedStyle(first).color,
+    }
+  })
   equal(
-    Math.round((await boxOf(page, '[data-field="scroll-fade"]')).top - (await boxOf(page, '[data-scroll]')).top),
-    0,
-    'a scrolled conversation fades under the toolbar',
+    scrolled,
+    { edge: [1, 0], shadow: 'rgba(0, 0, 0, 0.35) 0px 2px 8px 0px', gradients: 0, firstLine: 'rgb(228, 228, 228)' },
+    'a scrolled conversation shows a hairline with a 10 px shadow, no gradient, and its first line at full color',
   )
   await page.locator('[data-scroll]').evaluate((element) => element.scrollTo({ top: 0 }))
-  await fade.waitFor({ state: 'detached' })
+  await edge.waitFor({ state: 'detached' })
 
   // Each tooltip names its key, sits 6 px above its button and 8 px or more inside the window, and clears the subject.
   const subject = await boxOf(page, '[data-field="reader-subject"]')

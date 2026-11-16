@@ -142,6 +142,16 @@ export function watchThreadDetail(id: ThreadId, listener: (detail: ThreadDetail 
   return stop
 }
 
+/**
+ * The conversations whose subject, preview or people contain `text`, asked once. For finding
+ * where a message went when the core merged its conversation into another (sending.ts).
+ */
+export async function threadsMatching(text: string) {
+  const page = await client.query({ view: 'threads', filter: { text }, offset: 0, limit: 50 })
+  remember(page)
+  return page.threads.map((thread) => thread.id)
+}
+
 // Pagers: one live list each, over one filter, showing one range at a time.
 
 type Open = { range: Range; subscription: Subscription<'threads'>; stop: () => void }

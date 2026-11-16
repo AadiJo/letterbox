@@ -2,6 +2,7 @@
 // every shortcut with a modifier reads through `chord`, so the app names keys one way per platform.
 
 import type { ReactNode } from 'react'
+import { cx } from './cx.ts'
 
 const MAC = window.letterbox?.platform === 'darwin' || navigator.userAgent.includes('Mac')
 
@@ -10,11 +11,11 @@ export const chord = (key: string) => (MAC ? `⌘${key}` : `Ctrl ${key}`)
 
 const TONES = {
   /** On the reader, the list and the toast. */
-  plain: 'border border-keycap text-faint',
+  plain: cx('border border-keycap text-faint'),
   /** On a tooltip, a step brighter. */
-  tip: 'border border-keycap text-fg2',
+  tip: cx('border border-keycap text-fg2'),
   /** Inside the blue Send button. */
-  send: 'bg-blue-deep text-fg/85',
+  send: cx('bg-blue-deep text-fg/85'),
 } as const
 
 export function Key({ children, tone = 'plain' }: { children: ReactNode; tone?: keyof typeof TONES }) {
