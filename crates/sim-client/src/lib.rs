@@ -249,6 +249,9 @@ impl Adapter for SimAdapter {
         Box::pin(self.call(Call::Apply(mutation)))
     }
 
+    // Each call goes to the server once, so there is no wait between tries to end.
+    fn stop_waiting(&self) {}
+
     fn close(&self) -> LocalFuture<'_, ()> {
         Box::pin(async move {
             self.closed.set(true);

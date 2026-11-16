@@ -133,6 +133,8 @@ const createAdapter = (socketPath: string, session: Session, first: Link | null)
       const result = await forward({ method: 'apply', arg: mutation })
       return result?.method === 'apply' ? result.outcome : offline
     },
+    // Each call goes to the server once, so there is no wait between tries to end.
+    stopWaiting: () => {},
     close: async () => {
       closed = true
       const link = await connecting

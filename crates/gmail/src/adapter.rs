@@ -306,10 +306,13 @@ impl Adapter for GmailAdapter {
         Box::pin(self.apply_mutation(mutation))
     }
 
-    fn close(&self) -> LocalFuture<'_, ()> {
-        // A call waiting out a rate limit ends now, as offline. Other requests in flight finish
-        // on their own. The client's connections close when it drops.
+    fn stop_waiting(&self) {
         self.api.close();
+    }
+
+    fn close(&self) -> LocalFuture<'_, ()> {
+        // Requests in flight finish on their own. The client's connections close when it drops.
+        self.stop_waiting();
         Box::pin(async {})
     }
 }
