@@ -186,6 +186,8 @@ fn row<'a>(world: &'a World, id: &ThreadId, pending: &Pending<'a>, meter: &Meter
 }
 
 /// One row for a thread, or None when the thread or its account is gone, or it has no messages left.
+/// Its people are everyone taking part: each message's sender, then its to and cc recipients,
+/// once per address (compared without case), in the order they first appear.
 fn summarize(
     world: &World,
     thread_id: &ThreadId,
@@ -197,10 +199,16 @@ fn summarize(
     let account = world.accounts.get(&thread.account_id)?;
     let (first, last) = (records.first()?, records.last()?);
 
+    let everyone = records.iter().flat_map(|record| {
+        std::iter::once(&record.facts.from)
+            .chain(&record.facts.to)
+            .chain(&record.facts.cc)
+    });
     let mut people: IndexMap<String, Person> = IndexMap::default();
-    for record in records {
-        let from = person(&record.facts.from, &account.address);
-        people.entry(from.address.to_lowercase()).or_insert(from);
+    for address in everyone {
+        people
+            .entry(address.address.to_lowercase())
+            .or_insert_with(|| person(address, &account.address));
     }
     let turn = decide_turn(
         &records
