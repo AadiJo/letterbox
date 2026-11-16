@@ -67,15 +67,30 @@ const devSeed = devSeeds[seedName]
 const port = values.port === undefined ? portFor(root) : Number(values.port)
 if (!Number.isInteger(port) || port < 0 || port > 65_535) fail(`--port ${values.port} is not a port number.`)
 
+/** True when `inner` is `outer` or a folder inside it. */
+const isWithin = (outer: string, inner: string) => {
+  const path = relative(outer, inner)
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+/** The real core's store, kept across runs. No --state may empty it. */
+const GMAIL = join(root, '.letterbox/gmail')
+
 const state = resolve(root, values.state)
 const underLetterbox = relative(join(root, '.letterbox'), state)
 if (underLetterbox === '' || underLetterbox.startsWith('..') || isAbsolute(underLetterbox)) {
   fail('--state must be a folder inside .letterbox/, because the dev host empties it on every start.')
 }
+if (isWithin(GMAIL, state) || isWithin(state, GMAIL)) {
+  fail(
+    `--state ${values.state} would empty .letterbox/gmail, where the real core keeps its store. ` +
+      'Use a folder beside it, such as .letterbox/dev or .letterbox/desktop.',
+  )
+}
 const paths: Paths = {
   root,
   // The real core keeps its store across runs, outside the state folder that every start empties.
-  data: core === 'gmail' ? join(root, '.letterbox/gmail/core') : join(state, 'data'),
+  data: core === 'gmail' ? join(GMAIL, 'core') : join(state, 'data'),
   socket: join(state, 'provider.sock'),
   coreLog: join(state, 'core.log'),
 }

@@ -3,8 +3,9 @@
 
 /**
  * The IPC channels between main and the preload. Neither carries core messages, which go
- * over the MessagePort.
+ * over the MessagePort. Both carry the id the preload made for its document.
  *   core:connect  preload to main, once per page load: the page wants a core.
- *   core:port     main to preload: the page's end of a MessageChannelMain to that core.
+ *   core:port     main to preload: the page's end of a MessageChannelMain to that core,
+ *                 for the document with that id only.
  */
 export type Channel = 'core:connect' | 'core:port'

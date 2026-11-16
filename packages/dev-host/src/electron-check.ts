@@ -2,172 +2,58 @@
 //
 // Builds the shell and a renderer, signs the people-first seed in at the sim provider, and
 // launches the app with Playwright's Electron driver. Main starts core-sim itself, as it
-// starts letterbox-core in the app. Four runs, each a fresh app over the same store:
+// starts letterbox-core in the app. Five runs, each a fresh app over the same store:
 //   built     the built renderer on app://. The first row paints, the core's messages go
-//             over the MessagePort and nothing opens a WebSocket, the page is sandboxed
-//             and its policy blocks inline script. Quitting lets the idle core finish.
-//   busy      the Vite renderer, as `pnpm dev:desktop` runs it. A reload gets a new core.
-//             Then the core is made to wait on a snapshot page the provider holds, and the
-//             app quits while it waits. Main waits STOP_MS, then kills the core by PID.
+//             over the MessagePort and nothing opens a WebSocket, the page runs in the OS
+//             sandbox and its policy blocks inline script. Quitting lets the idle core finish.
+//   busy      the Vite renderer, as `pnpm dev:desktop` runs it. Two reloads while main stops
+//             a busy core leave the newest page with a live core of its own. Then the app
+//             quits while its core waits on the provider: main waits STOP_MS, then kills it.
 //   crash     the built renderer. The core is killed under the app, and the page says so.
+//   redirect  a dev URL that redirects to another origin. Main blocks it.
 //   gmail     real mode with no client file, and with one that does not exist. Main exits
 //             with 1 and says what to set, before any window or core.
+// It also checks that the dev host refuses a --state that would empty the real core's store.
 // Every core main started must be gone once its app has quit.
 //
 // Writes electron.json (the checks and the cold start, from launch to the first painted
 // row), screenshots and the shell's log to artifacts/ui/.
 
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
-import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
-import { isDeepStrictEqual } from 'node:util'
 import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/build'
 import { STOP_MS } from '@letterbox/desktop-shell/core'
-import { devSeeds } from '@letterbox/sim-provider/seeds'
-import { _electron, type ElectronApplication, type Page } from 'playwright'
 import { exited, killChildrenNow, logChildrenTo, startChild, stopChildren } from './children.ts'
-import type { Paths } from './core.ts'
+import {
+  ARTIFACTS,
+  checkQuit,
+  checks,
+  corePids,
+  equal,
+  firstRowPainted,
+  isRunning,
+  pageSandboxed,
+  paths,
+  quit,
+  untilLogged,
+  root,
+  seed,
+  SHELL_LOG,
+  STATE,
+  WAIT_MS,
+  within,
+  withApp,
+  yourTurn,
+  yourTurnShown,
+} from './electron-app.ts'
 import { missingDisplay, shellEnv } from './desktop.ts'
+import { listen } from './port.ts'
 import { type DevServer, startServer } from './server.ts'
 import { type RunningSim, startSim } from './sim.ts'
 
-const root = fileURLToPath(new URL('../../../', import.meta.url)).replace(/\/$/, '')
-const ARTIFACTS = join(root, 'artifacts/ui')
-const STATE = join(root, '.letterbox/electron-check')
-const SHELL_LOG = join(ARTIFACTS, 'electron-shell.log')
-/** Main's own log, in the user data folder shellEnv gives it. */
-const MAIN_LOG = join(STATE, 'electron/main.log')
-/** Bounds on waits that should end long before, so a broken run fails instead of hanging. */
-const WAIT_MS = 30_000
-
-const seed = devSeeds['people-first']
-const yourTurn = seed.conversations
-  .filter((conversation) => conversation.turn === 'mine')
-  .toSorted((a, b) => b.lastAt.localeCompare(a.lastAt))
-  .map((conversation) => conversation.subject)
-
-const paths: Paths = {
-  root,
-  data: join(STATE, 'data'),
-  socket: join(STATE, 'provider.sock'),
-  coreLog: join(STATE, 'core.log'),
-}
-const checks: { ok: boolean; what: string }[] = []
 let failure: string | null = null
-
-/** Records a check and fails the run unless the two values are deeply equal. */
-const equal = <Value>(actual: Value, expected: Value, what: string) => {
-  const ok = isDeepStrictEqual(actual, expected)
-  checks.push({ ok, what })
-  if (ok) console.log(`ok   ${what}`)
-  else throw new Error(`${what}\n  expected ${JSON.stringify(expected)}\n  actual   ${JSON.stringify(actual)}`)
-}
-
-/** Rejects with `what` if `promise` takes longer than WAIT_MS. */
-const within = <Value>(promise: Promise<Value>, what: string) =>
-  new Promise<Value>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${what} took longer than ${WAIT_MS} ms`)), WAIT_MS)
-    promise.then(resolve, reject).finally(() => clearTimeout(timer))
-  })
-
-const isRunning = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-type Launched = {
-  app: ElectronApplication
-  page: Page
-  /** Main's log lines from this launch so far. */
-  lines(): string[]
-  /** Resolves with Electron's exit code. */
-  exit: Promise<number | null>
-  /** When the launch began, by this machine's clock, which the page shares. */
-  startedAt: number
-}
-
-/** Launches the app with its page at `renderer`, against the sim. Main's output goes to the shell log. */
-async function launch(name: string, renderer: string): Promise<Launched> {
-  const from = existsSync(MAIN_LOG) ? readFileSync(MAIN_LOG, 'utf8').length : 0
-  const startedAt = Date.now()
-  const app = await _electron.launch({
-    executablePath: electronBinary(),
-    args: [SHELL],
-    cwd: root,
-    env: shellEnv(paths, renderer, { kind: 'sim', now: seed.now }),
-  })
-  const child = app.process()
-  const exit = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)))
-  // Playwright reads Electron's output from the start, so lines before this point reach main.log only.
-  const record = (line: string) => appendFileSync(SHELL_LOG, `${name}: ${line}\n`)
-  for (const output of [child.stdout, child.stderr]) if (output) createInterface({ input: output }).on('line', record)
-  const lines = () => readFileSync(MAIN_LOG, 'utf8').slice(from).split('\n').filter(Boolean)
-  const page = await app.firstWindow()
-  page.on('console', (message) => record(`page ${message.type()}: ${message.text()}`))
-  page.on('pageerror', (error) => record(`page error: ${error.message}`))
-  return { app, page, lines, exit, startedAt }
-}
-
-/**
- * When the first People row painted, by the page's clock. The page checks on every frame and
- * reads the clock one frame after the row is there, once that frame has painted.
- */
-const firstRowPainted = async (page: Page) => {
-  const found = await page.waitForFunction(
-    () =>
-      document.querySelector('section li') !== null &&
-      new Promise((painted) => requestAnimationFrame(() => painted(Date.now()))),
-    null,
-    { polling: 'raf', timeout: WAIT_MS },
-  )
-  return Number(await found.jsonValue())
-}
-
-/** The Your turn subjects, top to bottom. */
-const yourTurnShown = (page: Page) =>
-  page.getByRole('region', { name: 'Your turn' }).locator('[data-field="subject"]').allTextContents()
-
-/** The PIDs of the cores main started, from its log. */
-const corePids = (lines: string[]) =>
-  lines.flatMap((line) => /^\[shell\] core (\d+) started/.exec(line)?.[1] ?? []).map(Number)
-
-/** Quits the app the way a person does and resolves with its exit code. Kills it by PID if it hangs. */
-async function quit({ app, exit }: Launched) {
-  await app.evaluate(({ app: electron }) => electron.quit())
-  return within(exit, 'quitting the app').catch((error: unknown) => {
-    const { pid } = app.process()
-    if (pid !== undefined && isRunning(pid)) process.kill(pid, 'SIGKILL')
-    throw error
-  })
-}
-
-/**
- * Launches the app, hands it to `body`, and makes sure it is gone afterwards, even when
- * `body` fails part way: quit as a person does, then kill it by PID if that hangs.
- */
-async function withApp<Result>(name: string, renderer: string, body: (run: Launched) => Promise<Result>) {
-  const run = await launch(name, renderer)
-  try {
-    return await body(run)
-  } finally {
-    const child = run.app.process()
-    if (child.exitCode === null && child.signalCode === null) await quit(run).catch(() => undefined)
-  }
-}
-
-/** Checks that the app exited cleanly and left no core running. */
-function checkQuit(name: string, run: Launched, code: number | null, cores = 1) {
-  equal(code, 0, `${name}: the app exits with 0`)
-  const pids = corePids(run.lines())
-  equal(pids.length, cores, `${name}: main started ${cores === 1 ? 'one core' : `${cores} cores, one per page load`}`)
-  equal(pids.filter(isRunning), [], `${name}: no core outlives the app`)
-}
 
 /** The built run: cold start, the MessagePort, the sandbox and the policy, and a clean quit. */
 const builtRun = (renderer: string) =>
@@ -202,6 +88,7 @@ const builtRun = (renderer: string) =>
       true,
       'built: new windows are denied',
     )
+    equal(await pageSandboxed(run), true, "built: the page's renderer runs in the OS sandbox")
     equal(errors, [], 'built: the page logged no errors')
     equal(sockets, [], 'built: the page opened no WebSocket')
     // The policy allows no inline script, so this one never runs. Its refusal logs an error, so it goes last.
@@ -229,24 +116,51 @@ const builtRun = (renderer: string) =>
     return coldStart
   })
 
-/** The busy run: quit while the core waits on the provider, with the order set by the provider's hold. */
+/** True once `count` pages have asked main for a core. */
+const asked = (count: number) => (lines: string[]) =>
+  lines.filter((line) => line.endsWith('a page asked for a core')).length >= count
+
+/**
+ * The busy run. First, two reloads while main waits for a busy core to stop: the older page's
+ * request must not hand the newest page a core that is then stopped. Then a quit while the
+ * core waits on the provider. The provider's snapshot hold sets the order, not timers.
+ */
 const busyRun = (sim: RunningSim, server: DevServer) =>
   withApp('busy', server.url, async (run) => {
+    /** Makes the page's core wait on the provider: a delivery syncs, and with the cursor expired the sync starts a snapshot whose first page is held. */
+    const busy = async () => {
+      await run.page.waitForFunction(() => window.letterboxDev !== undefined, null, { timeout: WAIT_MS })
+      sim.mailbox.expireCursors()
+      sim.mailbox.holdSnapshots()
+      await run.page.evaluate(() => void window.letterboxDev?.deliver(1).catch(() => {}))
+      await within(sim.mailbox.snapshotHeld(), 'the core asking for a snapshot page')
+    }
+
     await firstRowPainted(run.page)
-    // A reload is a new page, as after an HMR full reload. Main stops the first core, then starts its own.
+    await busy()
+    // Each reload is a new page, as after an HMR full reload. Main stops the busy core for the
+    // first one, and that stop waits on the provider while the second asks.
     await run.page.reload()
+    await untilLogged(run, asked(2), 'the first reload asking for a core')
+    await run.page.reload()
+    await untilLogged(run, asked(3), 'the second reload asking for a core')
+    sim.mailbox.releaseSnapshots()
     await firstRowPainted(run.page)
-    equal(
-      run.lines().filter((line) => line.endsWith('stopped: finished its work')).length,
-      1,
-      'busy: a reload stops the first core before the next one starts',
-    )
     await run.page.waitForFunction(() => window.letterboxDev !== undefined, null, { timeout: WAIT_MS })
-    // A delivery syncs. With the cursor expired the sync starts a snapshot, and its first page waits.
-    sim.mailbox.expireCursors()
-    sim.mailbox.holdSnapshots()
-    await run.page.evaluate(() => void window.letterboxDev?.deliver(1).catch(() => {}))
-    await within(sim.mailbox.snapshotHeld(), 'the core asking for a snapshot page')
+    const synced = await within(
+      run.page.evaluate(() => window.letterboxDev?.deliver(1).then(() => 'synced')),
+      "a sync through the newest page's core",
+    )
+    equal(synced, 'synced', 'busy: after two reloads during a stop, the newest page syncs through its own core')
+    equal(corePids(run.lines()).filter(isRunning).length, 1, 'busy: one core runs')
+    equal(
+      run.lines().filter((line) => line.startsWith('[shell] dropped a core request')).length,
+      1,
+      'busy: main dropped the request of the page that reloaded while it waited',
+    )
+    equal(await run.page.getByRole('alert').count(), 0, 'busy: the newest page never lost its core')
+
+    await busy()
     const quitAt = Date.now()
     const code = await quit(run)
     const tookMs = Date.now() - quitAt
@@ -301,6 +215,63 @@ async function buildRenderer(outDir: string) {
   if (vite.exitCode !== 0) throw new Error(`the renderer did not build:\n${output}`)
 }
 
+/**
+ * A dev URL that starts to redirect to another origin, as a misconfigured dev server might.
+ * The page loads once, then reloads into the redirect. Main blocks it, so the page with the
+ * bridge never loads elsewhere. The other origin counts the requests it gets.
+ */
+async function redirectRun() {
+  let elsewhereHits = 0
+  const elsewhere = createServer((_request, response) => {
+    elsewhereHits += 1
+    response.end('<p>elsewhere</p>')
+  })
+  const elsewhereUrl = `http://127.0.0.1:${await listen(elsewhere, 0)}/`
+  let served = 0
+  const dev = createServer((_request, response) => {
+    served += 1
+    if (served === 1) return response.end('<p>the dev page</p>')
+    response.writeHead(302, { location: elsewhereUrl })
+    response.end()
+  })
+  const devUrl = `http://127.0.0.1:${await listen(dev, 0)}/`
+  try {
+    await withApp('redirect', devUrl, async (run) => {
+      // The reload never finishes loading, so nothing waits for it. Main's log says when it was blocked.
+      void run.page.reload().catch(() => undefined)
+      await untilLogged(
+        run,
+        (lines) => lines.some((line) => line.includes('blocked a redirect')),
+        'main blocking a redirect to another origin',
+      )
+      equal(elsewhereHits, 0, 'redirect: the page never loads from the origin a redirect points to')
+      checkQuit('redirect', run, await quit(run))
+    })
+  } finally {
+    for (const server of [elsewhere, dev]) {
+      server.closeAllConnections()
+      server.close()
+    }
+  }
+}
+
+/** The dev host refuses a state folder that would empty the real core's store, before it deletes anything. */
+function stateRun() {
+  for (const state of ['.letterbox/gmail', '.letterbox/gmail/dev']) {
+    const run = spawnSync(process.execPath, ['packages/dev-host/src/main.ts', '--state', state, '--port', '0'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: WAIT_MS,
+    })
+    equal(run.status, 1, `state: the dev host refuses --state ${state}`)
+    equal(
+      run.stderr.includes('.letterbox/gmail, where the real core keeps its store'),
+      true,
+      `state: it says why --state ${state} is refused`,
+    )
+  }
+}
+
 /** Real mode without a usable client file: main exits with 1 and says what to set, before any core. */
 function gmailRun(renderer: string) {
   const cases = [
@@ -338,22 +309,37 @@ process.on('exit', killChildrenNow)
 
 let sim: RunningSim | undefined
 let server: DevServer | undefined
-let coldStart: { ms: number; toPageMs: number } | null = null
-try {
+/** The cold start, once the built run has measured it. */
+const measured: { coldStart?: { ms: number; toPageMs: number } } = {}
+/** Runs one part of the check. A failure is noted, and the parts after it still run. */
+async function part(run: () => unknown) {
+  try {
+    await run()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(`FAIL ${message}`)
+    failure ??= message
+  }
+}
+
+const renderer = join(STATE, 'renderer')
+await part(async () => {
   sim = await startSim(paths, seed)
-  const renderer = join(STATE, 'renderer')
   await buildRenderer(renderer)
   await buildShell()
-  coldStart = await builtRun(renderer)
-  server = await startServer({ paths, port: 0, relay: false, sim: sim.sim })
-  await busyRun(sim, server)
-  await crashRun(renderer)
-  gmailRun(renderer)
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error)
-  console.log(`FAIL ${message}`)
-  failure = message
+})
+if (failure === null) {
+  await part(async () => (measured.coldStart = await builtRun(renderer)))
+  await part(async () => {
+    if (!sim) return
+    server = await startServer({ paths, port: 0, relay: false, sim: sim.sim })
+    await busyRun(sim, server)
+  })
+  await part(() => crashRun(renderer))
+  await part(redirectRun)
+  await part(() => gmailRun(renderer))
 }
+await part(stateRun)
 await server?.close().catch(() => undefined)
 await sim?.provider.close().catch(() => undefined)
 await stopChildren()
@@ -369,7 +355,7 @@ writeFileSync(
       passed: failure === null,
       failure,
       coldStart: {
-        ...coldStart,
+        ...measured.coldStart,
         from: 'Playwright launching Electron, which holds back the ready event until it attaches',
         toPage: 'the page starts to load',
         to: 'the frame after the first People row is in the page',

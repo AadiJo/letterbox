@@ -5,6 +5,7 @@ import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, net, protocol, session } from 'electron'
 import type { Renderer } from './config.ts'
+import { log } from './log.ts'
 
 /** The scheme a built renderer is served on, as app://renderer/index.html. */
 const SCHEME = 'app'
@@ -85,12 +86,31 @@ export function serveRenderer(renderer: Renderer): string {
   return `${SCHEME}://${HOST}/index.html`
 }
 
-/** Keeps every page where it is: no navigation away, no new windows, no webviews. */
-export function lockNavigation() {
+/** The origin of `url` as Chromium writes it, app://renderer included, which URL#origin calls 'null'. */
+const originOf = (url: string) => {
+  const parsed = URL.parse(url)
+  return parsed && `${parsed.protocol}//${parsed.host}`
+}
+
+/** The origin the page loads from. Main gives a core only to a frame of this origin. */
+export const pageOrigin = (renderer: Renderer) =>
+  renderer.kind === 'server' ? renderer.url.origin : `${SCHEME}://${HOST}`
+
+/**
+ * Keeps every page where it is: no navigation away, no redirect to another origin, no new
+ * windows, no webviews. A redirect would load the page elsewhere with the bridge but
+ * without the policy.
+ */
+export function lockNavigation(origin: string) {
   app.on('web-contents-created', (_event, contents) => {
     // A reload asks to go to the URL it is on. Vite's HMR does that, and so may a person.
     contents.on('will-navigate', (event, url) => {
       if (url !== contents.getURL()) event.preventDefault()
+    })
+    contents.on('will-redirect', (event, url) => {
+      if (originOf(url) === origin) return
+      event.preventDefault()
+      log(`blocked a redirect to ${originOf(url) ?? 'a url that does not parse'}`)
     })
     contents.on('will-attach-webview', (event) => event.preventDefault())
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
