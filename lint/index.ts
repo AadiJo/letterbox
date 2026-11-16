@@ -10,6 +10,8 @@ import noNodeInRenderer from './rules/no-node-in-renderer.ts'
 import noProviderNames from './rules/no-provider-names.ts'
 import noStdoutInCore from './rules/no-stdout-in-core.ts'
 import noUiInShell from './rules/no-ui-in-shell.ts'
+import rendererClock from './rules/renderer-clock.ts'
+import rendererThreadLists from './rules/renderer-thread-lists.ts'
 import requireSuppressionReason from './rules/require-suppression-reason.ts'
 import scenarioThreadsThroughFixtures from './rules/scenario-threads-through-fixtures.ts'
 import scenarioWaitsOnEvents from './rules/scenario-waits-on-events.ts'
@@ -24,6 +26,8 @@ export default {
     'no-provider-names': noProviderNames,
     'no-stdout-in-core': noStdoutInCore,
     'no-ui-in-shell': noUiInShell,
+    'renderer-clock': rendererClock,
+    'renderer-thread-lists': rendererThreadLists,
     'require-suppression-reason': requireSuppressionReason,
     'scenario-threads-through-fixtures': scenarioThreadsThroughFixtures,
     'scenario-waits-on-events': scenarioWaitsOnEvents,

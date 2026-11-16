@@ -1,1 +1,43 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/*
+ * T3 Code's Graphite theme, dark, in a macOS Tahoe window. Dark mode only.
+ * Text uses four neutral steps: fg (245), fg2 (210), muted (165), faint (140).
+ * Blue is only for unread and progress. Amber is only for turns that waited past 7 days.
+ * The default palette is cleared, so every color in the renderer is one of these.
+ */
+@theme {
+  --color-*: initial;
+  --color-desk: #000;
+  --color-win: #141415;
+  --color-panel: #1c1c1e;
+  --color-raised: #212123;
+  --color-hover: #252528;
+  --color-line: #262627;
+  --color-line2: #333335;
+  --color-hair: #1f1f21;
+  --color-key: #3a3a3c;
+  --color-fg: #f5f5f5;
+  --color-fg2: #d2d2d2;
+  --color-muted: #a5a5a5;
+  --color-faint: #8c8c8c;
+  --color-body: #e2e2e2;
+  --color-blue: #4d9cff;
+  --color-amber: #ff905e;
+  --color-sel: #2c2c31;
+  --color-pill: #2c2c2e;
+  --color-pill-sel: #3e3e44;
+  --color-paper: #fff;
+
+  --font-sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* Below this width the sidebar collapses behind a toggle and search shrinks to an icon. */
+  --breakpoint-wide: 1100px;
+}
+
+/* Inter's alternate digits and a single-storey a, as the design sets them. Classes cannot set these on the root. */
+body {
+  font-feature-settings: 'cv11', 'ss03';
+}

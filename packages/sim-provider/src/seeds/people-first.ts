@@ -3,6 +3,8 @@
 //   8 conversations where it is my turn, 1 hour to 26 days old
 //   12 where I am waiting on them, 2 hours to 29 days old
 //   27 turns older than 30 days, some mine and some theirs
+// Receipts, travel mail and a few conversations carry labels, and one newsletter is HTML
+// that tries to run script and load remote content, which the reader must block.
 // Every name, address and company here is made up.
 
 import type { SeedAddress, SeedMessage } from '../contract.ts'
@@ -35,15 +37,22 @@ const PEOPLE = {
   kit: { name: 'Kit Ashworth', address: 'kit@ashworth.example' },
 } satisfies Record<string, SeedAddress>
 
-/** One conversation with a person: who, about what, whose turn the seed means, and how long ago it last moved. */
-type Spec = { with: keyof typeof PEOPLE; subject: string; turn: 'mine' | 'theirs'; age: number; length: 1 | 2 | 3 }
+/** One conversation with a person: who, about what, whose turn the seed means, how long ago it last moved, and a label. */
+type Spec = {
+  with: keyof typeof PEOPLE
+  subject: string
+  turn: 'mine' | 'theirs'
+  age: number
+  length: 1 | 2 | 3
+  label?: 'projects'
+}
 
 /** Newest first within each group. */
 const SPECS: Spec[] = [
   // My turn, 1 hour to 26 days.
-  { with: 'maya', subject: 'Notes from Thursday', turn: 'mine', age: 1 * HOUR, length: 3 },
+  { with: 'maya', subject: 'Notes from Thursday', turn: 'mine', age: 1 * HOUR, length: 3, label: 'projects' },
   { with: 'tomas', subject: 'Can you sign the lease addendum?', turn: 'mine', age: 5 * HOUR, length: 1 },
-  { with: 'priya', subject: 'Draft cover for the zine', turn: 'mine', age: 26 * HOUR, length: 3 },
+  { with: 'priya', subject: 'Draft cover for the zine', turn: 'mine', age: 26 * HOUR, length: 3, label: 'projects' },
   { with: 'jonah', subject: 'Climbing on Saturday?', turn: 'mine', age: 3 * DAY, length: 1 },
   { with: 'ines', subject: 'Invoice question', turn: 'mine', age: 6 * DAY, length: 3 },
   { with: 'wen', subject: 'Reference letter', turn: 'mine', age: 11 * DAY, length: 1 },
@@ -61,7 +70,7 @@ const SPECS: Spec[] = [
   { with: 'priya', subject: 'Print shop contact', turn: 'theirs', age: 13 * DAY, length: 1 },
   { with: 'jonah', subject: 'Borrowed tent', turn: 'theirs', age: 18 * DAY, length: 2 },
   { with: 'ines', subject: 'Contract renewal', turn: 'theirs', age: 22 * DAY, length: 1 },
-  { with: 'wen', subject: 'Conference talk slot', turn: 'theirs', age: 29 * DAY, length: 2 },
+  { with: 'wen', subject: 'Conference talk slot', turn: 'theirs', age: 29 * DAY, length: 2, label: 'projects' },
   // Turns older than 30 days, alternating mine and theirs, 13 days apart.
   ...(
     [
@@ -113,7 +122,7 @@ const conversation = (spec: Spec, number: number): SeedMessage[] => {
     const to: SeedAddress = mine ? them : ME
     return {
       key,
-      mailboxes: [mine ? 'sent' : 'inbox'],
+      mailboxes: [mine ? 'sent' : 'inbox', ...(spec.label ? [spec.label] : [])],
       from,
       to: [to],
       subject: index === 0 ? spec.subject : `Re: ${spec.subject}`,
@@ -127,8 +136,8 @@ const conversation = (spec: Spec, number: number): SeedMessage[] => {
 
 type Kind = 'notification' | 'receipt' | 'newsletter'
 
-/** Machines that write to me. Each kind marks itself as automated the way real ones do. */
-const SENDERS: { name: string; address: string; kind: Kind; subject: string }[] = [
+/** Machines that write to me. Each kind marks itself as automated the way real ones do. Travel mail is labelled. */
+const SENDERS: { name: string; address: string; kind: Kind; subject: string; travel?: true }[] = [
   {
     name: 'Codeyard',
     address: 'notifications@codeyard.example',
@@ -195,7 +204,13 @@ const SENDERS: { name: string; address: string; kind: Kind; subject: string }[] 
     kind: 'receipt',
     subject: 'Your order confirmation',
   },
-  { name: 'Railway Tickets', address: 'no-reply@railtickets.example', kind: 'receipt', subject: 'Your e-ticket' },
+  {
+    name: 'Railway Tickets',
+    address: 'no-reply@railtickets.example',
+    kind: 'receipt',
+    subject: 'Your e-ticket',
+    travel: true,
+  },
   { name: 'Ridely', address: 'receipts@ridely.example', kind: 'receipt', subject: 'Your trip receipt' },
   { name: 'Streamhouse', address: 'billing@streamhouse.example', kind: 'receipt', subject: 'Your monthly invoice' },
   { name: 'Corner Books', address: 'shop@cornerbooks.example', kind: 'receipt', subject: 'Thanks for your order' },
@@ -214,7 +229,13 @@ const SENDERS: { name: string; address: string; kind: Kind; subject: string }[] 
   { name: 'Bean & Leaf', address: 'news@beanandleaf.example', kind: 'newsletter', subject: 'New single origins' },
   { name: 'Local Library', address: 'events@library.example', kind: 'newsletter', subject: 'Events this month' },
   { name: 'Rust Digest', address: 'digest@rustdigest.example', kind: 'newsletter', subject: 'Digest' },
-  { name: 'Travelnest', address: 'deals@travelnest.example', kind: 'newsletter', subject: 'Weekend getaways from 49' },
+  {
+    name: 'Travelnest',
+    address: 'deals@travelnest.example',
+    kind: 'newsletter',
+    subject: 'Weekend getaways from 49',
+    travel: true,
+  },
   { name: 'Market Notes', address: 'notes@marketnotes.example', kind: 'newsletter', subject: 'Morning briefing' },
 ]
 
@@ -232,7 +253,7 @@ const automated = (index: number, sentAt: string): SeedMessage => {
   }
   return {
     key: `auto-${index}`,
-    mailboxes: ['inbox'],
+    mailboxes: ['inbox', ...(sender.kind === 'receipt' ? ['receipts'] : []), ...(sender.travel ? ['travel'] : [])],
     from: { name: sender.name, address: sender.address },
     to: [ME],
     subject: `${sender.subject} #${1000 + index}`,
@@ -242,6 +263,35 @@ const automated = (index: number, sentAt: string): SeedMessage => {
     unread: index >= AUTOMATED - 8,
     ...marks[sender.kind],
   }
+}
+
+/**
+ * An HTML newsletter that tries what hostile mail tries: a script, an inline handler, a
+ * tracking pixel, a remote stylesheet, a remote font and a link to a remote page. The `probe` paragraph keeps its
+ * text only if none of it ran, and the dev host's UI check reads it.
+ */
+const htmlNewsletter: SeedMessage = {
+  key: 'html-newsletter',
+  mailboxes: ['inbox'],
+  from: { name: 'The Long Read', address: 'newsletter@longread.example' },
+  to: [ME],
+  subject: 'Five essays for the weekend',
+  text: 'Five essays for the weekend. Read them in your browser.',
+  html: [
+    '<link rel="stylesheet" href="https://styles.longread.example/mail.css">',
+    '<style>@font-face{font-family:Remote;src:url(https://fonts.longread.example/serif.woff2)}h1{font-family:Remote,Georgia,serif}</style>',
+    '<h1>Five essays for the weekend</h1>',
+    '<p id="probe">Nothing in this message ran.</p>',
+    '<p>On slow mornings, small gardens and the quiet web.</p>',
+    '<p><a id="out" href="https://read.longread.example/essays">Read in your browser</a></p>',
+    '<img src="https://pixel.longread.example/open.gif" width="1" height="1" alt="">',
+    '<img src="missing.png" alt="" onerror="document.getElementById(\'probe\').textContent=\'A handler ran.\'">',
+    "<script>document.getElementById('probe').textContent='A script ran.';top.postMessage('script ran','*')</script>",
+  ].join(''),
+  sentAt: ago(40 * 60_000),
+  unread: true,
+  headers: { listUnsubscribe: true, listId: true, precedence: 'bulk' },
+  bulk: true,
 }
 
 const people = SPECS.flatMap(conversation)
@@ -260,8 +310,11 @@ export const peopleFirst: DevSeed = {
       { key: 'inbox', name: 'Inbox', role: 'inbox' },
       { key: 'sent', name: 'Sent', role: 'sent' },
       { key: 'trash', name: 'Trash', role: 'trash' },
+      { key: 'projects', name: 'Projects', role: null },
+      { key: 'receipts', name: 'Receipts', role: null },
+      { key: 'travel', name: 'Travel', role: null },
     ],
-    messages: [...people, ...machines].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
+    messages: [...people, ...machines, htmlNewsletter].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
   },
   delivery: (n) => automated(AUTOMATED + n, NOW),
   conversations: SPECS.map((spec): PersonConversation => ({

@@ -50,6 +50,14 @@
       "rules": { "letterbox/no-node-in-renderer": "error" }
     },
     {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-clock/**"],
+      "rules": { "letterbox/renderer-clock": "error" }
+    },
+    {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-thread-lists/**"],
+      "rules": { "letterbox/renderer-thread-lists": "error" }
+    },
+    {
       "files": ["apps/desktop/shell/**", "lint/fixtures/no-ui-in-shell/**"],
       "rules": { "letterbox/no-ui-in-shell": "error" }
     },

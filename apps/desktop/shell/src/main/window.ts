@@ -20,7 +20,7 @@ const BACKGROUND = '#141415'
  * padding (the design's .side and .side .top). So 8 + 1 + 14 across, and the top bar's
  * middle (8 + 1 + 18) less half the buttons' 14px down.
  */
-const TRAFFIC_LIGHTS = { x: 23, y: 20 }
+const TRAFFIC_LIGHTS = { x: 23, y: 30 }
 
 /** The policy for a built renderer: its own files only, nothing remote, no inline script. */
 const CSP_BUILT = [

@@ -22,8 +22,13 @@ export const MAIN_LOG = join(STATE, 'electron/main.log')
 export const WAIT_MS = 30_000
 
 export const seed = devSeeds['people-first']
+const DAY = 86_400_000
+/** The seed's turns People shows: mine, from the last 30 days, newest first. */
 export const yourTurn = seed.conversations
-  .filter((conversation) => conversation.turn === 'mine')
+  .filter(
+    (conversation) =>
+      conversation.turn === 'mine' && Date.parse(seed.now) - Date.parse(conversation.lastAt) <= 30 * DAY,
+  )
   .toSorted((a, b) => b.lastAt.localeCompare(a.lastAt))
   .map((conversation) => conversation.subject)
 
@@ -112,7 +117,7 @@ export async function launch(name: string, renderer: string, switches: string[] 
 export const firstRowPainted = async (page: Page) => {
   const found = await page.waitForFunction(
     () =>
-      document.querySelector('section li') !== null &&
+      document.querySelector('[role="option"][data-row] [data-field="subject"]') !== null &&
       new Promise((painted) => requestAnimationFrame(() => painted(Date.now()))),
     null,
     { polling: 'raf', timeout: WAIT_MS },
@@ -122,7 +127,7 @@ export const firstRowPainted = async (page: Page) => {
 
 /** The Your turn subjects, top to bottom. */
 export const yourTurnShown = (page: Page) =>
-  page.getByRole('region', { name: 'Your turn' }).locator('[data-field="subject"]').allTextContents()
+  page.getByRole('listbox', { name: 'Your turn' }).locator('[data-field="subject"]').allTextContents()
 
 /** The PIDs of the cores main started, from its log. */
 export const corePids = (lines: string[]) =>
