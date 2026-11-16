@@ -11,7 +11,9 @@ use letterbox_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::adapter::{AdapterCapabilities, AdapterFailure, BodyResult, Cursor, MailboxRef, MessageRef, RemoteFacts};
+use crate::adapter::{
+    AdapterCapabilities, AdapterFailure, BodyResult, Cursor, MailboxRef, MessageRef, PageToken, RemoteFacts,
+};
 use crate::maps::{HashMap, IndexMap, IndexSet};
 use crate::store::{Record, Store, Transaction};
 
@@ -29,11 +31,28 @@ pub struct AccountRecord {
     /// secret, so one left by a crash or a failed delete must not sign the account back in.
     pub signed_in: bool,
     pub capabilities: AdapterCapabilities,
-    /// None until the first sync finishes.
+    /// None until the first sync finishes. A snapshot sets it with its last page only.
     pub cursor: Option<Cursor>,
+    /// The number of the latest snapshot, finished or not. Each message keeps the number of
+    /// the last snapshot that listed it, so the end of a snapshot can remove the rest.
+    #[serde(default)]
+    pub round: u64,
+    /// The snapshot under way, saved with each page so a failure or a restart resumes it.
+    #[serde(default)]
+    pub snapshot: Option<SnapshotProgress>,
     pub last_synced_at: Option<Time>,
     /// How the last sync pass ended.
     pub health: Health,
+}
+
+/// How far a snapshot has got.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotProgress {
+    /// Where the next page starts. None before the first page.
+    pub next: Option<PageToken>,
+    /// How many messages its pages have listed so far.
+    pub listed: u64,
 }
 
 /// How a sync pass ended: `ok`, or the adapter failure that stopped it.
@@ -52,7 +71,9 @@ impl From<Result<(), AdapterFailure>> for Health {
             Ok(()) => Health::Ok,
             Err(AdapterFailure::Offline) => Health::Offline,
             Err(AdapterFailure::NeedsSignIn) => Health::NeedsSignIn,
-            Err(AdapterFailure::ProviderError) => Health::ProviderError,
+            // The core answers page-expired itself (see snapshot.rs), so it ends a pass only
+            // when an adapter breaks rule 8 by sending it for the first page.
+            Err(AdapterFailure::ProviderError | AdapterFailure::PageExpired) => Health::ProviderError,
         }
     }
 }
@@ -88,6 +109,9 @@ pub struct MessageRecord {
     pub server: MessageState,
     /// None until someone opens the message.
     pub body: Option<BodyResult>,
+    /// The latest snapshot that listed it (see `AccountRecord::round`). 0 when only `changes` has.
+    #[serde(default)]
+    pub round: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

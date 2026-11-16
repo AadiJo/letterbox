@@ -1,10 +1,12 @@
 //! Brings the world in line with what an adapter reported. One function takes
-//! both a full snapshot and a set of changes, so both follow the same rules.
+//! both a snapshot page and a set of changes, so both follow the same rules.
 //!
 //! A provider may give a message a new ref when it moves, or renumber every
 //! message at once. A message that seems to vanish and reappear in the same
 //! report is matched by its fingerprint, so it keeps its id, its thread, its
-//! body and any turn the user set.
+//! body and any turn the user set. On a snapshot page, a message the snapshot has
+//! not listed yet may reappear the same way. A snapshot removes what it never
+//! listed only once its last page is in (`remove_unlisted`).
 
 use std::sync::LazyLock;
 
@@ -20,8 +22,8 @@ use crate::world::{
 };
 
 pub struct Incoming {
-    /// True when `added` is the whole mailbox. Anything not in it is gone.
-    pub full: bool,
+    /// Some(round) when `added` is one page of that snapshot round. Listed messages record the round.
+    pub page_of: Option<u64>,
     pub mailboxes: Option<Vec<RemoteMailbox>>,
     pub added: Vec<RemoteMessage>,
     pub updated: Vec<RemoteState>,
@@ -189,25 +191,30 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
 
     // Messages the provider no longer lists under their old ref. Some will turn out to have moved.
     let mut vanished: IndexMap<MessageId, MessageRecord> = IndexMap::default();
-    if incoming.full {
-        let listed: HashSet<&MessageRef> = incoming.added.iter().map(|remote| &remote.state.r#ref).collect();
-        for record in world.messages.values() {
-            if &record.account_id == account_id && !listed.contains(&record.r#ref) {
-                vanished.insert(record.id.clone(), record.clone());
-            }
-        }
-    }
     for r#ref in &incoming.removed {
         if let Some(record) = known(world, account_id, r#ref) {
             vanished.insert(record.id.clone(), record);
         }
     }
+    let mut unlisted = match incoming.page_of {
+        Some(round) => unlisted_by_print(world, account_id, round, &incoming.added),
+        None => HashMap::default(),
+    };
 
     for remote in incoming.added {
         let existing = known(world, account_id, &remote.state.r#ref);
         if let Some(existing) = existing.filter(|existing| !vanished.contains_key(&existing.id)) {
             let server = state_of(world, account_id, &remote.state);
-            put_message(world, tx, MessageRecord { server, ..existing });
+            let round = incoming.page_of.unwrap_or(existing.round);
+            put_message(
+                world,
+                tx,
+                MessageRecord {
+                    server,
+                    round,
+                    ..existing
+                },
+            );
             continue;
         }
         let print = fingerprint(&remote.facts);
@@ -215,7 +222,12 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
             .values()
             .find(|record| fingerprint(&record.facts) == print)
             .map(|record| record.id.clone());
-        if let Some(moved) = moved.and_then(|id| vanished.shift_remove(&id)) {
+        let moved = moved.and_then(|id| vanished.shift_remove(&id)).or_else(|| {
+            // Read now, not when the page began: a thread merge earlier in this page may have changed it.
+            let id = unlisted.get_mut(&print).and_then(Vec::pop)?;
+            world.messages.get(&id).cloned()
+        });
+        if let Some(moved) = moved {
             let server = state_of(world, account_id, &remote.state);
             put_message(
                 world,
@@ -223,6 +235,7 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
                 MessageRecord {
                     r#ref: remote.state.r#ref,
                     server,
+                    round: incoming.page_of.unwrap_or(moved.round),
                     ..moved
                 },
             );
@@ -243,6 +256,7 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
                 facts: remote.facts,
                 server,
                 body: None,
+                round: incoming.page_of.unwrap_or(0),
             },
         );
     }
@@ -256,11 +270,61 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
     }
 
     for id in vanished.keys() {
-        let Some(removed) = remove_message(world, tx, id) else {
-            continue;
-        };
-        if !world.messages_by_thread.contains_key(&removed.thread_id) {
-            remove_thread(world, tx, &removed.thread_id);
-        }
+        remove_with_thread(world, tx, id);
+    }
+}
+
+/// The account's messages that snapshot `round` has not listed, and that this page does not
+/// list under their own ref, by fingerprint. Empty when the page names no ref the core lacks,
+/// which is every page of a provider whose refs stay put.
+fn unlisted_by_print(
+    world: &World,
+    account_id: &AccountId,
+    round: u64,
+    page: &[RemoteMessage],
+) -> HashMap<String, Vec<MessageId>> {
+    let mut found: HashMap<String, Vec<MessageId>> = HashMap::default();
+    if page
+        .iter()
+        .all(|remote| known(world, account_id, &remote.state.r#ref).is_some())
+    {
+        return found;
+    }
+    let listed: HashSet<&MessageRef> = page.iter().map(|remote| &remote.state.r#ref).collect();
+    let candidates = world
+        .messages
+        .values()
+        .filter(|record| &record.account_id == account_id && record.round != round && !listed.contains(&record.r#ref));
+    // Reversed, so `pop` hands out the oldest record first.
+    for record in candidates.rev() {
+        found
+            .entry(fingerprint(&record.facts))
+            .or_default()
+            .push(record.id.clone());
+    }
+    found
+}
+
+/// Ends snapshot `round`: removes every message of the account it did not list. The
+/// provider no longer has them, or has them only under refs the snapshot listed.
+pub fn remove_unlisted(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, round: u64) {
+    let gone: Vec<MessageId> = world
+        .messages
+        .values()
+        .filter(|record| &record.account_id == account_id && record.round != round)
+        .map(|record| record.id.clone())
+        .collect();
+    for id in &gone {
+        remove_with_thread(world, tx, id);
+    }
+}
+
+/// Removes a message, and its thread if it was the last message in it.
+fn remove_with_thread(world: &mut World, tx: &Transaction<'_>, id: &MessageId) {
+    let Some(removed) = remove_message(world, tx, id) else {
+        return;
+    };
+    if !world.messages_by_thread.contains_key(&removed.thread_id) {
+        remove_thread(world, tx, &removed.thread_id);
     }
 }

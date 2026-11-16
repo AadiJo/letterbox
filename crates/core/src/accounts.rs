@@ -114,6 +114,9 @@ impl Inner {
                     signed_in: true,
                     capabilities,
                     cursor: existing.as_ref().and_then(|account| account.cursor.clone()),
+                    // A snapshot that was under way resumes from its saved page.
+                    round: existing.as_ref().map_or(0, |account| account.round),
+                    snapshot: existing.as_ref().and_then(|account| account.snapshot.clone()),
                     last_synced_at: existing.and_then(|account| account.last_synced_at),
                     health: Health::Ok,
                 },

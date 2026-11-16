@@ -34,20 +34,54 @@ export type MailboxEntry = {
   /** Goes into the session string, so `resume` can rebuild the adapter. */
   session: Session
   isOffline(): boolean
-  /** Answers one adapter call through `reply`. A body call waits while bodies are held. */
+  /** Answers one adapter call through `reply`. A body, apply or snapshot call waits while its method is held. */
   respond(call: Call, reply: (result: CallResult) => void): void
 }
 
-/** Reads a snapshot page token: the delivery count of the last message listed, and the first page's cursor. */
-const readToken = (token: PageToken): { after: number; cursor: Cursor } | null => {
+/** Where a snapshot page starts: below this delivery count, with the first page's cursor. */
+type PageStart = { before: number; cursor: Cursor; generation: number }
+
+/** Reads a snapshot page token. `generation` counts `expirePageTokens` calls before the first page. */
+const readToken = (token: PageToken): PageStart | null => {
   let value: unknown
   try {
     value = JSON.parse(token)
   } catch {
     return null
   }
-  if (!isRecord(value) || typeof value.after !== 'number' || typeof value.cursor !== 'string') return null
-  return { after: value.after, cursor: value.cursor as Cursor }
+  if (!isRecord(value) || typeof value.before !== 'number' || typeof value.cursor !== 'string') return null
+  if (typeof value.generation !== 'number') return null
+  return { before: value.before, cursor: value.cursor as Cursor, generation: value.generation }
+}
+
+/** Calls of one method that wait at the provider until a scenario releases them. */
+const createHold = () => {
+  // Answers waiting for `release`. Null while calls are not held.
+  let waiting: (() => void)[] | null = null
+  // Callers of `held` waiting for the next call to be held.
+  const onHeld: (() => void)[] = []
+  return {
+    hold: () => {
+      waiting ??= []
+    },
+    /** Keeps `answerNow` until release, if calls are held. False when they are not. */
+    keep: (answerNow: () => void): boolean => {
+      if (waiting === null) return false
+      waiting.push(answerNow)
+      for (const notify of onHeld.splice(0)) notify()
+      return true
+    },
+    held: () =>
+      new Promise<void>((resolve) => {
+        if (waiting !== null && waiting.length > 0) resolve()
+        else onHeld.push(resolve)
+      }),
+    release: () => {
+      const now = waiting ?? []
+      waiting = null
+      for (const answerNow of now) answerNow()
+    },
+  }
 }
 
 /** The answer to an apply that changed nothing. */
@@ -65,12 +99,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let delivered = 0
   let offline = false
   let refusal: Refusal | null = null
-  // Body calls waiting for `releaseBodies`. Null while bodies are not held.
-  let heldBodies: (() => void)[] | null = null
-  // Apply calls waiting for `releaseApplies`. Null while applies are not held.
-  let heldApplies: (() => void)[] | null = null
-  // Callers of `applyHeld` waiting for the next apply call to be held.
-  const onApplyHeld: (() => void)[] = []
+  // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
+  let generation = 0
+  const holds = { body: createHold(), apply: createHold(), snapshot: createHold() }
 
   if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`sim provider: pageSize ${pageSize} is not usable`)
 
@@ -179,27 +210,17 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     refuseNextApply: (reason) => {
       refusal = reason
     },
-    holdBodies: () => {
-      heldBodies ??= []
+    expirePageTokens: () => {
+      generation += 1
     },
-    releaseBodies: () => {
-      const waiting = heldBodies ?? []
-      heldBodies = null
-      for (const answerNow of waiting) answerNow()
-    },
-    holdApplies: () => {
-      heldApplies ??= []
-    },
-    applyHeld: () =>
-      new Promise<void>((resolve) => {
-        if (heldApplies !== null && heldApplies.length > 0) resolve()
-        else onApplyHeld.push(resolve)
-      }),
-    releaseApplies: () => {
-      const waiting = heldApplies ?? []
-      heldApplies = null
-      for (const answerNow of waiting) answerNow()
-    },
+    holdBodies: holds.body.hold,
+    releaseBodies: holds.body.release,
+    holdApplies: holds.apply.hold,
+    applyHeld: holds.apply.held,
+    releaseApplies: holds.apply.release,
+    holdSnapshots: holds.snapshot.hold,
+    snapshotHeld: holds.snapshot.held,
+    releaseSnapshots: holds.snapshot.release,
     truth: () =>
       [...store.messages.values()].map((message) => ({
         key: message.key,
@@ -210,20 +231,26 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     calls: () => ({ ...counts }),
   }
 
-  /** One snapshot page. The first page takes the cursor and every token carries it to the last page. */
+  /**
+   * One snapshot page, newest delivery first. The first page takes the cursor and every
+   * token carries it to the last page.
+   */
   const snapshot = (token: PageToken | null): Outcome<SnapshotPage> => {
-    const from = token === null ? { after: 0, cursor: engine.cursor() } : readToken(token)
+    const first: PageStart = { before: Number.MAX_SAFE_INTEGER, cursor: engine.cursor(), generation }
+    const from = token === null ? first : readToken(token)
     if (from === null) return { ok: false, failure: 'provider-error' }
+    if (from.generation !== generation) return { ok: false, failure: 'page-expired' }
     // A later page lists what exists now. Whatever it misses is in `changes` from the first page's cursor.
-    const rest = [...store.messages.values()].filter((message) => message.order > from.after)
+    const rest = [...store.messages.values()].filter((message) => message.order < from.before).toReversed()
     const page = rest.slice(0, pageSize)
     const last = page.at(-1)
     const more = last !== undefined && rest.length > page.length
+    const next: PageStart | null = more ? { ...from, before: last.order } : null
     return {
       ok: true,
       mailboxes: remoteMailboxes(store),
       messages: page.map((message) => remoteMessage(store, message)),
-      next: more ? (JSON.stringify({ after: last.order, cursor: from.cursor }) as PageToken) : null,
+      next: next && (JSON.stringify(next) as PageToken),
       cursor: more ? null : from.cursor,
     }
   }
@@ -304,11 +331,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     session: { address: seed.address, dialect, modify: canModify },
     isOffline: () => offline,
     respond: (call, reply) => {
-      if (call.method === 'body' && heldBodies !== null && !offline) heldBodies.push(() => reply(answer(call)))
-      else if (call.method === 'apply' && heldApplies !== null && !offline) {
-        heldApplies.push(() => reply(answer(call)))
-        for (const notify of onApplyHeld.splice(0)) notify()
-      } else reply(answer(call))
+      const hold = call.method === 'changes' || offline ? null : holds[call.method]
+      if (!hold?.keep(() => reply(answer(call)))) reply(answer(call))
     },
   }
 }

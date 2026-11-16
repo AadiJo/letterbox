@@ -19,6 +19,12 @@
 //!      wherever the provider keeps refs stable.
 //!   7. No method reads or writes anything outside the provider. Adapters keep
 //!      their resume point in the cursor and their login in the session string.
+//!   8. `snapshot` answers `page-expired` when the provider no longer accepts the page
+//!      token. The core then lists the mailbox again from the first page.
+//!   9. Snapshot pages list the newest mail first, so the core can show recent mail
+//!      while it backfills the rest. Gmail's messages.list already does: "The returned
+//!      `messages` objects are listed in reverse chronological order (newest first)."
+//!      <https://developers.google.com/workspace/gmail/api/guides/list-messages>
 //!
 //! The core runs on one thread, so adapters and their futures need not be `Send`.
 
@@ -168,13 +174,15 @@ pub struct RemoteAttachment {
     pub inline: bool,
 }
 
-/// Why a call could not reach or use the provider. The core retries all three later.
+/// Why a call could not reach or use the provider. The core retries the first three later.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AdapterFailure {
     Offline,
     NeedsSignIn,
     ProviderError,
+    /// From `snapshot` only: the provider no longer accepts this page token. See rule 8.
+    PageExpired,
 }
 
 /// The result of every adapter call: the value, or the reason the provider was not reached.
@@ -280,7 +288,7 @@ impl From<ProviderRefusal> for Refusal {
 /// One signed-in mailbox at one provider.
 pub trait Adapter {
     fn capabilities(&self) -> AdapterCapabilities;
-    /// Lists the whole mailbox in pages. Pass None for the first page.
+    /// Lists the whole mailbox in pages, newest first (rule 9). Pass None for the first page.
     fn snapshot(&self, page: Option<PageToken>) -> LocalFuture<'_, Outcome<SnapshotPage>>;
     /// Everything that changed since `cursor`, across all mailboxes.
     fn changes(&self, cursor: Cursor) -> LocalFuture<'_, Outcome<ChangesResult>>;

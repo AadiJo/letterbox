@@ -11,27 +11,7 @@
 // its name says. run.ts rebuilds the Rust core before each run, so each break costs a
 // short incremental build.
 
-import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { CORE_DID_NOT_BUILD } from './client.ts'
-
-type Edit = {
-  file: string
-  /** Text that must appear exactly once in the file. */
-  find: string
-  replace: string
-}
-
-type Mutation = Edit & {
-  /** What goes wrong, in a user's or a reviewer's words. */
-  name: string
-  /** Runs only the scenarios whose name contains this. */
-  scenarios: string
-  /** More edits, for a break that needs more than one place changed. Applied in order after the first. */
-  also?: Edit[]
-}
+import { type Mutation, runBreaks } from './breaks.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
 const gmail = (file: string) => `crates/gmail/src/${file}`
@@ -47,8 +27,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a full resync keeps messages the provider deleted',
     file: core('reconcile.rs'),
-    find: 'if &record.account_id == account_id && !listed.contains(&record.r#ref) {',
-    replace: 'if &record.account_id == account_id && listed.is_empty() && false {',
+    find: '        .filter(|record| &record.account_id == account_id && record.round != round)\n        .map(',
+    replace: '        .filter(|_| false)\n        .map(',
     scenarios: 'expired cursor',
   },
   {
@@ -153,10 +133,45 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'the snapshot cursor is not saved, so every sync starts over',
-    file: core('sync.rs'),
-    find: '                        cursor: result.cursor,',
-    replace: '                        cursor: result.cursor.filter(|_| false),',
+    file: core('snapshot.rs'),
+    find: '                    cursor: page.cursor,',
+    replace: '                    cursor: page.cursor.filter(|_| false),',
     scenarios: 'resumes with one cheap call',
+  },
+  {
+    name: 'snapshot pages reach the store only with the last one, so a failure loses the pages before it',
+    file: core('snapshot.rs'),
+    find: '                added: page.messages,\n',
+    replace: '                added: page.messages.into_iter().filter(|_| last).collect(),\n',
+    scenarios: 'failure in the middle',
+  },
+  {
+    name: 'snapshot progress lives only in memory, so a restart starts the snapshot over',
+    file: core('world.rs'),
+    find: '    #[serde(default)]\n    pub snapshot: Option<SnapshotProgress>,',
+    replace: '    #[serde(default, skip)]\n    pub snapshot: Option<SnapshotProgress>,',
+    scenarios: 'restart in the middle',
+  },
+  {
+    name: 'a snapshot removes the mail it has not listed yet after every page',
+    file: core('snapshot.rs'),
+    find: '            if last {\n                remove_unlisted(',
+    replace: '            if true {\n                remove_unlisted(',
+    scenarios: 'removes deleted mail only once',
+  },
+  {
+    name: 'a backfill holds the queue, so a change waits for the whole snapshot',
+    file: core('snapshot.rs'),
+    find: '        self.queue_next_page(account_id);\n        Ok(Pulled::More)\n',
+    replace: '        Box::pin(self.snapshot_page(account_id, linked)).await\n',
+    scenarios: 'change made during a backfill',
+  },
+  {
+    name: 'a rejected page token ends the sync instead of starting the snapshot over',
+    file: core('snapshot.rs'),
+    find: 'Err(AdapterFailure::PageExpired) if progress.next.is_some() =>',
+    replace: 'Err(AdapterFailure::PageExpired) if false =>',
+    scenarios: 'no longer accepts',
   },
   {
     name: 'a second change uses the ref the first change replaced',
@@ -235,6 +250,27 @@ const MUTATIONS: Mutation[] = [
     find: '        self.inner.state.borrow().attempts.cancel_all();\n',
     replace: '',
     scenarios: 'answered cancelled when the core stops',
+  },
+  {
+    name: 'a sync-now that resumes a saved snapshot answers without the changes made before it',
+    file: core('sync.rs'),
+    find: '                        (_, Some(Ok(()))) => pass = start(&core, account_id.clone()).1,\n',
+    replace: '',
+    scenarios: 'resumes a saved snapshot',
+  },
+  {
+    name: 'a sync-now that resumes only the last snapshot page answers without the changes made before it',
+    file: core('sync.rs'),
+    find: '                        (Some(Ok(())), None) if resumed => pass = start(&core, account_id.clone()).1,\n',
+    replace: '',
+    scenarios: 'resumes only the last',
+  },
+  {
+    name: 'a sync-now loops forever for an account signed out in the middle of a backfill',
+    file: core('sync.rs'),
+    find: 'state.adapters.contains_key(&account_id) && account',
+    replace: 'account',
+    scenarios: 'keeps the mail of an unfinished',
   },
   {
     name: 'a sign-out waits behind the work already queued for the account',
@@ -409,53 +445,4 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-const ROOT = join(import.meta.dirname, '..', '..', '..')
-const SCRATCH = mkdtempSync(join(tmpdir(), 'letterbox-mutations-'))
-
-/** Applies one mutation, runs its scenarios, restores the files. True when the scenarios failed, as they should. */
-function caught(mutation: Mutation): { ok: boolean; why: string } {
-  // Each file's text before the first edit to it, to put back afterwards.
-  const originals = new Map<string, string>()
-  const restore = () => {
-    for (const [path, text] of originals) writeFileSync(path, text)
-  }
-  for (const edit of [mutation, ...(mutation.also ?? [])]) {
-    const path = join(ROOT, edit.file)
-    const text = readFileSync(path, 'utf8')
-    if (!originals.has(path)) originals.set(path, text)
-    const count = text.split(edit.find).length - 1
-    if (count !== 1) {
-      restore()
-      return {
-        ok: false,
-        why: `its text appears ${count} times in ${edit.file}. Update the entry to match the code.`,
-      }
-    }
-    writeFileSync(path, text.replace(edit.find, edit.replace))
-  }
-  try {
-    const run = spawnSync(process.execPath, ['packages/harness/src/run.ts', mutation.scenarios], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      timeout: 120_000,
-      // Transcripts of broken code go to a throwaway folder, never over the real run's.
-      env: { ...process.env, LETTERBOX_ARTIFACTS: SCRATCH },
-    })
-    const summary = run.stdout.trim().split('\n').at(-1) ?? ''
-    if (run.status === CORE_DID_NOT_BUILD)
-      return { ok: false, why: `the broken code does not compile. Update the entry so it builds.\n${run.stderr}` }
-    return run.status === 0 ? { ok: false, why: `the scenarios still pass: ${summary}` } : { ok: true, why: summary }
-  } finally {
-    restore()
-  }
-}
-
-let missed = 0
-for (const mutation of MUTATIONS) {
-  const result = caught(mutation)
-  if (!result.ok) missed += 1
-  console.log(`${result.ok ? 'caught' : 'MISSED'}  ${mutation.name}${result.ok ? '' : `\n        ${result.why}`}`)
-}
-console.log(`\n${MUTATIONS.length - missed} of ${MUTATIONS.length} breaks were caught.`)
-rmSync(SCRATCH, { recursive: true, force: true })
-process.exit(missed === 0 ? 0 : 1)
+runBreaks(MUTATIONS)

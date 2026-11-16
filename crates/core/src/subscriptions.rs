@@ -23,20 +23,22 @@ struct LiveState<'a> {
 }
 
 impl Live for LiveState<'_> {
+    /// Syncing while a pass pulls, and between the pages of a snapshot. `done` counts the
+    /// messages the snapshot has listed so far. The total is not known until it ends.
     fn status(&self, account: &AccountRecord) -> AccountStatus {
-        let starting = AccountStatus::Syncing {
-            done: 0,
+        let syncing = AccountStatus::Syncing {
+            done: account.snapshot.as_ref().map_or(0, |progress| progress.listed),
             total: None,
             last_synced_at: account.last_synced_at.clone(),
         };
         if self.syncing.contains(&account.id) {
-            return starting;
+            return syncing;
         }
         let last_synced_at = account.last_synced_at.clone();
         match account.health {
             Health::Ok => match last_synced_at {
-                Some(last_synced_at) => AccountStatus::Idle { last_synced_at },
-                None => starting,
+                Some(last_synced_at) if account.snapshot.is_none() => AccountStatus::Idle { last_synced_at },
+                _ => syncing,
             },
             Health::Offline => AccountStatus::Offline { last_synced_at },
             Health::NeedsSignIn => AccountStatus::NeedsSignIn,
