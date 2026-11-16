@@ -178,7 +178,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
           {to.length > 0 && <div className="truncate text-[12.5px] text-muted">to {to.join(', ')}</div>}
         </div>
         {going ? (
-          <DeliveryMark thread={thread} message={message} delivery={delivery} />
+          <DeliveryMark thread={thread} delivery={delivery} />
         ) : (
           <span className="ml-auto text-[12.5px] whitespace-nowrap text-muted tabular-nums" data-field="message-time">
             {messageTime(message.sentAt, now)}

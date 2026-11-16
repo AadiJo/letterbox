@@ -12,6 +12,9 @@
 //   - Undo is offered exactly while the core shows the reply as held, on every screen and
 //     after a reload. The core's own deadline ends it, through the update that shows the reply
 //     going. No renderer timer decides it, and nothing here guesses an outcome.
+//   - A conversation has at most one reply on its way. Until the core releases or settles it,
+//     R there shows that reply read only, with Undo, and starts no second one. Undo puts back
+//     exactly that reply, so there is never a second text to merge or to lose.
 
 import type { ChangeId, Message, Refusal, ThreadDetail, ThreadId } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
@@ -22,6 +25,7 @@ import {
   commitTyping,
   composerFor,
   flag,
+  openReply,
   type Reply,
   replyFrom,
   restore,
@@ -42,26 +46,40 @@ export const REFUSALS = {
   unconfirmed: 'It may not have been sent. Check Sent before sending again.',
 } as const satisfies Record<Refusal, string>
 
-/** A reply the core holds in its undo window right now, until `until` by its clock. */
-export type Offer = { threadId: ThreadId; change: ChangeId; until: string }
+/**
+ * A reply the core accepted and has not released yet. `until` is its undo window's end by the
+ * core's clock, once the conversation shows it held. Until then it is null, and Undo waits.
+ */
+export type Pending = { threadId: ThreadId; change: ChangeId; reply: Reply | null; until: string | null }
+
+/** A pending reply in its undo window, which the toast offers to take back. */
+export type Offer = Pending & { until: string }
 
 /** What each reply said, by change, so an undo or a retry gets back exactly what was written. */
 const replies = new Map<ChangeId, { threadId: ThreadId; reply: Reply }>()
-/** Sends whose conversation is watched until the core shows them past their window. */
-const followed = new Set<ChangeId>()
 /** Sends whose answer was lost. Each is asked about again, under its change id, on the next connection. */
 const unknown = new Set<ChangeId>()
-/** The held replies, oldest first. The toast offers Undo for the newest. */
-let offers: readonly Offer[] = []
-const offerWatchers = new Set<() => void>()
+/** Accepted replies being followed until the core shows them past their window, oldest first. */
+let pending: ReadonlyMap<ChangeId, Pending> = new Map()
+/** Conversations whose pending reply the user asked to see, with R or Reply. */
+let shown: ReadonlySet<ThreadId> = new Set()
+const watchers = new Set<() => void>()
 
-const setOffer = (change: ChangeId, offer: Offer | null) => {
-  const others = offers.filter((existing) => existing.change !== change)
-  const current = offers.find((existing) => existing.change === change)
-  if (offer === null ? current === undefined : current?.until === offer.until) return
-  offers = offer ? [...others, offer] : others
-  offerWatchers.forEach((watcher) => watcher())
+const tell = () => watchers.forEach((watcher) => watcher())
+
+const setPending = (change: ChangeId, next: Pending | null) => {
+  const rest = new Map(pending)
+  if (next) rest.set(change, next)
+  else rest.delete(change)
+  pending = rest
+  // A conversation with nothing left on its way has nothing to show read only.
+  if (!next) shown = new Set([...shown].filter((id) => [...rest.values()].some((other) => other.threadId === id)))
+  tell()
 }
+
+const pendingIn = (threadId: ThreadId) => [...pending.values()].findLast((entry) => entry.threadId === threadId)
+
+const isOffer = (entry: Pending): entry is Offer => entry.until !== null
 
 // Session storage keeps the sends being followed, and those with no known answer, across a
 // reload. It may be missing or refuse. A held reply the reader shows is followed anyway
@@ -108,7 +126,7 @@ function readStored(): Stored[] {
 function writeStored() {
   const entries = [
     ...[...unknown].map((change) => ({ change, phase: 'unknown' as const })),
-    ...[...followed].map((change) => ({ change, phase: 'followed' as const })),
+    ...[...pending.keys()].map((change) => ({ change, phase: 'followed' as const })),
   ]
   const kept: Stored[] = entries.flatMap((entry) => {
     const sent = replies.get(entry.change)
@@ -122,23 +140,26 @@ function writeStored() {
 }
 
 /**
- * Follows send `change` in its conversation from revision `rev`: offered while held, and
- * done with once the core shows it anything else (going, gone, failed or delivered).
+ * Follows send `change` in its conversation from revision `rev`: pending until the core shows
+ * it anything but held (going, gone, failed or delivered), with its window's end once held.
  * Updates from before the core accepted it cannot show it yet, so they are skipped.
  */
 function follow(threadId: ThreadId, change: ChangeId, rev: number) {
-  if (followed.has(change)) return
-  followed.add(change)
+  if (pending.has(change)) return
+  setPending(change, { threadId, change, reply: replies.get(change)?.reply ?? null, until: null })
   writeStored()
   let finished = false
   let stop: (() => void) | undefined
   const listener = (detail: ThreadDetail | null, at: number) => {
     if (finished || at < rev) return
     const delivery = detail?.messages.find((message) => message.delivery?.change === change)?.delivery
-    if (delivery?.state === 'held') return setOffer(change, { threadId, change, until: delivery.until })
+    const current = pending.get(change)
+    if (delivery?.state === 'held') {
+      if (current && current.until !== delivery.until) setPending(change, { ...current, until: delivery.until })
+      return
+    }
     finished = true
-    setOffer(change, null)
-    followed.delete(change)
+    setPending(change, null)
     writeStored()
     stop?.()
   }
@@ -180,36 +201,66 @@ for (const stored of readStored()) {
   else void deliver(stored.threadId, stored.reply, stored.change)
 }
 
-/** Follows a held reply the reader shows, as one from before a reload whose storage was lost. */
-export function adopt(thread: ThreadDetail, message: Message) {
-  const change = message.delivery?.change
-  if (!change || followed.has(change)) return
-  const reply = replyFrom(thread, message)
-  if (!replies.has(change) && reply) replies.set(change, { threadId: thread.id, reply })
-  follow(thread.id, change, -1)
-}
-
-/** The newest reply in its undo window, or null. */
-export function useSendOffer() {
-  return useSyncExternalStore(
-    (onChange) => {
-      offerWatchers.add(onChange)
-      return () => void offerWatchers.delete(onChange)
-    },
-    () => offers.at(-1) ?? null,
-  )
+/**
+ * Follows the held replies in `thread`, such as one from before a reload whose storage was
+ * lost. The reader calls it as the conversation changes, and R before it decides.
+ */
+export function adopt(thread: ThreadDetail) {
+  for (const message of thread.messages) {
+    const change = message.delivery?.state === 'held' ? message.delivery.change : null
+    if (!change || pending.has(change)) continue
+    const reply = replyFrom(thread, message)
+    if (!replies.has(change) && reply) replies.set(change, { threadId: thread.id, reply })
+    follow(thread.id, change, -1)
+  }
 }
 
 /**
- * Takes back the newest reply in its undo window. Resolves with its conversation once the
- * core accepts, and its text is back in the editor, or null when there is none or the window
- * closed first. The offer goes with the core's update that drops the reply.
+ * R, Reply and Reply all. With a reply of the user's on its way in `thread`, they show that
+ * reply read only, with Undo, and start nothing. Otherwise they open the editor (drafts.ts).
  */
-export async function undoSend() {
-  const offer = offers.at(-1)
-  if (!offer || !(await send({ kind: 'undo', change: offer.change }))) return null
+export function startReply(thread: ThreadDetail, all: boolean) {
+  adopt(thread)
+  if (pendingIn(thread.id)) {
+    shown = new Set([...shown, thread.id])
+    return tell()
+  }
+  openReply(thread, all)
+}
+
+/** Folds the read-only view of `threadId`'s pending reply. Esc does this. */
+export function hidePending(threadId: ThreadId) {
+  if (!shown.has(threadId)) return
+  shown = new Set([...shown].filter((id) => id !== threadId))
+  tell()
+}
+
+const subscribe = (onChange: () => void) => {
+  watchers.add(onChange)
+  return () => void watchers.delete(onChange)
+}
+
+/** The newest reply in its undo window, for the toast, or null. */
+export function useSendOffer() {
+  return useSyncExternalStore(subscribe, () => [...pending.values()].findLast(isOffer) ?? null)
+}
+
+/** `threadId`'s reply on its way, while the user asked to see it, or null. */
+export function useShownPending(threadId: ThreadId) {
+  return useSyncExternalStore(subscribe, () => (shown.has(threadId) ? (pendingIn(threadId) ?? null) : null))
+}
+
+/**
+ * Takes back a reply in its undo window: `change`, or else the newest. Resolves with its
+ * conversation once the core accepts, with exactly that reply back in the editor, or null
+ * when there is none or the window closed first. The core's update that drops it ends the offer.
+ */
+export async function undoSend(change?: ChangeId) {
+  const offer = change ? pending.get(change) : [...pending.values()].findLast(isOffer)
+  if (!offer || !isOffer(offer) || !(await send({ kind: 'undo', change: offer.change }))) return null
   const sent = replies.get(offer.change)
   replies.delete(offer.change)
+  hidePending(offer.threadId)
   if (sent) restore(sent.threadId, sent.reply)
   return offer.threadId
 }
@@ -225,9 +276,13 @@ export async function sendReply(id: ThreadId) {
   await deliver(id, commitTyping(composer.reply), undefined)
 }
 
-/** Opens the editor on a reply that was not sent, with what it said, for a new Send. */
+/**
+ * Opens the editor on a reply that was not sent, with what it said, for a new Send. With
+ * another reply on its way, or a draft already there, it shows that instead and replaces nothing.
+ */
 export function editAndSendAgain(thread: ThreadDetail, message: Message) {
   const change = message.delivery?.change
   const reply = (change && replies.get(change)?.reply) ?? replyFrom(thread, message)
+  if (pendingIn(thread.id) || composerFor(thread.id)) return startReply(thread, false)
   if (reply) restore(thread.id, reply)
 }

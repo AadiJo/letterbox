@@ -7,18 +7,18 @@ import { useEffect } from 'react'
 import { useSecondsUntil } from './clock.ts'
 import { adopt, editAndSendAgain, REFUSALS } from './sending.ts'
 
-type MarkProps = { thread: ThreadDetail; message: Message; delivery: Exclude<Delivery, { state: 'failed' }> }
+type MarkProps = { thread: ThreadDetail; delivery: Exclude<Delivery, { state: 'failed' }> }
 
 /**
  * Where the time goes on a message still on its way: "Sending in 8 s" in its undo window,
  * then "Sending". A held one is followed, so the toast offers Undo for it (sending.ts).
  */
-export function DeliveryMark({ thread, message, delivery }: MarkProps) {
+export function DeliveryMark({ thread, delivery }: MarkProps) {
   const held = delivery.state === 'held'
   // Follows the core's held reply in sending.ts, which lives outside React.
   useEffect(() => {
-    if (held) adopt(thread, message)
-  }, [held, thread, message])
+    if (held) adopt(thread)
+  }, [held, thread])
   return (
     <span
       className="ml-auto inline-flex items-center gap-1.5 text-[12.5px] whitespace-nowrap text-fg2 tabular-nums"
