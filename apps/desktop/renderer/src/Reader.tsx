@@ -201,7 +201,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
           <div className="flex items-baseline gap-3">
             <span className="min-w-0 truncate text-subject font-semibold">{who(from)}</span>
             {going ? (
-              <DeliveryMark delivery={delivery} />
+              <DeliveryMark thread={thread} message={message} delivery={delivery} />
             ) : (
               <span className="ml-auto text-meta whitespace-nowrap text-muted tabular-nums" data-field="message-time">
                 {messageTime(message.sentAt, now)}

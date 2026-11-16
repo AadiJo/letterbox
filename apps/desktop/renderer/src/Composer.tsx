@@ -90,7 +90,7 @@ function arrive(element: HTMLElement | null, id: ThreadId, target: string) {
 export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { state: 'collapsed' }> }) {
   const { reply } = composer
   const problem = composer.state === 'open' ? composer.problem : null
-  const busy = composer.state === 'submitting'
+  const busy = composer.state !== 'open'
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
@@ -151,7 +151,11 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
               Send
               <Key tone="send">{SEND_KEY}</Key>
             </button>
-            {problem?.at === 'send' ? (
+            {composer.state === 'checking' ? (
+              <p role="status" data-field="send-checking" className="truncate text-row text-fg2">
+                Checking whether this was sent…
+              </p>
+            ) : problem?.at === 'send' ? (
               <p role="alert" data-field="send-problem" className="flex min-w-0 items-center gap-1.5 text-row text-red">
                 <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
                 <span className="truncate">{problem.text}</span>
