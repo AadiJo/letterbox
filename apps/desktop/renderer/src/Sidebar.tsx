@@ -47,7 +47,7 @@ export function Sidebar({ place, onPlace, accounts, mailboxes, people }: Props) 
       className="flex h-full w-[232px] flex-col overflow-y-auto rounded-xl border border-fg/8 bg-linear-to-b from-fg/7 to-fg/3.5 pb-2 shadow-[inset_0_1px_0_rgb(255_255_255/7%),0_10px_30px_rgb(0_0_0/45%),0_0_0_0.5px_rgb(0_0_0/60%)] [scrollbar-width:none]"
     >
       {/* Room for the window's own traffic lights, which the desktop shell draws. */}
-      <div className="h-12 flex-none" />
+      <div className="h-14 flex-none" />
       {nav(
         { kind: 'people' },
         'People',

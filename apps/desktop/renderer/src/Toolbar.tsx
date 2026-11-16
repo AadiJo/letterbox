@@ -32,7 +32,7 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
     </button>
   )
   return (
-    <div className="flex h-[64px] flex-none items-center px-8">
+    <div className="flex h-[72px] flex-none items-center px-8">
       <div className="mx-auto flex w-full max-w-[680px] items-center gap-0.5">
         <button
           type="button"
