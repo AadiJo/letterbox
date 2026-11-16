@@ -1,0 +1,147 @@
+// What every list screen shares: the list pane's head and sync strip, the reader pane, and
+// the selection with its keyboard. PeopleScreen and MailScreen fill in the list.
+
+import type { Account, ThreadId } from '@letterbox/protocol'
+import { PanelLeft } from 'lucide-react'
+import { type ReactNode, useEffect, useEffectEvent, useState } from 'react'
+import { type Action, actionForKey, type Mail, markRead, run } from './actions.ts'
+import { Reader } from './Reader.tsx'
+import { threadRecord, useThread } from './threads.ts'
+import { Toolbar } from './Toolbar.tsx'
+
+/** What App hands every screen. */
+export type Chrome = {
+  mail: Mail
+  /** Opens the sidebar. Its button shows only in a narrow window. */
+  onToggleSidebar: () => void
+  /** The search field or, in a narrow window, its icon. */
+  search: ReactNode
+}
+
+/** The selected conversation. `leaving` marks one an action may take out of the list. */
+type Choice = { id: ThreadId; index: number; leaving: boolean }
+
+/** True when focus is in a text field, where letters are typing, not shortcuts. */
+const typing = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+
+/**
+ * The selection in a list whose rows, top to bottom, are `order`. Opening a conversation
+ * marks it read. Arrow keys and j/k move, and actions.ts's keys act on the open one. When
+ * an action takes the open conversation out of the list, the next one opens in its place.
+ */
+export function useSelection(order: readonly ThreadId[], mail: Mail) {
+  const [choice, setChoice] = useState<Choice | null>(null)
+  let selected = choice?.id ?? null
+  if (choice?.leaving && !order.includes(choice.id)) {
+    const next = order[Math.min(choice.index, order.length - 1)]
+    selected = next ?? null
+    setChoice(next ? { id: next, index: choice.index, leaving: false } : null)
+  }
+
+  const select = (id: ThreadId) => {
+    setChoice({ id, index: order.indexOf(id), leaving: false })
+    const thread = threadRecord(id)
+    if (thread) markRead(thread, mail)
+  }
+
+  const act = (action: Action) => {
+    const thread = selected ? threadRecord(selected) : undefined
+    if (!thread || !run(action, thread, mail)) return
+    setChoice({ id: thread.id, index: order.indexOf(thread.id), leaving: true })
+  }
+
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return
+    const index = selected ? order.indexOf(selected) : -1
+    const step = { ArrowDown: 1, j: 1, ArrowUp: -1, k: -1 }[event.key]
+    if (step !== undefined) {
+      const next = order[index === -1 ? 0 : index + step]
+      if (next) select(next)
+      event.preventDefault()
+      return
+    }
+    const action = actionForKey(event.key)
+    if (!action) return
+    act(action)
+    event.preventDefault()
+  })
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onKey(event)
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [])
+
+  return { selected, select, act }
+}
+
+type ScreenProps = {
+  title: string
+  subtitle: string
+  chrome: Chrome
+  accounts: readonly Account[]
+  selection: ReturnType<typeof useSelection>
+  /** The scrolling list. */
+  children: ReactNode
+}
+
+/** The list pane beside the reader pane. */
+export function Screen({ title, subtitle, chrome, accounts, selection, children }: ScreenProps) {
+  const thread = useThread(selection.selected)
+  return (
+    <>
+      <section aria-label={title} className="flex min-h-0 w-[384px] flex-none flex-col border-r border-line">
+        <header className="flex h-[52px] flex-none items-center gap-2.5 pr-3 pl-[18px]">
+          <button
+            type="button"
+            aria-label="Show the sidebar"
+            onClick={chrome.onToggleSidebar}
+            className="inline-flex size-7 items-center justify-center rounded-md text-fg2 hover:bg-hover wide:hidden"
+          >
+            <PanelLeft className="size-4" strokeWidth={1.75} aria-hidden />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[15px] leading-[1.2] font-semibold">{title}</h2>
+            <p className="truncate text-xs text-muted" data-field="subtitle">
+              {subtitle}
+            </p>
+          </div>
+        </header>
+        <SyncStrip accounts={accounts} />
+        {children}
+      </section>
+      <section aria-label="Reader" className="flex min-w-0 flex-1 flex-col">
+        <Toolbar thread={thread} mail={chrome.mail} onAct={selection.act} search={chrome.search} />
+        <Reader id={selection.selected} mailboxes={chrome.mail.mailboxes} />
+      </section>
+    </>
+  )
+}
+
+const count = new Intl.NumberFormat()
+
+/** The flat progress strip while an account's first sync, or a resync, pulls older mail. */
+function SyncStrip({ accounts }: { accounts: readonly Account[] }) {
+  const syncing = accounts.flatMap((account) => (account.status.state === 'syncing' ? [account.status] : []))
+  if (syncing.length === 0) return null
+  const done = syncing.reduce((sum, status) => sum + status.done, 0)
+  const totals = syncing.map((status) => status.total)
+  const total = totals.every((value) => value !== null) ? totals.reduce((sum, value) => sum + value, 0) : null
+  return (
+    <div role="status" aria-label="Sync" className="flex flex-col gap-1.5 px-[18px] pt-0.5 pb-3">
+      <div className="flex justify-between text-xs text-fg2">
+        <b className="font-medium text-fg">Syncing older mail</b>
+        <span className="tabular-nums" data-field="sync-count">
+          {total === null ? `${count.format(done)} messages so far` : `${count.format(done)} of ${count.format(total)}`}
+        </span>
+      </div>
+      {total !== null && total > 0 && (
+        <div className="h-[3px] overflow-hidden rounded-sm bg-line2">
+          <div className="h-full bg-blue" style={{ width: `${Math.min(100, (done / total) * 100)}%` }} />
+        </div>
+      )}
+      <p className="text-xs text-muted">Newest mail first. You can read it now.</p>
+    </div>
+  )
+}

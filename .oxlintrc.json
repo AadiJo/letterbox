@@ -50,6 +50,14 @@
       "rules": { "letterbox/no-node-in-renderer": "error" }
     },
     {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-clock/**"],
+      "rules": { "letterbox/renderer-clock": "error" }
+    },
+    {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/renderer-thread-lists/**"],
+      "rules": { "letterbox/renderer-thread-lists": "error" }
+    },
+    {
       // React Compiler memoizes the renderer's components and hooks. Hand-written memos only add noise.
       "files": ["apps/desktop/renderer/**"],
       "rules": {
