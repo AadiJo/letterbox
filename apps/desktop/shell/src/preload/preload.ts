@@ -10,9 +10,10 @@ import type { Channel } from '../shared/channels.ts'
 /**
  * This document's id. The preload runs again for every document, so a reload gets a new one.
  * Main sends each port back with the id of the document that asked for it, and a port meant
- * for an earlier document in this frame is closed here, unheard.
+ * for an earlier document in this frame is closed here, unheard. It uses getRandomValues,
+ * which, unlike randomUUID, also works on a plain http page outside loopback.
  */
-const documentId = crypto.randomUUID()
+const documentId = Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(36)).join('-')
 
 ipcRenderer.on('core:port' satisfies Channel, (event, asker: unknown) => {
   if (asker === documentId) return window.postMessage(PORT_MESSAGE, window.location.origin, event.ports)

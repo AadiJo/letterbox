@@ -70,22 +70,23 @@ export type Launched = {
   startedAt: number
 }
 
-/** Launches the app with its page at `renderer`, against the sim. Main's output goes to the shell log. */
-export async function launch(name: string, renderer: string): Promise<Launched> {
+/** Launches the app with its page at `renderer`, against the sim, with any extra Chromium `switches`. Main's output goes to the shell log. */
+export async function launch(name: string, renderer: string, switches: string[] = []): Promise<Launched> {
   const from = existsSync(MAIN_LOG) ? readFileSync(MAIN_LOG, 'utf8').length : 0
   const startedAt = Date.now()
   // Playwright turns Chromium's sandbox off unless asked. The app runs with it on, so the check does too.
   const app = await _electron
     .launch({
       executablePath: electronBinary(),
-      args: [SHELL],
+      args: [...switches, SHELL],
       cwd: root,
       env: shellEnv(paths, renderer, { kind: 'sim', now: seed.now }),
       chromiumSandbox: true,
       timeout: WAIT_MS,
     })
     .catch((error: unknown) => {
-      if (!/sandbox|namespace/i.test(String(error))) throw error
+      // Chromium's own words when its sandbox cannot start, as opposed to a sandbox switch in the call log.
+      if (!/no usable sandbox|setuid_sandbox|user namespace/i.test(String(error))) throw error
       throw new Error(
         "Electron did not start with Chromium's sandbox on. On Linux the sandbox needs unprivileged user " +
           'namespaces: on Ubuntu 24.04 run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, ' +
@@ -141,8 +142,13 @@ export async function quit({ app, exit }: Launched) {
  * Launches the app, hands it to `body`, and makes sure it is gone afterwards, even when
  * `body` fails part way: quit as a person does, then kill it by PID if that hangs.
  */
-export async function withApp<Result>(name: string, renderer: string, body: (run: Launched) => Promise<Result>) {
-  const run = await launch(name, renderer)
+export async function withApp<Result>(
+  name: string,
+  renderer: string,
+  body: (run: Launched) => Promise<Result>,
+  switches: string[] = [],
+) {
+  const run = await launch(name, renderer, switches)
   try {
     return await body(run)
   } finally {
@@ -176,25 +182,50 @@ export async function untilLogged(run: Launched, done: (lines: string[]) => bool
   }
 }
 
+/** Chromium switches that turn some or all of its sandbox off. */
+const SANDBOX_OFF = [
+  '--no-sandbox',
+  '--disable-seccomp-filter-sandbox',
+  '--disable-namespace-sandbox',
+  '--disable-setuid-sandbox',
+  '--no-zygote-sandbox',
+]
+
+/** How many seccomp filters the kernel says the process `pid` runs under. NaN if it does not say. */
+const seccompFilters = (pid: number | undefined) =>
+  Number(/^Seccomp_filters:\s*(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1] ?? Number.NaN)
+
 /**
- * Whether the window's page runs in the OS sandbox, as the OS reports it. On Linux, Chromium's
- * sandbox puts the renderer in a PID namespace of its own, apart from main's, under a
- * seccomp-bpf filter. With `--no-sandbox` the renderer keeps the filter but shares main's
- * namespaces, so the namespace is what tells them apart. Elsewhere Electron reports it.
+ * Why the window's page is not in the OS sandbox, or an empty list when it is. On Linux three
+ * things must hold for the renderer process:
+ *   - its command line has no switch that turns the sandbox off;
+ *   - it has a PID namespace of its own, apart from main's;
+ *   - Chromium's own seccomp-bpf filter is on it: it carries more filters than main, so the
+ *     count is not just what both inherited from whatever started them.
+ * Elsewhere Electron reports it.
  */
-export async function pageSandboxed(run: Launched) {
+export async function sandboxGaps(run: Launched): Promise<string[]> {
   const pid = await run.app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0]?.webContents.getOSProcessId(),
   )
-  if (pid === undefined) throw new Error('the app has no window to check')
-  if (process.platform === 'linux') {
-    const seccomp = /^Seccomp:\s*(\d)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]
-    const ownPids = readlinkSync(`/proc/${pid}/ns/pid`) !== readlinkSync(`/proc/${run.app.process().pid}/ns/pid`)
-    return seccomp === '2' && ownPids
+  if (pid === undefined) return ['the app has no window to check']
+  if (process.platform !== 'linux') {
+    const metric = await run.app.evaluate(
+      ({ app }, renderer) => app.getAppMetrics().find((candidate) => candidate.pid === renderer),
+      pid,
+    )
+    return metric?.sandboxed === true ? [] : ['Electron reports the renderer as not sandboxed']
   }
-  const metric = await run.app.evaluate(
-    ({ app }, renderer) => app.getAppMetrics().find((candidate) => candidate.pid === renderer),
-    pid,
-  )
-  return metric?.sandboxed === true
+  const main = run.app.process().pid
+  // A zygote child rewrites its command line into one string, so split it on spaces too.
+  const switches = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split(/[\0 ]/)
+  const gaps = SANDBOX_OFF.filter((off) => switches.includes(off)).map((off) => `the renderer runs with ${off}`)
+  if (readlinkSync(`/proc/${pid}/ns/pid`) === readlinkSync(`/proc/${main}/ns/pid`)) {
+    gaps.push("the renderer shares main's PID namespace")
+  }
+  const own = seccompFilters(pid)
+  const inherited = seccompFilters(main)
+  if (Number.isNaN(own) || Number.isNaN(inherited)) gaps.push('the kernel does not report Seccomp_filters')
+  else if (own <= inherited) gaps.push(`the renderer has ${own} seccomp filters, no more than main's ${inherited}`)
+  return gaps
 }

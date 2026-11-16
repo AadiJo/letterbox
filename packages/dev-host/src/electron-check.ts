@@ -2,15 +2,17 @@
 //
 // Builds the shell and a renderer, signs the people-first seed in at the sim provider, and
 // launches the app with Playwright's Electron driver. Main starts core-sim itself, as it
-// starts letterbox-core in the app. Five runs, each a fresh app over the same store:
+// starts letterbox-core in the app. Six runs, each a fresh app over the same store:
 //   built     the built renderer on app://. The first row paints, the core's messages go
 //             over the MessagePort and nothing opens a WebSocket, the page runs in the OS
-//             sandbox and its policy blocks inline script. Quitting lets the idle core finish.
+//             sandbox with no switch turning it off, and its policy blocks inline script.
+//             Quitting lets the idle core finish.
 //   busy      the Vite renderer, as `pnpm dev:desktop` runs it. Two reloads while main stops
 //             a busy core leave the newest page with a live core of its own. Then the app
 //             quits while its core waits on the provider: main waits STOP_MS, then kills it.
 //   crash     the built renderer. The core is killed under the app, and the page says so.
 //   redirect  a dev URL that redirects to another origin. Main blocks it.
+//   insecure  a plain http page that is not loopback, so not a secure context, still gets the bridge.
 //   gmail     real mode with no client file, and with one that does not exist. Main exits
 //             with 1 and says what to set, before any window or core.
 // It also checks that the dev host refuses a --state that would empty the real core's store.
@@ -34,7 +36,7 @@ import {
   equal,
   firstRowPainted,
   isRunning,
-  pageSandboxed,
+  sandboxGaps,
   paths,
   quit,
   untilLogged,
@@ -88,7 +90,11 @@ const builtRun = (renderer: string) =>
       true,
       'built: new windows are denied',
     )
-    equal(await pageSandboxed(run), true, "built: the page's renderer runs in the OS sandbox")
+    equal(
+      await sandboxGaps(run),
+      [],
+      "built: the page's renderer runs in the OS sandbox, with no switch turning it off",
+    )
     equal(errors, [], 'built: the page logged no errors')
     equal(sockets, [], 'built: the page opened no WebSocket')
     // The policy allows no inline script, so this one never runs. Its refusal logs an error, so it goes last.
@@ -255,6 +261,38 @@ async function redirectRun() {
   }
 }
 
+/**
+ * A dev URL on plain http under a name that is not loopback, so not a secure context and
+ * without APIs such as crypto.randomUUID. Chromium maps the name to this machine, so nothing
+ * is served to the network. The preload must still put the bridge on the page.
+ */
+async function insecureRun() {
+  const plain = createServer((_request, response) => response.end('<p>a plain http page</p>'))
+  const port = await listen(plain, 0)
+  try {
+    await withApp(
+      'insecure',
+      `http://insecure.test:${port}/`,
+      async (run) => {
+        await run.page.waitForLoadState('domcontentloaded')
+        equal(
+          await run.page.evaluate(() => ({
+            secure: isSecureContext,
+            bridge: Object.keys(window.letterbox ?? {}).toSorted(),
+          })),
+          { secure: false, bridge: ['connect', 'platform'] },
+          'insecure: on plain http that is not loopback, the page still gets the bridge',
+        )
+        checkQuit('insecure', run, await quit(run))
+      },
+      ['--host-resolver-rules=MAP insecure.test 127.0.0.1'],
+    )
+  } finally {
+    plain.closeAllConnections()
+    plain.close()
+  }
+}
+
 /** The dev host refuses a state folder that would empty the real core's store, before it deletes anything. */
 function stateRun() {
   for (const state of ['.letterbox/gmail', '.letterbox/gmail/dev']) {
@@ -337,6 +375,7 @@ if (failure === null) {
   })
   await part(() => crashRun(renderer))
   await part(redirectRun)
+  await part(insecureRun)
   await part(() => gmailRun(renderer))
 }
 await part(stateRun)
