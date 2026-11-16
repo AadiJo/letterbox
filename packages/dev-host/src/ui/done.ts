@@ -142,17 +142,22 @@ async function openInbox(page: Page) {
 }
 
 /** An archive the core accepts after the user left Inbox moves nothing and says nothing where they went. */
-async function checkLateArchive(page: Page, relay: Relay) {
-  // A conversation both lists show at once: in Inbox, and among All mail's first rows.
+/** Opens Inbox on a conversation both lists show at once: in Inbox, and among All mail's first rows. */
+async function openSharedRow(page: Page) {
   await nav(page, 'All mail').click()
   await mailRows(page).first().locator('[data-field="subject"]').waitFor()
   const inAllMail = await mailRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
   await openInbox(page)
-  const total = await conversations(page)
   const inInbox = await mailRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
   const id = inInbox.find((candidate) => inAllMail.includes(candidate))
   if (!id) throw new Error('no conversation shows in Inbox and at the top of All mail')
   await page.locator(`[data-list="mail"] [data-row="${id}"]`).click()
+  return id
+}
+
+async function checkLateArchive(page: Page, relay: Relay) {
+  const id = await openSharedRow(page)
+  const total = await conversations(page)
   const paused = relay.pauseAtAccepted()
   await page.keyboard.press('e')
   await paused
@@ -169,6 +174,53 @@ async function checkLateArchive(page: Page, relay: Relay) {
   equal(await toast(page).count(), 0, 'an archive accepted after leaving Inbox shows no toast')
   await openInbox(page)
   await waitForTotal(page, total - 1)
+}
+
+/**
+ * Leaving Inbox while an archived row slides out moves nothing in All mail. All mail mounts
+ * its row for the same conversation before Inbox's row goes, and that row is not the one
+ * that was leaving. The page counts every animation started on a connected row for the
+ * conversation from the moment it opens All mail.
+ */
+async function checkLeaveDuringExit(page: Page) {
+  const id = await openSharedRow(page)
+  const left = page.evaluate(
+    (leaving) =>
+      new Promise<void>((resolve) => {
+        const subtitle = document.querySelector('[data-field="subtitle"]')
+        const row = document.querySelector(`[data-list="mail"] [data-row="${leaving}"]`)
+        const allMail = [...document.querySelectorAll<HTMLElement>('nav[aria-label="Sidebar"] button')].find((button) =>
+          button.textContent?.startsWith('All mail'),
+        )
+        if (!subtitle || !row || !allMail) throw new Error('Inbox, its row or the All mail button is missing')
+        const before = subtitle.textContent
+        // Once the core has taken the row out of Inbox, while the row still slides out.
+        const observer = new MutationObserver(() => {
+          if (subtitle.textContent === before || !row.isConnected) return
+          observer.disconnect()
+          document.body.dataset.rowAnimations = '0'
+          const animate = Element.prototype.animate
+          Element.prototype.animate = function (...args) {
+            if (this.isConnected && this.getAttribute('data-row') === leaving)
+              document.body.dataset.rowAnimations = String(Number(document.body.dataset.rowAnimations) + 1)
+            return animate.apply(this, args)
+          }
+          allMail.click()
+          resolve()
+        })
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+      }),
+    id,
+  )
+  await page.keyboard.press('e')
+  await left
+  await page.locator(`[data-list="mail"] [data-row="${id}"] [data-field="subject"]`).waitFor()
+  await settle(page)
+  equal(
+    await page.evaluate(() => document.body.dataset.rowAnimations),
+    '0',
+    "leaving Inbox mid-exit runs no animation on All mail's row for the same conversation",
+  )
 }
 
 /** Archive and Trash say what they did, with nothing to undo: Undo waits for the core's own. */
@@ -257,6 +309,7 @@ export async function checkDone(browser: Browser, url: string) {
   await page.setViewportSize(SIZES.wide)
   await checkDoneAndUndo(page)
   await checkLateArchive(page, relay)
+  await checkLeaveDuringExit(page)
   await checkNoUndo(page)
   await checkScrollDuringExit(page)
 

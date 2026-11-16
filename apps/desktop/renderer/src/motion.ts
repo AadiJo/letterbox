@@ -19,14 +19,18 @@ const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 /** Each row's element while it is on screen. Row registers it with `trackRow`. */
 const elements = new Map<ThreadId, HTMLElement>()
 
-/** Rows that are sliding or folding out. Lists keep them in place until they are gone (`useHeld`). */
-let leaving: ReadonlySet<ThreadId> = new Set()
+/**
+ * Rows that are sliding or folding out, each with the element that moves. Lists keep them
+ * in place until they are gone (`useHeld`). The element marks one exit: another list's row
+ * for the same conversation is another element, and never part of it.
+ */
+let leaving: ReadonlyMap<ThreadId, HTMLElement> = new Map()
 const watchers = new Set<() => void>()
 
-const setLeaving = (id: ThreadId, on: boolean) => {
-  if (leaving.has(id) === on) return
-  const next = new Set(leaving)
-  if (on) next.add(id)
+const setLeaving = (id: ThreadId, element: HTMLElement | null) => {
+  if ((leaving.get(id) ?? null) === element) return
+  const next = new Map(leaving)
+  if (element) next.set(id, element)
   else next.delete(id)
   leaving = next
   watchers.forEach((watcher) => watcher())
@@ -51,7 +55,7 @@ export const trackRow =
 export async function leave(id: ThreadId) {
   const row = elements.get(id)
   if (!row || reduced()) return
-  setLeaving(id, true)
+  setLeaving(id, row)
   const slide = row.animate(
     [
       { transform: 'none', opacity: 1 },
@@ -68,7 +72,7 @@ export async function leave(id: ThreadId) {
     () => true,
     () => false,
   )
-  if (!slid || !leaving.has(id)) return
+  if (!slid || leaving.get(id) !== row) return
   // The row went mid-slide, with its screen or window. Nothing is left to fold.
   if (!row.isConnected) return release(id)
   const { height, paddingTop, paddingBottom } = getComputedStyle(row)
@@ -80,34 +84,31 @@ export async function leave(id: ThreadId) {
     { duration: FOLD_MS, easing: EASE, fill: 'forwards' },
   )
   void fold.finished.then(
-    () => setLeaving(id, false),
+    () => {
+      if (leaving.get(id) === row) setLeaving(id, null)
+    },
     () => {},
   )
 }
 
 /** Stops a row leaving and shows it as it was, as for an undo that lands while it still moves. */
 export function release(id: ThreadId) {
-  elements
+  leaving
     .get(id)
     ?.getAnimations()
     .forEach((animation) => animation.cancel())
-  setLeaving(id, false)
+  setLeaving(id, null)
 }
 
 /** Shakes a row once, 2 px each way, for an action the core refused. */
-export function shake(id: ThreadId) {
+export const shake = (id: ThreadId) => shakeElement(elements.get(id))
+
+function shakeElement(element: HTMLElement | undefined) {
   if (reduced()) return
-  elements
-    .get(id)
-    ?.animate(
-      [
-        { transform: 'none' },
-        { transform: 'translateX(2px)' },
-        { transform: 'translateX(-2px)' },
-        { transform: 'none' },
-      ],
-      { duration: SHAKE_MS },
-    )
+  element?.animate(
+    [{ transform: 'none' }, { transform: 'translateX(2px)' }, { transform: 'translateX(-2px)' }, { transform: 'none' }],
+    { duration: SHAKE_MS },
+  )
 }
 
 const subscribe = (onChange: () => void) => {
@@ -119,7 +120,11 @@ const subscribe = (onChange: () => void) => {
  * Inserts each row of `shown` that is still leaving into `next`, after the row it followed.
  * Empty slots (null, a row still loading) are never kept.
  */
-function hold<Id extends ThreadId | null>(shown: readonly Id[], next: readonly Id[], keep: ReadonlySet<ThreadId>) {
+function hold<Id extends ThreadId | null>(
+  shown: readonly Id[],
+  next: readonly Id[],
+  keep: ReadonlyMap<ThreadId, HTMLElement>,
+) {
   const result = [...next]
   shown.forEach((id, index) => {
     if (id === null || !keep.has(id) || result.includes(id)) return
@@ -151,20 +156,21 @@ export function useHeld<Id extends ThreadId | null>(ids: readonly Id[], frame = 
 
 /**
  * Ends the exit of a row that a list held (`held`) once the list stops holding it. If the
- * row is still on screen, the list has it again while it was leaving: the core took the
- * change back, as after a provider refusal. The row then shows as it was, shakes once, and
- * its toast goes. If the row went (its window scrolled on, or its screen closed), the exit
- * is released with it.
+ * very element that was leaving is still on screen, its list has it again mid-exit: the
+ * core took the change back, as after a provider refusal. The row then shows as it was,
+ * shakes once, and its toast goes. If the element went (its window scrolled on, or its
+ * screen closed, even as another list mounts a row for the same conversation), the exit is
+ * released with it.
  */
 export function useExit(id: ThreadId, held: boolean) {
   useEffect(() => {
-    if (!held) return
+    const exiting = held ? leaving.get(id) : undefined
+    if (!exiting) return
     return () => {
-      if (!leaving.has(id)) return
-      const back = elements.get(id)?.isConnected === true
+      if (leaving.get(id) !== exiting) return
       release(id)
-      if (!back) return
-      shake(id)
+      if (!exiting.isConnected) return
+      shakeElement(exiting)
       withdrawFor(id)
     }
   }, [id, held])

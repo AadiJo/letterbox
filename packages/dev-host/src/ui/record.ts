@@ -9,6 +9,9 @@ import type { Browser, BrowserContext, Page } from 'playwright'
 export const root = fileURLToPath(new URL('../../../../', import.meta.url))
 export const ARTIFACTS = join(root, 'artifacts/ui')
 
+/** The longest any one wait in a check may take. */
+const WAIT_MS = 15_000
+
 /** The window sizes every scene is captured at. */
 export const SIZES = {
   wide: { width: 1440, height: 900 },
@@ -62,26 +65,63 @@ const isRemote = (url: string) => {
   return (protocol === 'http:' || protocol === 'https:') && hostname !== '127.0.0.1'
 }
 
+/** A close's code and reason as `WebSocketRoute.close` takes them, leaving out what the other side did not send. */
+const closeOptions = (code: number | undefined, reason: string | undefined) => ({
+  ...(code === undefined ? {} : { code }),
+  ...(reason === undefined ? {} : { reason }),
+})
+
 /**
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
  * in order. The returned promise resolves once the relay holds that `accepted`. `sees`
- * resolves once the core sends a message, held or not, that contains `text`.
+ * resolves once the core sends a message, held or not, that contains `text`. It rejects
+ * after WAIT_MS, or when the connection closes first, naming what never came.
  */
 async function relayCore(page: Page) {
   let armed: (() => void) | undefined
   let held: string[] | undefined
   let toPage: ((message: string) => void) | undefined
-  const waiters = new Set<{ text: string; resolve: () => void }>()
+  const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
-    for (const waiter of waiters) {
-      if (!message.includes(waiter.text)) continue
-      waiters.delete(waiter)
-      waiter.resolve()
-    }
+    for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
+  }
+  const closed = () => {
+    for (const waiter of waiters)
+      waiter.settle(new Error(`the core connection closed before the core sent a message with ${waiter.text}`))
+  }
+  const sees = (text: string) => {
+    const seen = new Promise<void>((resolve, reject) => {
+      const waiter = {
+        text,
+        settle: (error?: Error) => {
+          clearTimeout(timer)
+          waiters.delete(waiter)
+          if (error) reject(error)
+          else resolve()
+        },
+      }
+      const timer = setTimeout(
+        () => waiter.settle(new Error(`the core sent no message with ${text} within ${WAIT_MS} ms`)),
+        WAIT_MS,
+      )
+      waiters.add(waiter)
+    })
+    // Handled here too, so a failure that lands before the check awaits it does not end the process.
+    seen.catch(() => {})
+    return seen
   }
   await page.routeWebSocket(/\/core$/, (socket) => {
     const core = socket.connectToServer()
+    // A close handler stops Playwright passing a close on, so each side passes it on itself.
+    socket.onClose((code, reason) => {
+      void core.close(closeOptions(code, reason))
+      closed()
+    })
+    core.onClose((code, reason) => {
+      void socket.close(closeOptions(code, reason))
+      closed()
+    })
     socket.onMessage((message) => core.send(message))
     toPage = (message) => socket.send(message)
     core.onMessage((frame) => {
@@ -99,7 +139,7 @@ async function relayCore(page: Page) {
   })
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
-    sees: (text: string) => new Promise<void>((resolve) => void waiters.add({ text, resolve })),
+    sees,
     resume: () => {
       const queued = held ?? []
       held = undefined
@@ -121,7 +161,7 @@ export async function openPage(browser: Browser, url: string, trace: string) {
   const context: BrowserContext = await browser.newContext({ viewport: SIZES.wide, locale: 'en-US', timezoneId: 'UTC' })
   await context.tracing.start({ screenshots: true, snapshots: true })
   const page: Page = await context.newPage()
-  page.setDefaultTimeout(15_000)
+  page.setDefaultTimeout(WAIT_MS)
   const errors: string[] = []
   const remote: string[] = []
   const blocked: string[] = []
