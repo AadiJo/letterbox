@@ -42,6 +42,7 @@ const conversation = (spec: Conversation, number: number): SeedMessage[] => {
       sentAt: ago(ages[index] ?? spec.age),
       unread: !mine && index === spec.says.length - 1 && spec.unread === true,
       replyTo: keys.slice(0, index),
+      ...(say.attachments && { attachments: say.attachments }),
     }
   })
 }

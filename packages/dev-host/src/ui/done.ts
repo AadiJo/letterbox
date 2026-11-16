@@ -67,6 +67,12 @@ async function checkReaderLayout(page: Page) {
     body: (await boxOf(page, paragraph)).left,
     reply: (await boxOf(page, '[data-field="reply-bar"]')).left,
   }
+  equal(Math.round(list.right - list.left), 392, '1920 px: the list is 392 px wide')
+  equal(
+    await page.locator('[data-field="attachment"]').count(),
+    0,
+    'a message with no attachments shows no attachment chip',
+  )
   equal(
     subject.left - list.right <= 64,
     true,
@@ -140,6 +146,14 @@ async function checkDoneAndUndo(page: Page) {
   await page.keyboard.press('d')
   await toast(page).waitFor()
   await page.locator(`[data-row="${first}"]`).waitFor({ state: 'detached' })
+  // Tomas's lease addendum carries its PDF, shown as a chip under the body.
+  equal(
+    await page
+      .locator('[data-message="open"] [data-field="attachment"]')
+      .evaluateAll((files) => files.map((file) => [...file.children].map((part) => part.textContent))),
+    [['PDF', 'Addendum-4B-signed-TO.pdf', '212 KB']],
+    "a message's attachment shows as a chip with its type, name and size",
+  )
   await checkToastClear(page, 'wide')
   await checkToastClear(page, 'narrow')
   await captureC2(page, 'done-1440')

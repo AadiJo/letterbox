@@ -43,6 +43,18 @@ const GROUP = {
   sentAt: new Date(Date.parse(seed.now) - 10 * 60_000).toISOString(),
 }
 
+/** The user's own message, sent only to Cc: Reply all is the one way to answer it. */
+const CC_ONLY = {
+  key: 'cc-only-1',
+  mailboxes: ['sent'],
+  from: { name: 'Robin Vale', address: ME },
+  to: [],
+  cc: [{ name: 'Owen Hale', address: 'owen.hale@studiohale.test' }],
+  subject: 'Studio party list',
+  text: 'Copying you in on the list for Friday.',
+  sentAt: new Date(Date.parse(seed.now) - 20 * 60_000).toISOString(),
+}
+
 const dock = (page: Page) => page.locator('section[aria-label="Reply"]')
 const bar = (page: Page) => page.locator('[data-field="reply-bar"]')
 const replyAll = (page: Page) => page.getByRole('button', { name: 'Reply all', exact: true })
@@ -62,6 +74,40 @@ const chips = (page: Page, line: 'to' | 'cc') =>
   dock(page)
     .locator(`[data-address-line="${line}"] [data-chip]`)
     .evaluateAll((found) => found.map((chip) => chip.getAttribute('title')))
+
+/** The draft's text as the editor shows it: its paragraphs, a blank line between each two. */
+const draftText = (page: Page) =>
+  body(page).evaluate((element) => (element instanceof HTMLElement ? element.innerText : ''))
+
+/** Replaces the draft's text by typing it as a user would: Enter between paragraphs, Shift+Enter between lines. */
+async function write(page: Page, text: string) {
+  await body(page).focus()
+  await page.keyboard.press('ControlOrMeta+a')
+  await page.keyboard.press('Backspace')
+  for (const [index, paragraph] of text.split('\n\n').entries()) {
+    // oxlint-disable-next-line no-await-in-loop -- keys reach the editor one at a time, in order
+    if (index > 0) await page.keyboard.press('Enter')
+    for (const [at, line] of paragraph.split('\n').entries()) {
+      // oxlint-disable-next-line no-await-in-loop -- keys reach the editor one at a time, in order
+      if (at > 0) await page.keyboard.press('Shift+Enter')
+      // oxlint-disable-next-line no-await-in-loop -- keys reach the editor one at a time, in order
+      await page.keyboard.type(line)
+    }
+  }
+}
+
+/** Where `selector`'s first match is, or a failure naming it. */
+async function box(page: Page, selector: string) {
+  const found = await page.locator(selector).first().boundingBox()
+  if (!found) throw new Error(`the page shows no ${selector}`)
+  return {
+    left: found.x,
+    top: found.y,
+    right: found.x + found.width,
+    bottom: found.y + found.height,
+    width: found.width,
+  }
+}
 
 /** Opens the conversation `subject` from the list on screen and waits for its newest message. */
 async function open(page: Page, subject: string) {
@@ -89,7 +135,13 @@ export async function checkReply(browser: Browser) {
     paths,
     port: 0,
     relay: true,
-    sim: { now: seed.now, deliver: () => mailbox.deliver(GROUP) },
+    sim: {
+      now: seed.now,
+      deliver: () => {
+        mailbox.deliver(GROUP)
+        mailbox.deliver(CC_ONLY)
+      },
+    },
     coreFlags: () => (hold ? ['--hold-waits'] : []),
   })
   const opened = await openPage(browser, server.url, 'trace-reply.zip')
@@ -122,7 +174,7 @@ export async function checkReply(browser: Browser) {
       page.evaluate(() => {
         const reply = document.querySelector('section[aria-label="Reply"]')
         const pane = reply?.closest('article')
-        const editor = reply?.querySelector('textarea')
+        const editor = reply?.querySelector('[data-field="draft"]')
         if (!reply || !pane || !editor) throw new Error('the reply editor is not in the reader')
         return {
           share: reply.getBoundingClientRect().height / pane.getBoundingClientRect().height,
@@ -133,13 +185,59 @@ export async function checkReply(browser: Browser) {
     equal(Math.round(empty.editor), 120, 'an empty editor is 120 px tall')
     const mayaText =
       'Hi Maya,\n\nNorthfield confirmed the week of the 24th this morning. I’ll forward you their note so you have it in writing.\n\n12 interviews is fine. Let’s keep the budget where it is and revisit after the first six.'
-    await body(page).fill(mayaText)
+    await write(page, mayaText)
     const written = await sizes()
     equal(written.editor > empty.editor, true, `the editor grows with its text (${Math.round(written.editor)} px)`)
-    await body(page).fill(`${mayaText}\n\n${'More to say.\n'.repeat(40)}`)
+    equal(await draftText(page), mayaText, 'the draft holds what was typed, a blank line between paragraphs')
+
+    // The draft reads like the body it answers: 16/26 paragraphs 16 px apart, on the body's left edge and measure.
+    const paragraphs = await body(page).evaluate((element) =>
+      [...element.querySelectorAll(':scope > p')].map((paragraph) => {
+        const { top, bottom, left, width } = paragraph.getBoundingClientRect()
+        const style = getComputedStyle(paragraph)
+        return { top, bottom, left, width, type: `${style.fontSize}/${style.lineHeight}` }
+      }),
+    )
+    const received = await box(page, '[data-message="open"] [data-field="body"] p')
+    equal(
+      {
+        count: paragraphs.length,
+        gaps: paragraphs
+          .slice(1)
+          .map((paragraph, index) => Math.round(paragraph.top - (paragraphs[index]?.bottom ?? 0))),
+        type: [...new Set(paragraphs.map((paragraph) => paragraph.type))],
+        left: paragraphs.every((paragraph) => Math.abs(paragraph.left - received.left) < 0.5),
+        measure: paragraphs.every((paragraph) => paragraph.width <= received.width + 0.5),
+      },
+      { count: 3, gaps: [16, 16], type: ['16px/26px'], left: true, measure: true },
+      "the draft is three 16/26 paragraphs, 16 px apart, on the body's edge and measure",
+    )
+
+    // While writing, the conversation's end stays in view: the divider under the last message, 24 px above the dock.
+    const lastMessage = await box(page, '[data-message="open"]:last-of-type')
+    const dockTop = (await box(page, 'section[aria-label="Reply"]')).top
+    equal(Math.round(dockTop - lastMessage.bottom), 24, 'the divider under the last message sits 24 px above the dock')
+
+    // The pinned subject hides what scrolls under it, and the fade starts where it ends.
+    const band = await box(page, '[data-field="subject-band"]')
+    const fade = await box(page, '[data-field="scroll-fade"]')
+    const under = await page.evaluate(
+      ({ left, right, middle }) =>
+        [left + 1, (left + right) / 2, right - 2].map((x) =>
+          Boolean(document.elementFromPoint(x, middle)?.closest('[data-field="subject-band"]')),
+        ),
+      { left: band.left, right: band.right, middle: (band.top + band.bottom) / 2 },
+    )
+    equal(
+      [under, Math.round(fade.top - band.bottom)],
+      [[true, true, true], 0],
+      'the pinned subject covers what scrolls under it, and the fade starts at its edge',
+    )
+
+    await write(page, `${mayaText}\n\n${'More to say.\n'.repeat(40).trimEnd()}`)
     const long = await sizes()
     equal(long.share <= 0.401, true, `a long reply stops at 40% of the reader (${Math.round(long.share * 100)}%)`)
-    await body(page).fill(mayaText)
+    await write(page, mayaText)
     await captureC2(page, 'reply-1440')
     await capture(page, 'reply-dock')
 
@@ -153,12 +251,12 @@ export async function checkReply(browser: Browser) {
     await open(page, 'Lease addendum for 4B')
     equal(await bar(page).textContent(), 'Reply to TomasR', 'a conversation with no draft offers an empty reply')
     await page.keyboard.press('r')
-    await body(page).fill('Signed, sending it back today.')
+    await write(page, 'Signed, sending it back today.')
     await open(page, 'Notes from Thursday')
     await bar(page).click()
-    equal(await body(page).inputValue(), mayaText, "Maya's draft is still Maya's")
+    equal(await draftText(page), mayaText, "Maya's draft is still Maya's")
     await open(page, 'Lease addendum for 4B')
-    equal(await body(page).inputValue(), 'Signed, sending it back today.', "Tomas's draft is still Tomas's")
+    equal(await draftText(page), 'Signed, sending it back today.', "Tomas's draft is still Tomas's")
     await dock(page).getByRole('button', { name: 'Discard' }).click()
     equal(
       [await dock(page).count(), await bar(page).textContent()],
@@ -180,10 +278,30 @@ export async function checkReply(browser: Browser) {
       'Reply all copies the others, and not me',
     )
 
+    // In a 1024×700 window, To, Cc and Bcc fill the dock, and Send still shows: the lines scroll instead.
+    await page.setViewportSize({ width: 1024, height: 700 })
+    const send = await box(page, 'section[aria-label="Reply"] footer button:has-text("Send")')
+    const shown = await box(page, 'section[aria-label="Reply"]')
+    equal(
+      send.top >= shown.top && send.bottom <= Math.min(shown.bottom, 700),
+      true,
+      `at 1024×700 with Reply all, Send stays in view (${Math.round(send.top)} to ${Math.round(send.bottom)} px)`,
+    )
+    await page.setViewportSize({ width: 1440, height: 900 })
+    // Every shortcut names the platform's key one way: Ctrl here, on Linux.
+    equal(
+      [
+        await page.locator('form[role="search"] kbd').textContent(),
+        await page.locator('section[aria-label="Reply"] footer kbd').first().textContent(),
+      ],
+      ['Ctrl K', 'Ctrl ↵'],
+      'search and Send name their shortcuts the same way',
+    )
+
     // An address the core would refuse stops at its line, and nothing is sent.
     await dock(page).locator('input[data-line="to"]').fill('ben@exämple.com')
     await dock(page).locator('input[data-line="to"]').press('Enter')
-    await body(page).fill('Count me in.')
+    await write(page, 'Count me in.')
     await page.keyboard.press('Control+Enter')
     const problem = dock(page).locator('[data-address-line="to"] [data-field="address-problem"]')
     await problem.waitFor()
@@ -199,6 +317,15 @@ export async function checkReply(browser: Browser) {
       'nothing reached the provider or the thread',
     )
     await dock(page).getByRole('button', { name: 'Discard' }).click()
+
+    // The user's own message, only to Cc, can still be answered: the bar offers Reply all.
+    await nav(page, 'All mail').click()
+    await open(page, 'Studio party list')
+    equal(
+      [await bar(page).textContent(), await replyAll(page).count()],
+      ['ReplyR', 1],
+      "the user's own message sent only to Cc still offers a reply, and Reply all",
+    )
 
     // Send: the reply is in the thread at once, the turn moves, and the toast offers Undo.
     await nav(page, 'People').click()
@@ -237,19 +364,15 @@ export async function checkReply(browser: Browser) {
     // A new draft can start in the window. Undo puts the reply back in front of it, and neither is lost.
     await open(page, 'Notes from Thursday')
     await page.keyboard.press('r')
-    await body(page).fill(SECOND)
+    await write(page, SECOND)
     await toast(page).getByRole('button', { name: /^Undo/ }).click()
     await held.waitFor({ state: 'detached' })
-    equal(
-      await body(page).inputValue(),
-      `${mayaText}\n\n${SECOND}`,
-      'Undo puts the reply back first, then the newer draft',
-    )
+    equal(await draftText(page), `${mayaText}\n\n${SECOND}`, 'Undo puts the reply back first, then the newer draft')
     equal((await reason(page))?.startsWith('Your turn'), true, 'and the turn is mine again')
     equal([mailbox.calls().send, await toast(page).count()], [0, 0], 'the provider got no send, and the toast went')
 
     // Sent again, for the picture.
-    await body(page).fill(mayaText)
+    await write(page, mayaText)
     await page.keyboard.press('Control+Enter')
     await held.waitFor()
     await capture(page, 'reply-sending')
@@ -281,7 +404,7 @@ export async function checkReply(browser: Browser) {
     mailbox.refuseNextSend('refused-by-provider')
     await open(page, 'Cover draft for issue 12')
     await page.keyboard.press('r')
-    await body(page).fill('Here is the cover with the new title.')
+    await write(page, 'Here is the cover with the new title.')
     await page.keyboard.press('Control+Enter')
     const notSent = page.locator('[data-field="not-sent"]')
     await notSent.waitFor()
@@ -294,7 +417,7 @@ export async function checkReply(browser: Browser) {
     await notSent.getByRole('button', { name: 'Edit and send again' }).click()
     await dock(page).waitFor()
     equal(
-      [await body(page).inputValue(), await chips(page, 'to')],
+      [await draftText(page), await chips(page, 'to')],
       ['Here is the cover with the new title.', ['Priya Raman <priya@ramanpress.test>']],
       'Edit and send again opens its text, to the same person',
     )
@@ -306,7 +429,7 @@ export async function checkReply(browser: Browser) {
     // which the core answers from what it already has.
     await open(page, 'Climbing on Saturday?')
     await page.keyboard.press('r')
-    await body(page).fill('Yes, count me in for Saturday.')
+    await write(page, 'Yes, count me in for Saturday.')
     const paused = relay.pauseAtAccepted()
     await page.keyboard.press('Control+Enter')
     await paused

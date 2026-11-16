@@ -51,7 +51,51 @@ export async function checkC2(page: Page) {
     `every pane's first element starts on one line (${JSON.stringify(tops)})`,
   )
 
-  // Each tooltip names its key, sits 8 px above its button inside the window, and clears the subject.
+  // The subject has room under the toolbar: its capitals start 28 px below the buttons.
+  const done = await boxOf(page, `${reader} button[aria-keyshortcuts="d"]`)
+  equal(
+    Math.round((await boxOf(page, '[data-field="reader-subject"]')).top - done.bottom),
+    28,
+    'the subject starts 28 px under the toolbar',
+  )
+
+  // The list is as wide as the design sets it at 1440 px.
+  equal(
+    Math.round(
+      (await boxOf(page, 'section[aria-label="People"]')).right -
+        (await boxOf(page, 'nav[aria-label="Sidebar"]')).right,
+    ),
+    372,
+    'the list is 372 px wide at 1440 px',
+  )
+
+  // Search is one group sized to its content: icon, "Search", then its key 8 px on.
+  const search = await page.locator(`${reader} form[role="search"]`).evaluate((form) => {
+    const [field, key] = [form.querySelector('input'), form.querySelector('kbd')]
+    if (!field || !key) throw new Error('search has no field or key')
+    const [fieldBox, keyBox] = [field.getBoundingClientRect(), key.getBoundingClientRect()]
+    return { gap: keyBox.left - fieldBox.right, tail: form.getBoundingClientRect().right - keyBox.right }
+  })
+  equal(
+    [Math.round(search.gap), search.tail <= 4],
+    [8, true],
+    `search's key sits 8 px after its label, and the group ends at the key (${JSON.stringify(search)})`,
+  )
+
+  // At rest the conversation has no fade over its subject. Scrolled, a fade sits at its top edge.
+  const fade = page.locator('[data-field="scroll-fade"]')
+  equal(await fade.count(), 0, 'an unscrolled conversation shows no fade')
+  await page.locator('[data-scroll]').evaluate((element) => element.scrollTo({ top: 120 }))
+  await fade.waitFor()
+  equal(
+    Math.round((await boxOf(page, '[data-field="scroll-fade"]')).top - (await boxOf(page, '[data-scroll]')).top),
+    0,
+    'a scrolled conversation fades under the toolbar',
+  )
+  await page.locator('[data-scroll]').evaluate((element) => element.scrollTo({ top: 0 }))
+  await fade.waitFor({ state: 'detached' })
+
+  // Each tooltip names its key, sits 6 px above its button and 8 px or more inside the window, and clears the subject.
   const subject = await boxOf(page, '[data-field="reader-subject"]')
   const seen: Record<string, string> = {}
   const hoverTooltip = async (name: string) => {
@@ -67,9 +111,9 @@ export async function checkC2(page: Page) {
     seen[name] = key ?? ''
     const box = { left: tipBox.x, top: tipBox.y, right: tipBox.x + tipBox.width, bottom: tipBox.y + tipBox.height }
     equal(
-      [Math.round(buttonBox.y - box.bottom), box.top >= 0, overlaps(box, subject)],
-      [8, true, false],
-      `${name}'s tooltip sits 8 px above its button, in the window, clear of the subject`,
+      [Math.round(buttonBox.y - box.bottom), box.top >= 8, overlaps(box, subject)],
+      [6, true, false],
+      `${name}'s tooltip sits 6 px above its button, 8 px or more from the window's top, clear of the subject`,
     )
   }
   for (const name of Object.keys(KEYS)) {
@@ -112,4 +156,32 @@ export async function checkC2(page: Page) {
     [0, 0],
     'no compose button, account switcher or attachment control',
   )
+}
+
+/**
+ * Every person keeps one tint, picked from their name, and the user looks the same everywhere.
+ * Opens Lease addendum for 4B, then Notes from Thursday again, so run it once the screens are captured.
+ */
+export async function checkAvatars(page: Page) {
+  const tintOf = (selector: string) =>
+    page
+      .locator(selector)
+      .first()
+      .evaluate((avatar) => ({
+        text: avatar.textContent,
+        fill: getComputedStyle(avatar).backgroundColor,
+      }))
+  const user = await tintOf('[data-field="account"] [data-avatar]')
+  const youInReader = await tintOf('[data-message] [data-avatar="R"]')
+  const maya = await tintOf('[data-message="open"] [data-avatar]')
+  await page.locator('[role="option"]', { hasText: 'Lease addendum for 4B' }).click()
+  await page.locator('[data-field="reader-subject"]', { hasText: 'Lease addendum for 4B' }).waitFor()
+  const tomas = await tintOf('[data-message="open"] [data-avatar]')
+  await page.locator('[role="option"]', { hasText: 'Notes from Thursday' }).click()
+  equal(
+    [user.text, youInReader, maya.text, tomas.text],
+    ['R', user, 'ML', 'TO'],
+    'the user is R with one tint in the sidebar and the reader, and others show their initials',
+  )
+  equal(new Set([user.fill, maya.fill, tomas.fill]).size, 3, 'Maya, Tomas and the user each have their own tint')
 }

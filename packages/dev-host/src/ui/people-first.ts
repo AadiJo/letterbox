@@ -5,7 +5,7 @@ import type { SeedMessage } from '@letterbox/sim-provider/contract'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import type { Browser, Page } from 'playwright'
 import { join } from 'node:path'
-import { checkC2, MUTED } from './c2.ts'
+import { checkAvatars, checkC2, MUTED } from './c2.ts'
 import { appErrors, ARTIFACTS, capture, captureC2, equal, openPage, ROW_HEIGHT, SIZES } from './record.ts'
 
 const seed = devSeeds['people-first']
@@ -149,6 +149,7 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await captureC2(page, 'people-1920')
   await captureC2(page, 'narrow-1024')
   await capture(page, 'people')
+  await checkAvatars(page)
 
   // The narrow window: the sidebar folds behind a toggle, and search is an icon.
   await page.setViewportSize(SIZES.narrow)
@@ -157,6 +158,14 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     await page.locator('[data-field="subtitle"]').innerText(),
     `${mine.length} yours · ${fresh('theirs').length} waiting`,
     'narrow: the People subtitle is short',
+  )
+  const titleLeft = (await page.locator('[data-field="list-title"]').boundingBox())?.x ?? 0
+  const rowLeft = (await page.locator('[role="option"] [data-field="subject"]').first().boundingBox())?.x ?? 0
+  const listWidth = (await page.locator('section[aria-label="People"]').boundingBox())?.width ?? 0
+  equal(
+    [Math.round(titleLeft - rowLeft), Math.round(listWidth)],
+    [0, 340],
+    "narrow: the list is 340 px wide, and its title lines up with the rows' text",
   )
   equal(await page.getByRole('search').isVisible(), false, 'narrow: the search field is folded')
   equal(await page.getByRole('button', { name: 'Search', exact: true }).isVisible(), true, 'narrow: search is an icon')

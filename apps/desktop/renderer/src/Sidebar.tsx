@@ -128,7 +128,7 @@ function AccountRow({ account }: { account: Account }) {
       title={account.address}
       className="flex h-[22px] min-w-0 flex-1 items-center gap-[9px] px-2.5 text-row font-medium text-fg"
     >
-      <Avatar who={{ name: null, address: account.address }} size="account" />
+      <Avatar who={{ name: null, address: account.address, isMe: true }} size="account" />
       <span className="min-w-0 flex-1 truncate">{account.address}</span>
     </div>
   )

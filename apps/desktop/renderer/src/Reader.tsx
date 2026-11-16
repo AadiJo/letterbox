@@ -6,8 +6,9 @@
 
 import type { Message, MessageId, Person, ThreadDetail, ThreadId, TurnState } from '@letterbox/protocol'
 import { ChevronRight, Hourglass, Reply } from 'lucide-react'
-import { Fragment, type ReactNode, useState } from 'react'
+import { Fragment, type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
 import { canReply, type Mail } from './actions.ts'
+import { Attachments } from './Attachments.tsx'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
 import { Editor, isComposing, ReplyBar } from './Composer.tsx'
@@ -30,6 +31,9 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
   const composer = useComposer(id)
   const labels = useLabels(thread?.mailboxIds ?? [])
   const [opened, setOpened] = useState<ReadonlySet<MessageId>>(new Set())
+  const [scrolled, setScrolled] = useState(false)
+  const scroller = useRef<HTMLDivElement>(null)
+  useStickToEnd(scroller, isComposing(composer))
   if (thread === undefined) return null
   if (thread === null) return <p className="m-auto text-row text-faint">This conversation is gone</p>
 
@@ -42,8 +46,8 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
   return (
     <article aria-label="Conversation" className="flex min-h-0 flex-1 flex-col">
       {isComposing(composer) && (
-        // The subject, pinned while the conversation scrolls under the editor. Above the toolbar's fade.
-        <div className="relative z-[25] flex h-9 flex-none items-center bg-reader px-6 after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-linear-to-b after:from-reader after:to-transparent after:content-[''] wide:px-10">
+        // The subject, pinned while the conversation scrolls under the editor.
+        <div data-field="subject-band" className="flex h-9 flex-none items-center bg-reader px-6 wide:px-10">
           <div className="reading-column flex min-w-0 items-baseline gap-2">
             <b className="truncate text-subject font-semibold">{thread.subject}</b>
             <span className="inline-flex flex-none gap-1.5 text-meta text-muted">
@@ -52,42 +56,81 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
           </div>
         </div>
       )}
-      <div
-        data-scroll=""
-        className="min-h-0 flex-1 overflow-y-auto px-6 pt-1 pb-6 [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin] wide:px-10"
-      >
-        <div className="reading-column">
-          <header>
-            <h3 className="text-title font-semibold tracking-[-0.02em]" data-field="reader-subject">
-              {thread.subject}
-            </h3>
-            <div className="mt-2 flex items-center gap-2 text-addr text-muted" data-field="reason">
-              <Line parts={[turn, ...labels.map((name) => <LabelChip key={name} name={name} />), count]} />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* Only once the conversation has scrolled: a fade under the band above, where text slides away. */}
+        {scrolled && (
+          <div
+            aria-hidden
+            data-field="scroll-fade"
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-linear-to-b from-reader to-transparent"
+          />
+        )}
+        <div
+          ref={scroller}
+          data-scroll=""
+          onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
+          className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-6 [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin] wide:px-10"
+        >
+          <div className="reading-column">
+            <header>
+              {/* Its capitals start 28 px under the toolbar's buttons. */}
+              <h3 className="cap-top text-title font-semibold tracking-[-0.02em]" data-field="reader-subject">
+                {thread.subject}
+              </h3>
+              <div className="mt-2 flex items-center gap-2 text-addr text-muted" data-field="reason">
+                <Line parts={[turn, ...labels.map((name) => <LabelChip key={name} name={name} />), count]} />
+              </div>
+            </header>
+            <div className="mt-3 border-t border-line wide:mt-6">
+              {thread.messages.map((message) =>
+                message.id === newest || message.delivery || opened.has(message.id) ? (
+                  <OpenMessage key={message.id} thread={thread} message={message} now={now} />
+                ) : (
+                  <FoldedMessage
+                    key={message.id}
+                    from={known(thread, message.from)}
+                    message={message}
+                    now={now}
+                    onOpen={() => setOpened(new Set([...opened, message.id]))}
+                  />
+                ),
+              )}
             </div>
-          </header>
-          <div className="mt-3 border-t border-line wide:mt-6">
-            {thread.messages.map((message) =>
-              message.id === newest || message.delivery || opened.has(message.id) ? (
-                <OpenMessage key={message.id} thread={thread} message={message} now={now} />
-              ) : (
-                <FoldedMessage
-                  key={message.id}
-                  from={known(thread, message.from)}
-                  message={message}
-                  now={now}
-                  onOpen={() => setOpened(new Set([...opened, message.id]))}
-                />
-              ),
+            {!isComposing(composer) && (composer || canReply(thread, mail)) && (
+              <ReplyBar thread={thread} composer={composer} />
             )}
           </div>
-          {!isComposing(composer) && (composer || canReply(thread, mail)) && (
-            <ReplyBar thread={thread} composer={composer} />
-          )}
         </div>
       </div>
       {composer && composer.state !== 'collapsed' && <Editor id={thread.id} composer={composer} />}
     </article>
   )
+}
+
+const atEnd = (element: HTMLElement) => element.scrollHeight - element.scrollTop - element.clientHeight < 2
+
+/**
+ * While `active`, keeps the conversation at its end as the editor below grows and shrinks, if
+ * it was at its end, so the last message and the divider under it stay in view while the user writes.
+ */
+function useStickToEnd(scroller: RefObject<HTMLElement | null>, active: boolean) {
+  useEffect(() => {
+    const element = scroller.current
+    if (!active || !element) return
+    let stuck = atEnd(element)
+    const onScroll = () => {
+      stuck = atEnd(element)
+    }
+    const observer = new ResizeObserver(() => {
+      if (stuck) element.scrollTop = element.scrollHeight
+    })
+    element.addEventListener('scroll', onScroll)
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      element.removeEventListener('scroll', onScroll)
+    }
+  }, [scroller, active])
 }
 
 /** The parts that are there, with a quiet dot between each two. */
@@ -217,6 +260,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
       {/* On its way, the reply reads a step quieter than mail the provider holds. */}
       <div className={`mt-[18px] ${going ? 'opacity-70' : ''}`}>
         <Body body={message.body} />
+        <Attachments attachments={message.attachments} />
       </div>
     </section>
   )

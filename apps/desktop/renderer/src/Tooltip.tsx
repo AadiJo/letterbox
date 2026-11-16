@@ -1,6 +1,7 @@
 // The one tooltip: what a control does and its key, shown on hover or keyboard focus.
-// It sits above its control, 8 px clear of it, so it stays in the toolbar's band and never
-// covers the subject below. CSS alone shows it, so it costs nothing until it appears.
+// It sits above its control, 6 px clear of it and 8 px clear of the window's top, so it stays
+// in the toolbar's band and never covers the subject below. CSS alone shows it, so it costs
+// nothing until it appears.
 
 import { type ReactElement, useId } from 'react'
 import { Key } from './Key.tsx'
@@ -21,7 +22,7 @@ export function Tooltip({ label, shortcut, children }: Props) {
       <span
         id={id}
         role="tooltip"
-        className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-30 hidden h-6 -translate-x-1/2 items-center gap-2 rounded-lg bg-float pr-1 pl-2.5 text-meta font-medium whitespace-nowrap text-fg shadow-float group-hover:flex group-has-focus-visible:flex"
+        className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-30 hidden h-[22px] -translate-x-1/2 items-center gap-2 rounded-lg bg-float pr-1 pl-2.5 text-meta font-medium whitespace-nowrap text-fg shadow-float group-hover:flex group-has-focus-visible:flex"
       >
         {label}
         <Key tone="tip">{shortcut.toUpperCase()}</Key>

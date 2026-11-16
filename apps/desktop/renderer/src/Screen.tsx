@@ -156,14 +156,15 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
     <>
       <section
         aria-label={title}
-        className="relative flex min-h-0 w-[340px] flex-none flex-col border-r border-line bg-list wide:w-[372px]"
+        className="relative flex min-h-0 w-[340px] flex-none flex-col border-r border-line bg-list wide:w-[372px] full:w-[392px]"
       >
-        <header className="top-band gap-2.5 pr-[18px] pl-5" data-field="list-head">
+        {/* In a narrow window the sidebar's toggle sits in the margin, so the title lines up with the rows' text. */}
+        <header className="top-band relative pr-[18px] pl-[34px] wide:pl-5" data-field="list-head">
           <button
             type="button"
             aria-label="Show the sidebar"
             onClick={chrome.onToggleSidebar}
-            className="-ml-1.5 inline-flex size-[30px] items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg wide:hidden"
+            className="absolute top-[33px] left-0.5 inline-flex size-[30px] items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg wide:hidden"
           >
             <PanelLeft className="size-4" strokeWidth={1.75} aria-hidden />
           </button>

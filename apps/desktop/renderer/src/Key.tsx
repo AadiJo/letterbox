@@ -1,6 +1,12 @@
-// A keycap: the key that does what its button or tooltip says. Every keycap is this one.
+// A keycap: the key that does what its button or tooltip says. Every keycap is this one, and
+// every shortcut with a modifier reads through `chord`, so the app names keys one way per platform.
 
 import type { ReactNode } from 'react'
+
+const MAC = window.letterbox?.platform === 'darwin' || navigator.userAgent.includes('Mac')
+
+/** A shortcut with the platform's command key: "⌘K" on macOS, "Ctrl K" on Windows and Linux. */
+export const chord = (key: string) => (MAC ? `⌘${key}` : `Ctrl ${key}`)
 
 const TONES = {
   /** On the reader, the list and the toast. */

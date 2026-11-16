@@ -84,6 +84,8 @@
 
   /* Below this width the sidebar collapses behind a toggle and search shrinks to an icon. */
   --breakpoint-wide: 1100px;
+  /* From this width the list pane takes its widest size. */
+  --breakpoint-full: 1600px;
 
   /*
    * Motion, with motion.ts. Tailwind's own animations are cleared: they loop (spin, ping, pulse).

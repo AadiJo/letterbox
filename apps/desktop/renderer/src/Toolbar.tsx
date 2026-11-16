@@ -40,8 +40,7 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
   )
   return (
     // Its controls start on the top band's line, low enough for a tooltip to fit above them.
-    // The fade under the band shows only once the conversation scrolls beneath it.
-    <div className="top-band relative z-20 bg-reader px-6 after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-linear-to-b after:from-reader after:to-transparent after:content-[''] wide:px-10">
+    <div className="top-band relative z-20 bg-reader px-6 wide:px-10">
       <div className="reading-column flex items-center gap-2">
         <Tooltip label="Done" shortcut={SHORTCUTS.done}>
           {(describedBy) => (

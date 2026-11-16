@@ -1,8 +1,9 @@
 // Replying, under the conversation. With no editor open, a reply bar ends the conversation:
 // Reply to the last sender, Reply all when anyone else is on the message, and a folded draft's
 // first words. The editor docks below the conversation as an inset field that grows with its
-// text up to 40% of the reader, then scrolls. Esc folds it back to the bar and keeps the draft;
-// Discard throws the draft away. drafts.ts holds the draft and sending.ts sends it.
+// text up to 40% of the reader. Past that its lines and text scroll, and Send stays in view.
+// Esc folds it back to the bar and keeps the draft; Discard throws the draft away. drafts.ts
+// holds the draft, DraftText.tsx edits its text and sending.ts sends it.
 
 import type { ThreadDetail, ThreadId } from '@letterbox/protocol'
 import { ChevronDown, CircleAlert, Reply as ReplyIcon, ReplyAll, Trash2, X } from 'lucide-react'
@@ -25,12 +26,13 @@ import {
   showExtra,
   takeOpening,
 } from './drafts.ts'
-import { Key } from './Key.tsx'
+import { DraftText } from './DraftText.tsx'
+import { chord, Key } from './Key.tsx'
 import { slideUp } from './motion.ts'
 import { sendReply } from './sending.ts'
 import { UNDO_KEY } from './undo.ts'
 
-const SEND_KEY = navigator.userAgent.includes('Mac') ? '⌘↵' : 'Ctrl ↵'
+const SEND_KEY = chord('↵')
 
 const firstName = (recipient: Recipient | undefined) => recipient?.name?.split(' ')[0] ?? recipient?.address ?? ''
 
@@ -39,13 +41,14 @@ export const isComposing = (composer: Composer | undefined) => composer !== unde
 
 /**
  * The bar that ends the conversation: Reply to whoever wrote last, with a folded draft's first
- * words, and Reply all only when the message went to anyone besides the user and them.
+ * words, and Reply all only when the message went to anyone besides the user and them. It
+ * shows whenever a reply can go to anyone, as on the user's own message sent only to Cc.
  */
 export function ReplyBar({ thread, composer }: { thread: ThreadDetail; composer: Composer | undefined }) {
   const to = composer?.reply.to[0] ?? newReply(thread, false)?.to[0]
   const others = newReply(thread, true)?.cc.length ?? 0
   const preview = composer?.reply.text.replace(/\s+/g, ' ').trim() ?? ''
-  if (!to && !composer) return null
+  if (!composer && !to && others === 0) return null
   return (
     <div className="mt-4 flex h-11 items-center rounded-[10px] bg-well text-row text-muted shadow-well">
       <button
@@ -56,7 +59,7 @@ export function ReplyBar({ thread, composer }: { thread: ThreadDetail; composer:
         className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-l-[10px] pr-2 pl-3.5 text-left hover:text-fg"
       >
         <ReplyIcon className="size-[15px] flex-none" strokeWidth={1.75} aria-hidden />
-        <span className="flex-none">Reply to {firstName(to)}</span>
+        <span className="flex-none">{to ? `Reply to ${firstName(to)}` : 'Reply'}</span>
         <span className="min-w-0 flex-1 truncate text-faint">{preview}</span>
         <Key>{REPLY_KEY.toUpperCase()}</Key>
       </button>
@@ -84,7 +87,13 @@ function arrive(element: HTMLElement | null, id: ThreadId, target: string) {
   const thread = element.closest('article')?.querySelector('[data-scroll]')
   if (thread) thread.scrollTop = thread.scrollHeight
   slideUp(element)
-  element.querySelector<HTMLElement>(target)?.focus()
+  const field = element.querySelector<HTMLElement>(target)
+  field?.focus()
+  // The caret goes after what is already written.
+  const selection = window.getSelection()
+  if (!field?.isContentEditable || !selection) return
+  selection.selectAllChildren(field)
+  selection.collapseToEnd()
 }
 
 export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { state: 'collapsed' }> }) {
@@ -105,42 +114,37 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
   return (
     <section
       aria-label="Reply"
-      ref={(element) => arrive(element, id, reply.to.length > 0 ? 'textarea' : 'input[data-line="to"]')}
+      ref={(element) => arrive(element, id, reply.to.length > 0 ? '[data-field="draft"]' : 'input[data-line="to"]')}
       onKeyDown={onKeyDown}
       className="relative z-10 flex max-h-[40%] flex-none flex-col px-6 pb-4 wide:px-10"
     >
       {/* The field reaches 16 or 24 px past the column each side, so its text lines up with the body's. */}
       <div className="reading-column flex min-h-0 flex-1 flex-col">
         <div className="-mx-4 flex min-h-0 flex-1 flex-col rounded-xl bg-well shadow-well wide:-mx-6">
-          <AddressLine id={id} field="to" label="To" reply={reply} problem={problem}>
-            {!composer.extra && (
-              <button
-                type="button"
-                onClick={() => showExtra(id)}
-                className="flex-none rounded-md px-1.5 py-0.5 text-row whitespace-pre text-muted hover:bg-hover hover:text-fg"
-              >
-                Cc{'  '}Bcc
-              </button>
+          {/* Lines and text, as tall as they need until the dock reaches 40% of the reader. Then they scroll, and the footer stays. */}
+          <div
+            data-field="draft-scroll"
+            className="min-h-0 flex-[0_1_auto] overflow-y-auto [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin]"
+          >
+            <AddressLine id={id} field="to" label="To" reply={reply} problem={problem}>
+              {!composer.extra && (
+                <button
+                  type="button"
+                  onClick={() => showExtra(id)}
+                  className="flex-none rounded-md px-1.5 py-0.5 text-row whitespace-pre text-muted hover:bg-hover hover:text-fg"
+                >
+                  Cc{'  '}Bcc
+                </button>
+              )}
+            </AddressLine>
+            {composer.extra && (
+              <>
+                <AddressLine id={id} field="cc" label="Cc" reply={reply} problem={problem} />
+                <AddressLine id={id} field="bcc" label="Bcc" reply={reply} problem={problem} />
+              </>
             )}
-          </AddressLine>
-          {composer.extra && (
-            <>
-              <AddressLine id={id} field="cc" label="Cc" reply={reply} problem={problem} />
-              <AddressLine id={id} field="bcc" label="Bcc" reply={reply} problem={problem} />
-            </>
-          )}
-          {/* As tall as its text, from 120 px, until the dock reaches 40% of the reader. Then it scrolls. */}
-          <textarea
-            aria-label="Message"
-            value={reply.text}
-            readOnly={busy}
-            placeholder={`Reply to ${firstName(reply.to[0])}`}
-            onChange={(event) => {
-              const text = event.target.value
-              edit(id, (current) => ({ ...current, text }))
-            }}
-            className="min-h-[120px] w-full flex-[0_1_auto] resize-none bg-transparent px-4 pt-3 text-body text-prose caret-blue outline-none [field-sizing:content] [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin] placeholder:text-faint wide:px-6"
-          />
+            <DraftText id={id} text={reply.text} readOnly={busy} placeholder={`Reply to ${firstName(reply.to[0])}`} />
+          </div>
           <footer className="flex h-[50px] flex-none items-center gap-3 pr-2 pl-4 wide:pl-6">
             <button
               type="button"

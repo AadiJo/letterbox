@@ -2,6 +2,8 @@
 // design was drawn with. Bodies are whole letters, so previews read like mail, not like the
 // subject. Every name, address and company here is made up.
 
+import type { SeedAttachment } from '../contract.ts'
+
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
 
@@ -35,8 +37,11 @@ export type Who = keyof typeof PEOPLE
 /** The seed's labels, by mailbox key. */
 export type Label = 'projects' | 'home' | 'receipts' | 'travel'
 
-/** One message: from them, or from me with `me`. `ago` places one before the last; otherwise they are 20 hours apart. */
-type Say = { me?: true; text: string; ago?: number }
+/**
+ * One message: from them, or from me with `me`. `ago` places one before the last; otherwise
+ * they are 20 hours apart. `attachments` are the files it carries.
+ */
+type Say = { me?: true; text: string; ago?: number; attachments?: readonly SeedAttachment[] }
 
 /**
  * One conversation with a person: who, about what, when it last moved, its label, its
@@ -106,6 +111,7 @@ const MINE: Conversation[] = [
           'I’ve read it twice and it looks fine to me, but you’re on the lease too, so it needs both signatures. If you can sign by Thursday, I’ll drop the paper copy at their office on my way to work on Friday.',
           'Tomas',
         ),
+        attachments: [{ name: 'Addendum-4B-signed-TO.pdf', mime: 'application/pdf', size: 217_088 }],
       },
     ],
   },
