@@ -9,6 +9,7 @@ import { type KeyboardEvent, type ReactNode, useState } from 'react'
 import {
   collapse,
   commitTyping,
+  confirmBcc,
   type Composer,
   discard,
   edit,
@@ -24,7 +25,7 @@ import {
 } from './drafts.ts'
 import { slideUp } from './motion.ts'
 import { useSecondsUntil } from './clock.ts'
-import { hidePending, type Pending, sendReply, undoSend, useShownPending } from './sending.ts'
+import { hidePending, type Pending, sendReply, undoSend, usePendingIn, useShownPending } from './sending.ts'
 import { UNDO_KEY } from './undo.ts'
 
 /** The dock's share of the reader's height: 40% to start, and what the user last dragged it to this session. */
@@ -62,8 +63,8 @@ const firstName = (recipient: Recipient | undefined) => recipient?.name?.split('
 export function Dock({ thread }: { thread: ThreadDetail }) {
   const composer = useComposer(thread.id)
   const pending = useShownPending(thread.id)
-  if (pending) return <PendingReply pending={pending} />
-  if (!composer) return null
+  // A draft the conversation already has stays in view, locked while a reply is on its way (Editor).
+  if (!composer) return pending ? <PendingReply pending={pending} /> : null
   if (composer.state === 'collapsed') return <Bar thread={thread} composer={composer} />
   return <Editor id={thread.id} composer={composer} />
 }
@@ -132,6 +133,8 @@ function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { 
   const { reply } = composer
   const problem = composer.state === 'open' ? composer.problem : null
   const busy = composer.state !== 'open'
+  const earlier = usePendingIn(id)
+  const blocked = busy || earlier !== null || reply.bccLost
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
@@ -183,10 +186,22 @@ function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { 
         }}
         className={BODY_CLASS}
       />
+      {reply.bccLost && (
+        <button
+          type="button"
+          data-field="bcc-notice"
+          title="Confirm the recipients"
+          onClick={() => confirmBcc(id)}
+          className="mx-3 mb-2 flex flex-none items-center gap-2 rounded-lg border border-red/35 bg-red/[0.07] px-3 py-2 text-left text-[12.5px] text-fg2 hover:bg-red/[0.12]"
+        >
+          <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
+          Bcc wasn't kept after the reload. Check recipients before sending.
+        </button>
+      )}
       <footer className="flex h-[52px] flex-none items-center gap-3 border-t border-line px-3">
         <button
           type="button"
-          disabled={busy}
+          disabled={blocked}
           onClick={() => void sendReply(id)}
           className="inline-flex h-8 items-center gap-2 rounded-lg bg-blue pr-1.5 pl-3 text-[13px] font-semibold text-desk shadow-[inset_0_1px_0_rgb(255_255_255/0.35),0_1px_2px_rgb(0_0_0/0.5)] enabled:hover:brightness-110 disabled:opacity-60"
         >
@@ -208,6 +223,10 @@ function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { 
           >
             <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
             <span className="truncate">{problem.text}</span>
+          </p>
+        ) : earlier ? (
+          <p role="status" data-field="send-locked" className="truncate text-[12.5px] text-fg2">
+            {earlier.until === null ? 'Your earlier reply is still sending' : <StillSending until={earlier.until} />}
           </p>
         ) : (
           <p className="truncate text-[12.5px] text-faint">Sends after 10 s. Undo with {UNDO_KEY.toUpperCase()}.</p>
@@ -298,6 +317,11 @@ function PendingReply({ pending }: { pending: Pending }) {
       </footer>
     </DockFrame>
   )
+}
+
+/** Why this draft cannot go yet: the conversation's earlier reply, and its seconds left by the core's deadline. */
+function StillSending({ until }: { until: string }) {
+  return <>Your earlier reply is still sending ({useSecondsUntil(until)} s)</>
 }
 
 /** How long the core will hold the reply, by its deadline. Display only: the core's update ends it. */

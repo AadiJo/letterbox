@@ -7,6 +7,8 @@
 // that reply read only and starts no second one, and Undo brings back exactly that reply,
 // even after someone else wrote. Past the window the reply goes exactly once. A refused send says why
 // and can be written again, and a send whose answer is lost waits as Checking, then goes once.
+// reply-recovery.ts adds a reload without session storage and a merge of conversations, and
+// reply-page.ts holds the mail and page helpers both share.
 //
 // The dev host's clock is fixed and its waits end at once, so a send's window passes as soon
 // as it starts. Cores started while `hold` is true get `--hold-waits`, which keeps the window
@@ -15,88 +17,35 @@
 
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { devSeeds } from '@letterbox/sim-provider/seeds'
 import { startSimProvider } from '@letterbox/sim-provider/server'
-import type { ClientMessage } from '@letterbox/protocol'
-import type { Browser, Page } from 'playwright'
+import type { Browser } from 'playwright'
 import { logChildrenTo, stopChildren } from '../children.ts'
 import { buildCore, type Paths } from '../core.ts'
 import { startServer } from '../server.ts'
-import { appErrors, capture, equal, openPage, type Relay, root } from './record.ts'
+import { appErrors, capture, equal, openPage, root } from './record.ts'
+import {
+  bar,
+  body,
+  BREAD,
+  chips,
+  dock,
+  GROUP,
+  lastSend,
+  ME,
+  nav,
+  open,
+  reason,
+  seed,
+  toast,
+  TOMAS,
+  TRIP_LINK,
+  TRIPS,
+  undoOffered,
+  yourTurn,
+} from './reply-page.ts'
+import { checkBccAfterReload, checkMergedConversation } from './reply-recovery.ts'
 
-const seed = devSeeds['people-first']
 const STATE = join(root, '.letterbox/ui-check-reply')
-const ME = seed.seed.address
-/** A reply to GROUP that the check sends and takes back. */
-const BREAD = 'I can bring bread and cheese.'
-
-/** A message to the user and one more person, copying a third, for Reply all. */
-const GROUP = {
-  key: 'group-1',
-  mailboxes: ['inbox'],
-  from: { name: 'Maya Lindqvist', address: 'maya@lindqvist.example' },
-  to: [
-    { name: 'Robin Vale', address: ME },
-    { name: 'Tomas Okafor', address: 'tomas.okafor@fernway.example' },
-  ],
-  cc: [{ name: 'Priya Raman', address: 'priya@ramanstudio.example' }],
-  subject: 'Picnic on Sunday',
-  text: 'Hi all, can each of you bring something on Sunday?',
-  sentAt: new Date(Date.parse(seed.now) - 10 * 60_000).toISOString(),
-}
-
-/** Tomas answers GROUP, everyone still on it, while a reply to Maya waits in its window. */
-const TOMAS = {
-  key: 'group-2',
-  mailboxes: ['inbox'],
-  from: { name: 'Tomas Okafor', address: 'tomas.okafor@fernway.example' },
-  to: [
-    { name: 'Maya Lindqvist', address: 'maya@lindqvist.example' },
-    { name: 'Robin Vale', address: ME },
-  ],
-  cc: GROUP.cc,
-  subject: 'Re: Picnic on Sunday',
-  text: 'I will bring a blanket and lemonade.',
-  sentAt: new Date(Date.parse(seed.now) - 5 * 60_000).toISOString(),
-  replyTo: ['group-1'],
-}
-
-/** The draft of the last send command the page sent its core. */
-const lastSend = (relay: Relay) =>
-  relay
-    .fromPage()
-    .flatMap((text) => {
-      const message: ClientMessage = JSON.parse(text)
-      return message.kind === 'command' && message.command.kind === 'send' ? [message.command.draft] : []
-    })
-    .at(-1)
-
-const dock = (page: Page) => page.locator('section[aria-label="Reply"]')
-const bar = (page: Page) => page.locator('[data-field="reply-bar"]')
-const body = (page: Page) => dock(page).getByRole('textbox', { name: 'Message' })
-const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
-const reason = (page: Page) => page.locator('[data-field="reason"]').textContent()
-const row = (page: Page, subject: string) =>
-  page.locator('[role="option"]').filter({ has: page.locator('[data-field="subject"]', { hasText: subject }) })
-/** Whether the toast offers Undo right now. */
-const undoOffered = async (page: Page) => (await toast(page).getByRole('button', { name: /^Undo/ }).count()) === 1
-const yourTurn = (page: Page) => page.locator('[role="listbox"][aria-label="Your turn"] [role="option"]')
-const nav = (page: Page, name: string) =>
-  page.getByRole('navigation', { name: 'Sidebar' }).getByRole('button', { name: new RegExp(`^${name}`) })
-
-/** The people on one address line of the open editor, as each chip's tooltip names them. */
-const chips = (page: Page, line: 'to' | 'cc') =>
-  dock(page)
-    .locator(`[data-address-line="${line}"] [data-chip]`)
-    .evaluateAll((found) => found.map((chip) => chip.getAttribute('title')))
-
-/** Opens the conversation `subject` from the list on screen and waits for its newest message. */
-async function open(page: Page, subject: string) {
-  await row(page, subject).first().click()
-  await page.locator('h3[data-field="reader-subject"]', { hasText: subject }).waitFor()
-  await page.locator('[data-message="open"]').last().waitFor()
-}
-
 export async function checkReply(browser: Browser) {
   rmSync(STATE, { recursive: true, force: true })
   const paths: Paths = {
@@ -113,20 +62,33 @@ export async function checkReply(browser: Browser) {
   const mailbox = provider.createMailbox(seed.dialect, seed.seed)
   let hold = true
   /** What each `letterboxDev.deliver` call brings, in order. */
-  const toDeliver = [GROUP, TOMAS]
+  const toDeliver = [[GROUP], [TOMAS], TRIPS, [TRIP_LINK]]
   const server = await startServer({
     paths,
     port: 0,
     relay: true,
     sim: {
       now: seed.now,
-      deliver: (count) => toDeliver.splice(0, count).forEach((message) => mailbox.deliver(message)),
+      deliver: (count) =>
+        toDeliver
+          .splice(0, count)
+          .flat()
+          .forEach((message) => mailbox.deliver(message)),
     },
     coreFlags: () => (hold ? ['--hold-waits'] : []),
   })
   const opened = await openPage(browser, server.url, 'trace-reply.zip')
   const { page, errors, relay } = opened
   try {
+    // A load after `window.name` is set to this finds session storage refusing, as in a locked-down browser.
+    await page.addInitScript(() => {
+      if (window.name !== 'no-session-storage') return
+      Object.defineProperty(window, 'sessionStorage', {
+        get: () => {
+          throw new DOMException('The UI check turned session storage off.', 'SecurityError')
+        },
+      })
+    })
     await page.waitForFunction(() => window.letterboxDev !== undefined)
     await page.evaluate(([address, password]) => window.letterboxDev?.signIn(address, password), [
       ME,
@@ -231,6 +193,8 @@ export async function checkReply(browser: Browser) {
     // Page time decides nothing. A minute of it passes, the core still holds the reply, and Undo stays.
     await page.clock.fastForward('01:00')
     equal(await undoOffered(page), true, 'a minute of page time later the core still holds it, and Undo stays')
+    // Time flows again from here. Playwright's own waits poll on the page's clock.
+    await page.clock.resume()
 
     // Undo ends when the core says, not with the screen: it stays on All mail.
     await nav(page, 'All mail').click()
@@ -321,6 +285,9 @@ export async function checkReply(browser: Browser) {
     await page.reload()
     await toast(page).getByRole('button', { name: /^Undo/ }).waitFor()
     equal(await undoOffered(page), true, 'after a reload the held reply offers Undo again')
+
+    await checkBccAfterReload(page)
+    await checkMergedConversation(page, relay)
 
     // A core that lets the window pass. The provider's send call waits, so the reply shows
     // going, and the core's update that says so is what takes Undo away.
