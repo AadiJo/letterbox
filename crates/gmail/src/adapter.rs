@@ -84,8 +84,9 @@ impl GmailAdapter {
                 (profile.history_id, None)
             }
             Some(token) => {
+                // A token this adapter cannot read gets the same answer as one Gmail refused: start over.
                 let page: Page = serde_json::from_str(token.as_str())
-                    .map_err(|_| CallError::Failure(AdapterFailure::ProviderError))?;
+                    .map_err(|_| CallError::Failure(AdapterFailure::PageExpired))?;
                 (page.history, Some(page.page))
             }
         };
@@ -94,7 +95,17 @@ impl GmailAdapter {
         if let Some(page) = &page {
             query.push(("pageToken", page));
         }
-        let list: MessageList = self.api.get("messages", &query).await?;
+        let list: MessageList = match self.api.get("messages", &query).await {
+            Ok(list) => list,
+            // Rule 8. Google documents no answer to an expired token. A live call with one it
+            // never issued got 400 invalidArgument "Invalid pageToken", so a 400 to a call
+            // that carried a token reads as one Gmail no longer accepts. The first page has
+            // no token, so its 400 stays a provider error.
+            Err(CallError::Status { status, .. }) if status == StatusCode::BAD_REQUEST && page.is_some() => {
+                return Err(CallError::Failure(AdapterFailure::PageExpired));
+            }
+            Err(error) => return Err(error),
+        };
         let mut messages = Vec::with_capacity(list.messages.len());
         for listed in &list.messages {
             // A message deleted since the list was made comes back from the next `changes`.
@@ -269,7 +280,8 @@ impl GmailAdapter {
             Ok(0) => refused(ProviderRefusal::UnknownTarget),
             Ok(_) => Ok(ApplyResult::Applied { moved: Vec::new() }),
             Err(CallError::Failure(failure)) => Err(failure),
-            Err(error) if error.is_rate_limit() => Err(AdapterFailure::ProviderError),
+            // Over a usage limit, not refused: the core keeps the change and tries it again later.
+            Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),
             Err(CallError::Status { status, .. }) => match status {
                 StatusCode::NOT_FOUND => refused(ProviderRefusal::UnknownTarget),
                 StatusCode::BAD_REQUEST => refused(ProviderRefusal::RefusedByProvider),

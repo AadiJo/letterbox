@@ -46,6 +46,10 @@ const HELD_WAIT: Duration = Duration::from_secs(3600);
 /// Written to stderr when a wait starts to hold, so a scenario knows the adapter is waiting.
 const WAIT_HELD: &str = "core-sim: holding a gmail rate-limit wait until the adapter closes";
 
+/// Written to stderr as every wait begins, before its length in milliseconds, so a scenario
+/// can check the backoff the adapter asked for.
+const WAIT_BEGUN: &str = "core-sim: gmail rate-limit wait of";
+
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
 
@@ -132,6 +136,7 @@ fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
     reason = "core-sim owns stderr for its log, which the harness reads"
 )]
 fn pause(wait: Duration) -> LocalFuture<'static, ()> {
+    eprintln!("{WAIT_BEGUN} {} ms", wait.as_millis());
     if wait < HELD_WAIT {
         return Box::pin(std::future::ready(()));
     }

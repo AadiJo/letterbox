@@ -7,6 +7,7 @@
 //! "Use exponential backoff to retry the request." The per-user limit is counted in quota
 //! units per minute, https://developers.google.com/workspace/gmail/api/reference/quota, so
 //! one big sync can reach it. Every call goes through `send`, so every call waits the same way.
+//! A daily limit is answered at once: waiting minutes does not bring it back.
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -22,13 +23,13 @@ use crate::config::GmailConfig;
 use crate::oauth;
 use crate::wire::ApiError;
 
-/// 403 reasons that mean "too many requests", which is worth retrying, not "not allowed".
-const RATE_LIMITS: [&str; 4] = [
-    "rateLimitExceeded",
-    "userRateLimitExceeded",
-    "dailyLimitExceeded",
-    "quotaExceeded",
-];
+/// 403 reasons the handle-errors guide says to retry with exponential backoff:
+/// https://developers.google.com/workspace/gmail/api/guides/handle-errors#rate-limit and
+/// #user-rate-limit. A 429 is retried too, by its status (#429-errors).
+const RATE_LIMITS: [&str; 2] = ["rateLimitExceeded", "userRateLimitExceeded"];
+/// The 403 reason for a project over its quota. The guide's fix is to "raise the quota in the
+/// Google Cloud project" (#daily-limit), which no wait does, so it is not retried.
+const DAILY_LIMIT: &str = "dailyLimitExceeded";
 /// The guide: "Start retry periods at least one second after the error."
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
 /// Backoff doubles up to this. A minute is the window of the per-user limit.
@@ -47,7 +48,7 @@ pub enum CallError {
 }
 
 impl CallError {
-    /// True for a 429, or a 403 whose reason is a rate limit. Either is worth retrying later.
+    /// True for a 429, or a 403 whose reason is a rate limit. Either is worth retrying soon.
     pub fn is_rate_limit(&self) -> bool {
         match self {
             CallError::Status { status, reason } => {
@@ -58,13 +59,20 @@ impl CallError {
         }
     }
 
+    /// True for a rate limit or a daily limit: Gmail refused the call for usage, not
+    /// permission, so it may go through later.
+    pub fn is_usage_limit(&self) -> bool {
+        self.is_rate_limit()
+            || matches!(self, CallError::Status { status, reason } if *status == StatusCode::FORBIDDEN && reason == DAILY_LIMIT)
+    }
+
     /// True for 404, which every caller reads as "that thing is gone".
     pub fn is_not_found(&self) -> bool {
         matches!(self, CallError::Status { status, .. } if *status == StatusCode::NOT_FOUND)
     }
 
-    /// The failure to report when the caller has no better reading of the status. A rate
-    /// limit `send` stopped waiting out, and a 5xx, are both worth retrying later.
+    /// The failure to report when the caller has no better reading of the status. A usage
+    /// limit `send` stopped waiting out or did not wait out, and a 5xx, are all worth retrying later.
     pub fn failure(&self) -> AdapterFailure {
         match self {
             CallError::Failure(failure) => *failure,

@@ -1,5 +1,5 @@
 // Applies each break from mutations.ts to the source, runs the scenarios that should
-// notice it, and puts the files back. The list of breaks lives in mutations.ts.
+// notice it, and puts the files back. The breaks live in mutations.ts and mutations-gmail.ts.
 
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

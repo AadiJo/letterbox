@@ -1,13 +1,38 @@
-// Gmail's per-user rate limit. The fake refuses calls over a scenario's budget with the
-// 403 rateLimitExceeded a live run got, and the adapter must wait and try the same call
-// again (crates/gmail/src/api.rs). core-sim's waits return at once, except a wait for a
+// Gmail's usage limits. The fake refuses calls over a scenario's budget with the 403
+// rateLimitExceeded a live run got, or with another limit a scenario names (quota.ts).
+// The adapter must wait out a per-minute or per-user limit and try the same call again,
+// and must not wait out a daily one (crates/gmail/src/api.rs). core-sim's waits return at once, except a wait for a
 // Retry-After of an hour or more, which holds until the adapter closes and tells the
-// harness so on stderr. So these runs take no wall-clock time, and nothing about time
+// harness so on stderr. core-sim writes each wait's length to stderr too, where a
+// scenario reads it. So these runs take no wall-clock time, and nothing about time
 // reaches a transcript.
+//
+// Ways it can go wrong, each checked below unless it says otherwise:
+//   1. A rate-limited call fails at once, so a large mailbox never finishes its first sync.
+//   2. A call Gmail keeps refusing is tried forever.
+//   3. The waits do not grow: every try comes a second after the last.
+//   4. The waits grow past a minute, the window of the per-user limit.
+//   5. Gmail's Retry-After is ignored, always or when it is short.
+//   6. A 429 or a userRateLimitExceeded is not waited out.
+//   7. A sign-out during a wait leaves the sync waiting, so the core never stops.
+//   8. A daily limit is waited out like a rate limit: eight calls for quota a wait does not bring back.
+//   9. A change made under a daily limit is refused as not permitted and undone, not kept for later.
+//  10. A daily limit is answered as something other than a provider error, so the account shows the wrong state.
 
 import type { GmailFake } from '@letterbox/sim-provider/gmail'
 import type { SeedMessage } from '@letterbox/sim-provider/contract'
-import { ME, fromBen, signIn, standardSeed, start, sync, threads, untilAccounts } from '../src/fixtures.ts'
+import {
+  ME,
+  fromBen,
+  signIn,
+  standardSeed,
+  start,
+  sync,
+  thread,
+  threads,
+  truthOf,
+  untilAccounts,
+} from '../src/fixtures.ts'
 import { type Scenario, scenario } from '../src/scenario.ts'
 
 const gmailOf = (t: Scenario): GmailFake => {
@@ -60,10 +85,74 @@ scenario(
       'the account shows a provider error',
     )
     t.equal(gmail.refusals(ME), TRIES, 'the adapter gave up on the first call after its last try')
+    t.equal(
+      await core.waits(TRIES - 1),
+      [1, 2, 4, 8, 16, 32, 60],
+      'between tries it waited a second, then twice as long each time, up to a minute',
+    )
 
     gmail.setQuota(ME, null)
     await sync(core)
     t.equal((await threads(core)).length, 6, 'once Gmail answers again the new message arrives')
+  },
+  ['gmail'],
+)
+
+scenario(
+  'a gmail rate-limit wait lasts as long as the Retry-After Gmail names',
+  async (t) => {
+    const { core } = await start(t)
+    const gmail = gmailOf(t)
+    gmail.setQuota(ME, { units: 0, retryAfter: 30 })
+    await sync(core)
+    t.equal(gmail.refusals(ME), TRIES, 'the adapter gave up after its last try')
+    t.equal(
+      await core.waits(TRIES - 1),
+      Array.from({ length: TRIES - 1 }, () => 30),
+      'every wait was the 30 seconds Gmail named, not the backoff',
+    )
+  },
+  ['gmail'],
+)
+
+scenario(
+  'a gmail 429 and a userRateLimitExceeded are waited out like a rate limit',
+  async (t) => {
+    const { core } = await start(t)
+    const gmail = gmailOf(t)
+    gmail.setQuota(ME, { units: 0, reason: 'userRateLimitExceeded' })
+    await sync(core)
+    t.equal(gmail.refusals(ME), TRIES, 'the adapter tried a userRateLimitExceeded call as often as a rate limit')
+    gmail.setQuota(ME, { units: 0, reason: 'tooManyRequests' })
+    await sync(core)
+    t.equal(gmail.refusals(ME), 2 * TRIES, 'and a 429 call as often too')
+  },
+  ['gmail'],
+)
+
+scenario(
+  'a gmail daily limit ends the sync after one call, and a change made under it waits for more quota',
+  async (t) => {
+    const { core, box } = await start(t)
+    const gmail = gmailOf(t)
+    gmail.setQuota(ME, { units: 0, reason: 'dailyLimitExceeded' })
+    const view = core.subscribe({ view: 'accounts' })
+    await sync(core)
+    const [account] = await untilAccounts(view, (accounts) => accounts[0]?.status.state === 'error')
+    t.equal(
+      account?.status.state === 'error' && account.status.reason,
+      'provider',
+      'the account shows a provider error',
+    )
+    t.equal(gmail.refusals(ME), 1, 'the adapter asked once, since a wait does not bring back a daily limit')
+
+    const target = await thread(core, 'Budget numbers')
+    const read = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+    await sync(core)
+    gmail.setQuota(ME, null)
+    await sync(core)
+    t.equal((await core.settled(read.change)).result, 'done', 'the change waited for the quota and then went through')
+    t.equal(truthOf(box, 'fyi')?.unread, false, 'Gmail has the change')
   },
   ['gmail'],
 )
