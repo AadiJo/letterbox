@@ -12,9 +12,10 @@
 //! what it recorded. One that altered nothing does nothing, even if the change before it, which
 //! it took as done, is refused later. An undo is accepted only while every field the change set
 //! still holds what it set (`Effect::conflict`), so it never overwrites a later change, made
-//! here or at the provider.
+//! here or at the provider. What a change did at the provider counts only once the provider
+//! confirmed it: by its answers, or by a sync after them (`MessageEffect::landed`).
 
-use letterbox_protocol::{ChangeId, MailboxId, MessageId, ThreadId, Turn, UndoConflict};
+use letterbox_protocol::{ChangeId, MailboxId, MessageId, ThreadId, Turn, UndoConflict, UndoField};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::changes::{Pending, overlay};
@@ -71,13 +72,13 @@ impl Effect {
     /// The first field this change set that no longer holds what it set, as the user sees it
     /// now: changed since, by a change here or at the provider, or gone with its message or
     /// conversation. None when every field holds, and for a change that sets none.
-    pub fn conflict(&self, world: &World) -> Option<UndoConflict> {
+    pub fn conflict(&self, world: &World) -> Option<UndoField> {
         match self {
             Effect::Messages(effect) => {
                 let pending = Pending::of(world);
                 effect.altered.iter().find_map(|altered| {
                     let now = world.messages.get(&altered.message_id);
-                    altered.conflict(now.map(|record| pending.view_state(record)).as_deref())
+                    altered.unheld(now.map(|record| pending.view_state(record)).as_deref())
                 })
             }
             Effect::Turns(effect) => effect
@@ -87,7 +88,7 @@ impl Effect {
                     let now = world.threads.get(&altered.thread_id);
                     now.is_none_or(|thread| thread.turn_override != altered.now)
                 })
-                .map(|altered| UndoConflict::Turn {
+                .map(|altered| UndoField::Turn {
                     thread_id: altered.thread_id.clone(),
                 }),
             Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } => None,
@@ -102,17 +103,35 @@ pub struct MessageEffect {
     /// What a pass carries to the provider while the change is pending, built from `altered` alone.
     ops: Vec<Op>,
     altered: Vec<Altered>,
-    /// True once the provider may hold part of it: an undo then reverses it instead of
-    /// cancelling it. A pass saves it before each call, and clears it only when that call
-    /// surely did not reach the provider and no earlier one may have (see sync.rs).
+    /// True once the provider may hold part of it: an undo then cannot cancel it. A pass saves
+    /// it before each call, and clears it when no call for it went through (see push.rs).
     reached: bool,
+    /// True while a call for it went out and no answer said what became of it: from before the
+    /// call until the answer, so through a lost answer or a restart too. A sync then settles it
+    /// from what the provider holds (`landed`).
+    #[serde(default)]
+    unconfirmed: bool,
+    /// For a change that failed after part of it went through: a sync has run since, so what
+    /// the user sees of its fields is what the provider holds (undo.rs).
+    #[serde(default)]
+    refreshed: bool,
     undoes: Option<ChangeId>,
+}
+
+/// How much of a change the provider holds, as it last reported: of the fields the change
+/// set on messages still there, all, some or none hold the change's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Landed {
+    All,
+    Some,
+    None,
+    /// None of the messages it altered are left.
+    Gone,
 }
 
 /// What one change altered on one message. It put the message in `added`, which it was not in,
 /// and took it out of `removed`, which it was in. `was_unread` and `was_flagged` hold the value
-/// each had, for the ones the change set to the other value. `partly` marks a message the
-/// provider may hold either value of, from a step turned away after part of it went through.
+/// each had, for the ones the change set to the other value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Altered {
@@ -121,8 +140,6 @@ pub struct Altered {
     removed: Vec<MailboxId>,
     was_unread: Option<bool>,
     was_flagged: Option<bool>,
-    #[serde(default)]
-    partly: bool,
 }
 
 impl Altered {
@@ -156,39 +173,44 @@ impl Altered {
         [mailboxes, flags]
     }
 
-    /// The first field that no longer holds what the change set, given the message as the user
-    /// sees it now, or None for a message that is gone, whose fields then all count. Only a
-    /// message that is gone counts for one marked `partly`: either value may be its own.
-    fn conflict(&self, now: Option<&MessageState>) -> Option<UndoConflict> {
-        if self.partly && now.is_some() {
-            return None;
-        }
-        let message_id = self.message_id.clone();
-        let mailbox = |mailbox_id: &MailboxId| UndoConflict::Mailbox {
-            message_id: message_id.clone(),
-            mailbox_id: mailbox_id.clone(),
+    /// Each field the change set, and whether `now`, the message as it is, holds the change's
+    /// value there. A message that is gone holds none.
+    fn fields(&self, now: Option<&MessageState>) -> Vec<(UndoField, bool)> {
+        let message_id = || self.message_id.clone();
+        let member = |id: &MailboxId| now.is_some_and(|now| now.mailboxes.contains(id));
+        let mailbox = |id: &MailboxId| UndoField::Mailbox {
+            message_id: message_id(),
+            mailbox_id: id.clone(),
         };
-        // True when the change set the flag to the other value, and it no longer holds it.
-        let lost = |was: Option<bool>, now: Option<bool>| was.is_some_and(|was| now.is_none_or(|now| now == was));
-        let moved = self
-            .added
+        let added = self.added.iter().map(|id| (mailbox(id), member(id)));
+        let removed = self
+            .removed
             .iter()
-            .find(|id| now.is_none_or(|now| !now.mailboxes.contains(id)))
-            .or_else(|| {
-                let back_in = |id: &&MailboxId| now.is_none_or(|now| now.mailboxes.contains(id));
-                self.removed.iter().find(back_in)
-            });
-        if let Some(id) = moved {
-            return Some(mailbox(id));
-        }
-        if lost(self.was_unread, now.map(|now| now.unread)) {
-            return Some(UndoConflict::Unread {
-                message_id: message_id.clone(),
-            });
-        }
-        lost(self.was_flagged, now.map(|now| now.flagged)).then(|| UndoConflict::Flagged {
-            message_id: message_id.clone(),
-        })
+            .map(|id| (mailbox(id), now.is_some() && !member(id)));
+        // The change set each flag to the other value than it had.
+        let set = |was: bool, now: Option<bool>| now.is_some_and(|now| now != was);
+        let unread = self.was_unread.map(|was| {
+            let field = UndoField::Unread {
+                message_id: message_id(),
+            };
+            (field, set(was, now.map(|now| now.unread)))
+        });
+        let flagged = self.was_flagged.map(|was| {
+            let field = UndoField::Flagged {
+                message_id: message_id(),
+            };
+            (field, set(was, now.map(|now| now.flagged)))
+        });
+        added.chain(removed).chain(unread).chain(flagged).collect()
+    }
+
+    /// The first field that no longer holds what the change set, given the message as the user
+    /// sees it now, or None for a message that is gone, whose fields then all count.
+    fn unheld(&self, now: Option<&MessageState>) -> Option<UndoField> {
+        self.fields(now)
+            .into_iter()
+            .find(|(_, holds)| !holds)
+            .map(|(field, _)| field)
     }
 }
 
@@ -224,7 +246,6 @@ impl MessageEffect {
                         .collect(),
                     was_unread: changed(before.unread, after.unread),
                     was_flagged: changed(before.flagged, after.flagged),
-                    partly: false,
                 };
                 let untouched = altered.added.is_empty()
                     && altered.removed.is_empty()
@@ -237,6 +258,8 @@ impl MessageEffect {
             ops: ops_for(&altered, mode, false),
             altered,
             reached: false,
+            unconfirmed: false,
+            refreshed: false,
             undoes,
         }
     }
@@ -245,41 +268,42 @@ impl MessageEffect {
         self.reached
     }
 
-    /// The same effect, with `reached` set as given.
-    pub fn with_reached(self, reached: bool) -> MessageEffect {
-        MessageEffect { reached, ..self }
+    pub fn unconfirmed(&self) -> bool {
+        self.unconfirmed
     }
 
-    /// The effect of a change that failed: only the fields the Ops in `applied`, which went
-    /// through, and in `partly`, which may have, set. Messages `partly` names are marked so.
-    /// It is reached when any are left, and then an undo reverses exactly those (undo.rs).
-    pub fn applied_part(self, applied: &[Op], partly: &[Op]) -> MessageEffect {
-        let altered: Vec<Altered> = self
-            .altered
-            .into_iter()
-            .filter_map(|altered| {
-                let id = &altered.message_id;
-                let (went, maybe) = (fields_set(applied, id), fields_set(partly, id));
-                let [mailboxes, unread, flagged] = [0, 1, 2].map(|field| went[field] || maybe[field]);
-                let kept = Altered {
-                    added: if mailboxes { altered.added } else { Vec::new() },
-                    removed: if mailboxes { altered.removed } else { Vec::new() },
-                    was_unread: altered.was_unread.filter(|_| unread),
-                    was_flagged: altered.was_flagged.filter(|_| flagged),
-                    partly: maybe.contains(&true),
-                    message_id: altered.message_id,
-                };
-                let empty = kept.added.is_empty()
-                    && kept.removed.is_empty()
-                    && kept.was_unread.is_none()
-                    && kept.was_flagged.is_none();
-                (!empty).then_some(kept)
-            })
-            .collect();
+    pub fn refreshed(&self) -> bool {
+        self.refreshed
+    }
+
+    /// The same effect with each flag set as given (see the fields).
+    pub fn with(self, reached: bool, unconfirmed: bool, refreshed: bool) -> MessageEffect {
         MessageEffect {
-            reached: !altered.is_empty(),
-            altered,
+            reached,
+            unconfirmed,
+            refreshed,
             ..self
+        }
+    }
+
+    /// How much of this change the provider holds, as it last reported, pending changes left out.
+    pub fn landed(&self, world: &World) -> Landed {
+        let fields: Vec<bool> = self
+            .altered
+            .iter()
+            .filter_map(|altered| world.messages.get(&altered.message_id).map(|record| (altered, record)))
+            .flat_map(|(altered, record)| altered.fields(Some(&record.server)))
+            .map(|(_, holds)| holds)
+            .collect();
+        match (
+            fields.is_empty(),
+            fields.iter().all(|holds| *holds),
+            fields.contains(&true),
+        ) {
+            (true, _, _) => Landed::Gone,
+            (false, true, _) => Landed::All,
+            (false, false, true) => Landed::Some,
+            (false, false, false) => Landed::None,
         }
     }
 
@@ -294,25 +318,6 @@ impl MessageEffect {
         }
         Ok(ops_for(&self.altered, mode, true))
     }
-}
-
-/// Which fields of message `id` the Ops in `ops` set: its mailboxes, read state and flag.
-fn fields_set(ops: &[Op], id: &MessageId) -> [bool; 3] {
-    ops.iter().filter(|op| op.message_ids().contains(id)).fold(
-        [false; 3],
-        |[mailboxes, unread, flagged], op| match op {
-            Op::Mailboxes { .. } => [true, unread, flagged],
-            Op::Flags {
-                unread: sets_unread,
-                flagged: sets_flagged,
-                ..
-            } => [
-                mailboxes,
-                unread || sets_unread.is_some(),
-                flagged || sets_flagged.is_some(),
-            ],
-        },
-    )
 }
 
 /// The Ops that set every altered field as the change left it, or as it was if `back`.

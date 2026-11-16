@@ -6,7 +6,7 @@ import { mailbox, start, sync, thread, truthOf } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 import { accept, allTruth, lunchSeed, targetRow } from '../src/undoing.ts'
 
-scenario('an undo that lands while the change is on its way reverses it once it arrives', async (t) => {
+scenario('an undo while the change is on its way waits for its answer, then reverses it', async (t) => {
   const { core, box } = await start(t)
   const truth = allTruth(box)
   const before = await targetRow(core)
@@ -19,14 +19,14 @@ scenario('an undo that lands while the change is on its way reverses it once it 
     'the archive',
   )
   await box.applyHeld()
-  // The provider may already hold it, so the undo cannot cancel it. It follows it instead.
-  const undo = await accept(t, core, { kind: 'undo', change }, 'the undo')
+  // The provider may already hold it, so the undo cannot cancel it, and until it answers
+  // nobody knows what it holds.
+  const early = await core.command({ kind: 'undo', change })
+  t.equal(early.kind === 'rejected' && early.conflict, { kind: 'outcome-unknown' }, 'the undo waits for its answer')
   box.releaseApplies()
-  t.equal(
-    [(await core.settled(change)).result, (await core.settled(undo)).result],
-    ['done', 'done'],
-    'the archive and its undo both settle as done',
-  )
+  t.equal((await core.settled(change)).result, 'done', 'the archive settles as done')
+  const undo = await accept(t, core, { kind: 'undo', change }, 'the undo after its answer')
+  t.equal((await core.settled(undo)).result, 'done', 'the undo settles')
   await sync(core)
   t.equal(await targetRow(core), before, 'the row is exactly as it was')
   t.equal(allTruth(box), truth, 'the provider holds every message as it was')
@@ -144,7 +144,7 @@ scenario('an undo of a change waiting behind another on its way keeps it from th
 })
 
 scenario(
-  'an undo after part of a change reached the provider reverses that part too',
+  'an undo after part of a change reached the provider waits for the rest, then reverses all of it',
   async (t) => {
     const { core, box } = await start(t, lunchSeed(t.dialect))
     const truth = allTruth(box)
@@ -161,10 +161,13 @@ scenario(
     box.releaseApplies()
     t.equal((await core.request({ method: 'sync-now' })).ok, false, 'the provider is offline')
     t.equal((await thread(core, 'Lunch on Friday?')).pending, true, 'the trash waits for the rest')
-    const undo = await accept(t, core, { kind: 'undo', change: trash }, 'the undo')
+    const early = await core.command({ kind: 'undo', change: trash })
+    t.equal(early.kind === 'rejected' && early.conflict, { kind: 'outcome-unknown' }, 'the undo waits for the rest')
     box.setOffline(false)
     await sync(core)
-    t.equal([(await core.settled(trash)).result, (await core.settled(undo)).result], ['done', 'done'], 'both settle')
+    t.equal((await core.settled(trash)).result, 'done', 'the rest goes through, and the trash settles')
+    const undo = await accept(t, core, { kind: 'undo', change: trash }, 'the undo')
+    t.equal((await core.settled(undo)).result, 'done', 'the undo settles')
     await sync(core)
     t.equal(allTruth(box), truth, 'every message is back where it was, the one that moved first too')
     t.equal(await thread(core, 'Lunch on Friday?'), lunch, 'the row is exactly as it was')

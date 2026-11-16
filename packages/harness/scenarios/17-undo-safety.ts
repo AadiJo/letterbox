@@ -2,18 +2,35 @@
 // a provider changed by another client, a mailbox deleted there, a merge, a change that alters
 // nothing. Held calls, damaged answers and offline turns fix the order of every step.
 
-import type { Dialect } from '@letterbox/sim-provider/contract'
+import type { ChangeId } from '@letterbox/protocol'
+import type { Dialect, SimMailbox } from '@letterbox/sim-provider/contract'
+import type { CoreClient } from '../src/client.ts'
 import { fromBen, mailbox, start, sync, thread, threads, truthOf } from '../src/fixtures.ts'
-import { scenario } from '../src/scenario.ts'
+import { type Scenario, scenario } from '../src/scenario.ts'
 import { accept, allTruth, targetRow } from '../src/undoing.ts'
 
 /** The key of the target message in the standard seed (see TARGET). */
 const REVIEW = 'review'
 
+/**
+ * Undoes `change`, whose answer never came, as a user would: refused as unknown while offline,
+ * then, once a sync shows the provider took all of it and it settles done, reversed.
+ */
+async function undoAfterSync(t: Scenario, core: CoreClient, box: SimMailbox, change: ChangeId) {
+  const early = await core.command({ kind: 'undo', change })
+  t.equal(early.kind === 'rejected' && early.conflict, { kind: 'outcome-unknown' }, 'the undo waits for the provider')
+  box.setOffline(false)
+  await sync(core)
+  t.equal((await core.settled(change)).result, 'done', 'the sync shows all of it went through, so it settles done')
+  const undo = await accept(t, core, { kind: 'undo', change }, 'the undo after the sync')
+  t.equal((await core.settled(undo)).result, 'done', 'the undo settles')
+  await sync(core)
+}
+
 /** Where an archived message is at the provider: in no mailbox with labels, in Archive with folders. */
 const archived = (dialect: Dialect) => (dialect === 'folders' ? ['archive'] : [])
 
-scenario('an archive whose answer was lost counts as reached, so its undo reverses it', async (t) => {
+scenario('an archive whose answer was lost can be undone once a sync shows it, and then exactly', async (t) => {
   const { core, box } = await start(t)
   const truth = allTruth(box)
   const before = await targetRow(core)
@@ -26,26 +43,19 @@ scenario('an archive whose answer was lost counts as reached, so its undo revers
     'the archive',
   )
   await box.applyHeld()
-  // The provider takes it and the connection drops before its answer. Offline, the next
-  // pass cannot try again, so the archive is still waiting when the undo comes.
+  // The provider takes it and the connection drops before its answer. Offline, no sync can
+  // show what became of it yet.
   box.damageNextApplyAnswer('disconnect')
   box.releaseApplies()
   box.setOffline(true)
   t.equal((await core.request({ method: 'sync-now' })).ok, false, 'the provider is offline')
   t.equal(truthOf(box, REVIEW)?.mailboxes, archived(t.dialect), 'the provider took the archive')
-  const undo = await accept(t, core, { kind: 'undo', change: archive }, 'the undo')
-  box.setOffline(false)
-  await sync(core)
-  t.equal(
-    [(await core.settled(archive)).result, (await core.settled(undo)).result],
-    ['done', 'done'],
-    'the archive and its undo both settle as done',
-  )
+  await undoAfterSync(t, core, box, archive)
   t.equal(await targetRow(core), before, 'the row is exactly as it was')
   t.equal(allTruth(box), truth, 'the provider holds every message as it was')
 })
 
-scenario('a restart during an archive’s call counts it as reached, so its undo reverses it', async (t) => {
+scenario('a restart during an archive’s call leaves its undo to a sync, which then reverses it', async (t) => {
   const first = await start(t)
   const { box } = first
   const truth = allTruth(box)
@@ -68,14 +78,7 @@ scenario('a restart during an archive’s call counts it as reached, so its undo
   await core.hello()
   t.equal((await core.request({ method: 'sync-now' })).ok, false, 'the provider is offline')
   t.equal(truthOf(box, REVIEW)?.mailboxes, archived(t.dialect), 'the provider took the archive')
-  const undo = await accept(t, core, { kind: 'undo', change: archive }, 'the undo')
-  box.setOffline(false)
-  await sync(core)
-  t.equal(
-    [(await core.settled(archive)).result, (await core.settled(undo)).result],
-    ['done', 'done'],
-    'the archive and its undo both settle as done',
-  )
+  await undoAfterSync(t, core, box, archive)
   t.equal(await targetRow(core), before, 'the row is exactly as it was')
   t.equal(allTruth(box), truth, 'the provider holds every message as it was')
 })
@@ -94,9 +97,10 @@ scenario('an undo is refused when the provider changed what the change set', asy
   const trashBox = await mailbox(core, 'Trash')
   const answer = await core.command({ kind: 'undo', change: trash })
   const conflict = answer.kind === 'rejected' ? answer.conflict : undefined
+  const field = conflict?.kind === 'changed' ? conflict.field : undefined
   t.equal(
-    [answer.kind === 'rejected' && answer.reason, conflict?.kind, conflict?.kind === 'mailbox' && conflict.mailboxId],
-    ['conflict', 'mailbox', trashBox.id],
+    [answer.kind === 'rejected' && answer.reason, conflict?.kind, field?.kind === 'mailbox' && field.mailboxId],
+    ['conflict', 'changed', trashBox.id],
     'it is refused, naming Trash, which the message is no longer in',
   )
   await sync(core)
@@ -159,7 +163,7 @@ scenario('undoing done is refused once a merge moved the conversation into anoth
   const answer = await core.command({ kind: 'undo', change: done })
   t.equal(
     answer.kind === 'rejected' && [answer.reason, answer.conflict],
-    ['conflict', { kind: 'turn', threadId: later.id }],
+    ['conflict', { kind: 'changed', field: { kind: 'turn', threadId: later.id } }],
     'it is refused, naming the conversation that is gone',
   )
 })

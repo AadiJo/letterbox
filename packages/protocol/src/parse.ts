@@ -37,10 +37,13 @@ const turnReason = type(
 const refusal = type(
   "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed'",
 )
-const undoConflict = type({ kind: "'mailbox'", messageId: 'string', mailboxId: 'string' })
+const undoField = type({ kind: "'mailbox'", messageId: 'string', mailboxId: 'string' })
   .or({ kind: "'unread'", messageId: 'string' })
   .or({ kind: "'flagged'", messageId: 'string' })
   .or({ kind: "'turn'", threadId: 'string' })
+const undoConflict = type({ kind: "'changed'", field: undoField })
+  .or({ kind: "'partly-applied'", field: undoField })
+  .or({ kind: "'outcome-unknown'" })
   .or({ kind: "'mailbox-gone'", mailboxId: 'string' })
 
 const status = type({ state: "'syncing'", done: 'number', total: 'number | null', lastSyncedAt: 'string | null' })

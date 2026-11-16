@@ -38,12 +38,12 @@
 //!      or the provider turned it away before acting on it. It answers `unconfirmed` when the
 //!      provider may have acted on it, all of it or part: the request went out and no whole
 //!      answer came back, the provider failed while handling it, or an earlier call for it
-//!      went through. The core tries it again later either way, since `apply` sets values
-//!      (rule 6). It differs in what an undo does meanwhile: it cancels a change the provider
-//!      surely has none of, and reverses one it may hold (see undo.rs). An adapter that splits
+//!      went through. After a failure the core tries it again later, since `apply` sets
+//!      values (rule 6). After `unconfirmed` it does not: a sync settles the change from what
+//!      the provider holds (push.rs), and until then an undo of it waits (undo.rs). An adapter that splits
 //!      one call into several requests, and has one turned away after an earlier one went
-//!      through, answers `refused` with `landed`: the core does not try it again, but counts
-//!      what it named as possibly changed.
+//!      through, answers `refused` with `landed`: the core settles it failed, and only a sync
+//!      shows which part went through.
 //!
 //! The core runs on one thread, so adapters and their futures need not be `Send`.
 

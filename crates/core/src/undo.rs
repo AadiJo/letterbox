@@ -1,34 +1,38 @@
 //! Undo: takes one change back, exactly. What each change altered is in its effect (effect.rs).
+//! It trusts only what the provider confirmed: a change's answers, or a sync after them.
 //!
 //!   - A send follows its undo window (outbox.rs): inside it the send is cancelled, and after
 //!     it the undo is refused `conflict`, since mail cannot be unsent.
-//!   - A change the provider has none of is cancelled. It never goes out, the view falls back to
+//!   - A change no call has reached is cancelled. It never goes out, the view falls back to
 //!     what it was, and it settles `undone` in the commit that stores the undo, which settles `done`.
-//!   - A change the provider may hold, all of it or part, is reversed by a new change: the undo
-//!     itself. It puts back what the change altered on each message and nothing else, and goes
-//!     through the pipeline like any change: shown at once, saved, carried in order, settled.
-//!     "May hold" is saved with the change before each call to the provider, and kept through
-//!     a lost answer or a restart (see `push` in sync.rs). A turn correction is reversed the
-//!     same way, and settles at once.
-//!   - It is refused `conflict`, naming the field, when a field the change set no longer holds
-//!     what it set: a later change here or at the provider changed it, or its message or
-//!     conversation is gone. Undoing it then would overwrite that change. It is refused
-//!     `conflict`, naming the mailbox, when it would put a message back in a mailbox that is gone.
-//!   - A change the provider turned away after some of its steps went through settles failed,
-//!     and keeps only what those steps set. Its undo reverses exactly that. One it turned away
-//!     before any did is rolled back already, and its undo is refused `conflict`. So is the undo
-//!     of a change an undo of which is pending or done, so a change is undone once.
+//!   - A change the provider confirmed is reversed by a new change: the undo itself. It puts
+//!     back what the change altered on each message and nothing else, and goes through the
+//!     pipeline like any change. A turn correction is reversed the same way, and settles at once.
+//!   - It is refused `conflict`, `outcome-unknown`, while the provider has not confirmed what
+//!     the change did (`uncertain` in push.rs), or what another change to its messages did: a
+//!     call reached the provider and the change has not settled, or it failed after part of it
+//!     went through and no sync has run since.
+//!   - Otherwise one rule decides: every field the change set must still hold what it set, as
+//!     the user sees it now. Refused `conflict`, `changed`, naming the field, when one does not
+//!     for a change that went through, and `partly-applied` for one that failed: only part of
+//!     it went through. Refused `conflict`, `mailbox-gone`, when it would put a message back in
+//!     a mailbox that is gone.
+//!   - A change that failed before any of it went through is rolled back already, and its undo
+//!     is refused `conflict`. So is the undo of a change an undo of which is pending or done,
+//!     so a change is undone once.
 //!   - It is refused `not-supported` for an undo, which cannot be undone itself, and for a change
 //!     a core accepted before changes recorded what they altered.
 //!   - The same undo sent twice has one effect, as every command does (guarantee 4).
 
 use std::rc::Rc;
 
-use letterbox_protocol::{ChangeId, ChangeResult, CoreMessage, Refusal, ThreadId, Turn, UndoConflict};
+use letterbox_protocol::{ChangeId, ChangeResult, CoreMessage, MessageId, Refusal, ThreadId, Turn, UndoConflict};
 
 use crate::Inner;
 use crate::changes::mode_of;
 use crate::effect::Effect;
+use crate::maps::HashSet;
+use crate::push::uncertain;
 use crate::store::Transaction;
 use crate::world::{ChangeOutcome, ChangeRecord, Op, World, put_change};
 
@@ -49,30 +53,49 @@ type Refused = (Refusal, Option<UndoConflict>);
 /// How to undo `target`, or why it cannot be undone.
 fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
     let refuse = |reason| Err((reason, None));
+    let unknown = || Err((Refusal::Conflict, Some(UndoConflict::OutcomeUnknown)));
     if target.effect.undoes().is_some() {
         return refuse(Refusal::NotSupported);
     }
     if let Effect::Send(_) = target.effect {
         return Ok(Answer::Window);
     }
-    // A failed change keeps only what went through before the provider turned it away (sync.rs).
-    // With nothing, it is rolled back already, and nothing is left to take back.
-    let reached = matches!(&target.effect, Effect::Messages(effect) if effect.reached());
-    match target.outcome.map(|outcome| outcome.result) {
-        Some(ChangeResult::Undone) => return refuse(Refusal::Conflict),
-        Some(ChangeResult::Failed(_)) if !reached => return refuse(Refusal::Conflict),
-        _ => {}
-    }
-    if undone(world, &target.id) {
+    let failed = matches!(
+        target.outcome.map(|outcome| outcome.result),
+        Some(ChangeResult::Failed(_))
+    );
+    if matches!(target.outcome.map(|outcome| outcome.result), Some(ChangeResult::Undone)) || undone(world, &target.id) {
         return refuse(Refusal::Conflict);
     }
-    if let Some(conflict) = target.effect.conflict(world) {
-        return Err((Refusal::Conflict, Some(conflict)));
-    }
     match &target.effect {
-        Effect::Turns(effect) => Ok(Answer::ReverseTurns(effect.reversal())),
-        Effect::Messages(effect) if target.outcome.is_none() && !effect.reached() => Ok(Answer::Cancel),
+        Effect::Turns(effect) => match target.effect.conflict(world) {
+            Some(field) => Err((Refusal::Conflict, Some(UndoConflict::Changed { field }))),
+            None => Ok(Answer::ReverseTurns(effect.reversal())),
+        },
         Effect::Messages(effect) => {
+            // Turned away before any of it went through: rolled back already.
+            if failed && !effect.reached() {
+                return refuse(Refusal::Conflict);
+            }
+            if uncertain(target) || (target.outcome.is_none() && effect.reached()) {
+                return unknown();
+            }
+            if let Some(field) = target.effect.conflict(world) {
+                let conflict = if failed {
+                    UndoConflict::PartlyApplied { field }
+                } else {
+                    UndoConflict::Changed { field }
+                };
+                return Err((Refusal::Conflict, Some(conflict)));
+            }
+            if target.outcome.is_none() {
+                return Ok(Answer::Cancel);
+            }
+            // The reversal is worked out from what the user sees of its messages, which must be
+            // what the provider confirmed.
+            if others_uncertain(world, target) {
+                return unknown();
+            }
             let account = world.accounts.get(&target.account_id);
             let account = account.ok_or((Refusal::UnknownTarget, None))?;
             if !account.capabilities.modify {
@@ -85,6 +108,21 @@ fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
         }
         Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } => refuse(Refusal::NotSupported),
     }
+}
+
+/// True when another change to one of `target`'s messages has an outcome the provider has not confirmed.
+fn others_uncertain(world: &World, target: &ChangeRecord) -> bool {
+    let named: HashSet<&MessageId> = target.effect.named().collect();
+    world.changes.values().any(|change| {
+        change.id != target.id
+            && (uncertain(change) || (change.outcome.is_none() && reached(change)))
+            && change.effect.named().any(|id| named.contains(id))
+    })
+}
+
+/// True when a call for `change`, a change to messages, may have reached the provider.
+fn reached(change: &ChangeRecord) -> bool {
+    matches!(&change.effect, Effect::Messages(effect) if effect.reached())
 }
 
 /// True when an undo of `target` is pending or done. One that failed leaves it to undo again.

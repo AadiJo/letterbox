@@ -79,8 +79,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a refused change is reported as done',
     file: core('push.rs'),
-    find: '            self.settle(\n                failed_in_part(change, &applied, &partly),\n                ChangeResult::Failed(reason.into()),\n            );',
-    replace: '            drop((reason, applied, partly));\n            self.settle(change, ChangeResult::Done);',
+    find: '            let result = refused.map_or(ChangeResult::Done, |reason| ChangeResult::Failed(reason.into()));',
+    replace: '            let result = refused.map_or(ChangeResult::Done, |_| ChangeResult::Done);',
     scenarios: 'refuses is undone',
   },
   {

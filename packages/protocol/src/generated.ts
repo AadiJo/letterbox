@@ -180,11 +180,16 @@ export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "co
 export type ChangeResult = "done" | "undone" | { "failed": Refusal };
 
 /**
- * Why an undo was refused `conflict`, when one field or mailbox says why: something the
- * change set no longer holds what it set, changed since on this device or at the provider,
- * or the undo would put a message back in a mailbox that is gone.
+ * Why an undo was refused `conflict`, when there is more to say. An undo trusts only what
+ * the provider confirmed: the change's answers, or a sync after it.
  */
-export type UndoConflict = { "kind": "mailbox", messageId: MessageId, mailboxId: MailboxId, } | { "kind": "unread", messageId: MessageId, } | { "kind": "flagged", messageId: MessageId, } | { "kind": "turn", threadId: ThreadId, } | { "kind": "mailbox-gone", mailboxId: MailboxId, };
+export type UndoConflict = { "kind": "changed", field: UndoField, } | { "kind": "partly-applied", field: UndoField, } | { "kind": "outcome-unknown" } | { "kind": "mailbox-gone", mailboxId: MailboxId, };
+
+/**
+ * One field a change set: a message's place in a mailbox, its read state or flag, or a
+ * conversation's turn.
+ */
+export type UndoField = { "kind": "mailbox", messageId: MessageId, mailboxId: MailboxId, } | { "kind": "unread", messageId: MessageId, } | { "kind": "flagged", messageId: MessageId, } | { "kind": "turn", threadId: ThreadId, };
 
 /**
  * A way to add an account. The UI lists these and never hard-codes a provider.

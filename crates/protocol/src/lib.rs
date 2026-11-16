@@ -32,7 +32,7 @@ use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
-pub use outcome::{ChangeResult, Refusal, UndoConflict};
+pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;

@@ -248,6 +248,8 @@ async function checkUndoOf(page: Page, key: string, label: string) {
   equal(await toast(page).getByRole('button', { name: /^Undo/ }).count(), 1, `"${label}" offers Undo`)
   await page.locator(`[data-list="mail"] [data-row="${id}"]`).waitFor({ state: 'detached' })
   await waitForTotal(page, total - 1)
+  // Undo waits for the provider to confirm the change, so let it settle first.
+  await page.evaluate(() => window.letterboxDev?.sync())
   await page.keyboard.press('z')
   await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
   await waitForTotal(page, total)
@@ -301,8 +303,9 @@ async function checkTrashFromSent(page: Page) {
   await settle(page)
   equal(await looks(), { moving: 0, shown: true }, 'trash from Sent keeps the row, whole and still')
   equal(await conversations(page), total, 'trash from Sent keeps the Sent count')
-  // Lets any exit run to its end, so the undo below finds it ended.
+  // Lets any exit run to its end, so the undo below finds it ended, and the trash settle.
   await row.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
+  await page.evaluate(() => window.letterboxDev?.sync())
   await page.keyboard.press('z')
   await toast(page).waitFor({ state: 'detached' })
   await settle(page)

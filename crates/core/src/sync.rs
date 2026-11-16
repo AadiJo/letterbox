@@ -140,11 +140,11 @@ impl Inner {
             self.state.borrow_mut().syncing.insert(account_id.clone());
             self.commit(|_, _, _| {});
         }
-        // A change the provider may hold part of without having said so (adapter rule 11) may
-        // have moved messages under refs the core does not know yet. Such a pass pulls first,
-        // and the push carries that change only once the core is in step with the provider:
-        // a change set, or a snapshot's last page, a backfill's included. Until then the push
-        // passes it by, and every change after it on the same messages (see `push`).
+        // While the provider has not confirmed what a change did (push.rs), a pass pulls first.
+        // Once a pull brings the core in step with the provider (a change set, or a snapshot's
+        // last page, a backfill's included), `confirm` settles each change whose answer never
+        // came from what the provider holds, and the push may carry the changes after it on
+        // the same messages: their refs are current again. Until then the push passes them by.
         let mut result = Ok(());
         let mut pulled = None;
         if self.unsure(&account_id) && !self.backfilling(&account_id) {
@@ -153,8 +153,12 @@ impl Inner {
                 Err(failure) => result = Err(failure),
             }
         }
+        let caught_up = |done: &Pulled| matches!(done, Pulled::Done) && self.still_current(&account_id, &linked);
+        if pulled.as_ref().is_some_and(caught_up) {
+            self.confirm(&account_id);
+        }
         if result.is_ok() {
-            let refreshed = !self.unsure(&account_id) || matches!(pulled, Some(Pulled::Done));
+            let refreshed = !self.unsure(&account_id);
             result = self.push(&account_id, &linked, refreshed).await;
         }
         // Synced once the core is in step with the provider, which a backfill is only at its
@@ -163,7 +167,11 @@ impl Inner {
         if result.is_ok() && with_pull {
             let done = match pulled {
                 Some(done) => Ok(done),
-                None => self.pull(&account_id, &linked).await,
+                None => self.pull(&account_id, &linked).await.inspect(|done| {
+                    if caught_up(done) {
+                        self.confirm(&account_id);
+                    }
+                }),
             };
             match done {
                 Ok(done) => synced = matches!(done, Pulled::Done),

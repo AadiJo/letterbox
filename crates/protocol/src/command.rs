@@ -42,13 +42,21 @@ pub enum Command {
     /// each message the change altered gets back the mailboxes, read and flag state it changed,
     /// and nothing else. A turn correction is reversed at once.
     ///
-    /// A send is cancelled only inside its undo window, and refused `conflict` after it.
-    /// Refused `conflict`, naming what in `conflict`, when a field the change set no longer
-    /// holds what it set (changed since, here or at the provider, or its message or thread is
-    /// gone), or when a mailbox the undo would put a message back in no longer exists. A change
-    /// that failed after part of it went through is undone in that part. Refused `conflict` when
-    /// it failed before any did (it is rolled back already), or an undo of it is pending or done. Refused `not-supported` for an undo, which cannot itself be undone.
-    /// Sending the same undo twice has one effect (guarantee 4).
+    /// An undo trusts only what the provider confirmed. A send is cancelled only inside its
+    /// undo window, and refused `conflict` after it. Otherwise it is refused `conflict`, with
+    /// the reason in `conflict`:
+    ///   - `outcome-unknown` while the provider has not confirmed what the change did: a call
+    ///     for it reached the provider and it has not settled, or it failed after part of it
+    ///     went through and no sync has run since, or another such change touches its messages.
+    ///   - `changed` when a field the change set no longer holds what it set: changed since,
+    ///     here or at the provider, or its message or conversation is gone.
+    ///   - `partly-applied` when it failed, and a sync since shows a field it set never took it.
+    ///   - `mailbox-gone` when the undo would put a message back in a mailbox that is gone.
+    ///
+    /// Refused `conflict` with no reason when it failed before any of it went through (it is
+    /// rolled back already), or an undo of it is pending or done. Refused `not-supported` for
+    /// an undo, which cannot itself be undone. Sending the same undo twice has one effect
+    /// (guarantee 4).
     Undo {
         change: ChangeId,
     },
