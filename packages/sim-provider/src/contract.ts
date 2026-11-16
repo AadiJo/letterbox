@@ -92,6 +92,13 @@ export type CallCounts = {
   find: number
 }
 
+/**
+ * How the answer to a delivered send can go wrong on its way back: the connection drops
+ * before any answer (over HTTP, after the status line), the answer is cut off halfway, or
+ * it arrives whole but is not JSON.
+ */
+export type SendDamage = 'disconnect' | 'truncated' | 'invalid-json'
+
 /** One message the core sent through this mailbox, as the provider delivered it. */
 export type SentCopy = {
   /** The key of the copy in the Sent mailbox, "sent-<n>" in the order they arrived. */
@@ -131,6 +138,12 @@ export interface SimMailbox {
   refuseNextApply(reason: 'conflict' | 'refused-by-provider'): void
   /** The next `send` answers refused with this reason and delivers nothing. */
   refuseNextSend(reason: 'not-permitted' | 'refused-by-provider'): void
+  /** The next `send` delivers the message, then its answer reaches the core damaged this way. */
+  damageNextSendAnswer(how: SendDamage): void
+  /** The next `find` fails, as a provider's search does when it is briefly down. */
+  failNextFind(): void
+  /** While true, `find` finds nothing, as a provider's search does before its index catches up. */
+  setSearchLag(lagging: boolean): void
   /** From now on, body calls wait. Lets a scenario change the mailbox while a fetch is in flight. */
   holdBodies(): void
   /** Answers every waiting body call, from the truth as it is now, and stops holding. */

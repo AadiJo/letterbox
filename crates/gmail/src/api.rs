@@ -41,12 +41,16 @@ const RATE_LIMIT_TRIES: u32 = 8;
 /// Why a call returned no value.
 #[derive(Debug)]
 pub enum CallError {
-    /// The provider was not reached, or not with valid credentials.
+    /// The provider was not reached, or not with valid credentials. A request that fails
+    /// this way surely did not reach Gmail, or Gmail refused it before acting on it.
     Failure(AdapterFailure),
     /// The request went out, then the connection failed before an answer came back, so the
     /// provider may have acted on it. Only a send needs to tell this apart (see send.rs).
     /// Every other caller reads it as offline.
     Lost,
+    /// Gmail answered with success, but its body could not be read whole, or was not the
+    /// JSON expected. Gmail acted on the call. Every caller but a send reads it as Gmail's error.
+    Unreadable,
     /// The provider answered with an error status. Each caller decides what that means.
     Status { status: StatusCode, reason: String },
 }
@@ -59,7 +63,7 @@ impl CallError {
                 *status == StatusCode::TOO_MANY_REQUESTS
                     || (*status == StatusCode::FORBIDDEN && RATE_LIMITS.contains(&reason.as_str()))
             }
-            CallError::Failure(_) | CallError::Lost => false,
+            CallError::Failure(_) | CallError::Lost | CallError::Unreadable => false,
         }
     }
 
@@ -81,6 +85,7 @@ impl CallError {
         match self {
             CallError::Failure(failure) => *failure,
             CallError::Lost => AdapterFailure::Offline,
+            CallError::Unreadable => AdapterFailure::ProviderError,
             CallError::Status { .. } => AdapterFailure::ProviderError,
         }
     }
@@ -204,12 +209,9 @@ impl Api {
         CallError::Status { status, reason }
     }
 
-    /// Reads a success body. One that is not the expected JSON is the provider's error.
+    /// Reads a success body: cut off, or not the expected JSON, it is `Unreadable`.
     async fn read<T: DeserializeOwned>(response: Response) -> Result<T, CallError> {
-        response
-            .json()
-            .await
-            .map_err(|_| CallError::Failure(AdapterFailure::ProviderError))
+        response.json().await.map_err(|_| CallError::Unreadable)
     }
 
     /// GET `users/me/<path>` with a query.

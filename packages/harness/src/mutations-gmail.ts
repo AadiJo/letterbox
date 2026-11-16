@@ -6,10 +6,19 @@ const gmail = (file: string) => `crates/gmail/src/${file}`
 
 export const GMAIL_MUTATIONS: Mutation[] = [
   {
+    name: 'gmail: a send whose answer cannot be read whole reads as an error, so the core sends it again',
+    file: gmail('send.rs'),
+    find: '        Err(CallError::Lost | CallError::Unreadable) => Ok(SendResult::Unconfirmed),',
+    replace:
+      '        Err(CallError::Lost) => Ok(SendResult::Unconfirmed),\n        Err(CallError::Unreadable) => Err(AdapterFailure::ProviderError),',
+    scenarios: 'answer comes back damaged',
+  },
+  {
     name: 'gmail: a lost answer reads as offline, so the core sends the message again',
     file: gmail('send.rs'),
-    find: '            Err(CallError::Lost) => Ok(SendResult::Unconfirmed),',
-    replace: '            Err(CallError::Lost) => Err(AdapterFailure::Offline),',
+    find: '        Err(CallError::Lost | CallError::Unreadable) => Ok(SendResult::Unconfirmed),',
+    replace:
+      '        Err(CallError::Lost) => Err(AdapterFailure::Offline),\n        Err(CallError::Unreadable) => Ok(SendResult::Unconfirmed),',
     scenarios: 'lost in transit',
   },
   {

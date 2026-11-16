@@ -5,9 +5,11 @@
 // https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send
 
 import type { MessageRef } from '../adapter.ts'
+import type { SendDamage } from '../contract.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { withoutBcc } from '../sent.ts'
 import { isRecord } from '../wire.ts'
+import type { CallResult } from '../wire.ts'
 import { type Failure, ask } from './modify.ts'
 
 /** The status for a send the mailbox refused. */
@@ -29,7 +31,7 @@ export const send = async (
   entry: MailboxEntry,
   body: unknown,
   hasThread: (threadId: string) => boolean,
-): Promise<{ ref: MessageRef; threadId: string | null } | Failure | 'dropped'> => {
+): Promise<{ ref: MessageRef; threadId: string | null; damage: SendDamage | null } | Failure | 'dropped'> => {
   const raw = isRecord(body) && typeof body.raw === 'string' ? body.raw : null
   if (raw === null) return { status: 400, message: "'raw' RFC822 payload message string required" }
   const threadId = isRecord(body) && typeof body.threadId === 'string' ? body.threadId : null
@@ -37,21 +39,27 @@ export const send = async (
   const message = withoutBcc(Buffer.from(raw, 'base64url').toString('utf8'))
   const messageId = /^Message-ID:\s*<([^>]+)>/im.exec(message.raw)?.[1] ?? ''
   const arg = { raw: message.raw, bcc: message.bcc, messageId, replyTo: null }
-  const result = await ask(entry, { method: 'send', arg })
+  const { result, damage } = await new Promise<{ result: CallResult; damage: SendDamage | null }>((resolve) =>
+    entry.respond({ method: 'send', arg }, (answer, how) => resolve({ result: answer, damage: how ?? null })),
+  )
   if (result.method !== 'send') return { status: 503, message: 'Backend error' }
   if (!result.outcome.ok) return 'dropped'
   if (result.outcome.kind === 'refused')
     return { status: REFUSAL_STATUS[result.outcome.reason], message: result.outcome.reason }
   // The mailbox answers in the same process, so its answer is never lost.
   if (result.outcome.kind === 'unconfirmed') return { status: 503, message: 'Backend error' }
-  return { ref: result.outcome.ref, threadId }
+  return { ref: result.outcome.ref, threadId, damage }
 }
 
-/** The refs of messages whose Message-ID a `q` of "rfc822msgid:<id>" names. Null for any other query. */
-export const searchMessageId = (entry: MailboxEntry, q: string): MessageRef[] | null => {
+/**
+ * The search a `q` of "rfc822msgid:<id>" runs, through the mailbox's own `find`, so a lagging
+ * or failing search works as it does over the sim socket. Null for any other query, and a
+ * failure when the search fails.
+ */
+export const searchMessageId = async (entry: MailboxEntry, q: string): Promise<MessageRef[] | Failure | null> => {
   const id = /^rfc822msgid:<?([^>\s]+)>?$/.exec(q.trim())?.[1]
   if (id === undefined) return null
-  return [...entry.store.messages.values()]
-    .filter((stored) => stored.facts.messageId === id)
-    .map((stored) => stored.ref)
+  const result = await ask(entry, { method: 'find', arg: id })
+  if (result.method !== 'find' || !result.outcome.ok) return { status: 503, message: 'Backend error' }
+  return result.outcome.ref === null ? [] : [result.outcome.ref]
 }

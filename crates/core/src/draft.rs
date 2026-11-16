@@ -6,7 +6,7 @@ use letterbox_protocol::{AccountId, Draft, Refusal, Role, Time};
 
 use crate::adapter::{RemoteAddress, RemoteBody, RemoteFacts, RemoteHeaders};
 use crate::clock::{iso, parse};
-use crate::mime::{Letter, MAX_ID, is_plain_address, write};
+use crate::mime::{Letter, Threading, is_plain_address, write};
 use crate::world::{MessageState, World};
 
 /// A send that passed every check, ready to store.
@@ -56,18 +56,9 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
             Some(parent.ok_or(Refusal::UnknownTarget)?)
         }
     };
-    let references: Vec<String> = parent
-        .map(|parent| {
-            parent
-                .facts
-                .references
-                .iter()
-                .chain(&parent.facts.message_id)
-                .filter(|id| id.len() <= MAX_ID)
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
+    let threading = parent.map_or_else(Threading::default, |parent| {
+        Threading::of(&parent.facts.references, parent.facts.message_id.as_deref())
+    });
     // A Date header holds whole seconds, so the facts keep the same time the header says.
     let date = parse(now).trunc_subsecs(0);
     let domain = account
@@ -83,7 +74,7 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
         subject: &draft.subject,
         date,
         message_id: &header_id,
-        references: &references,
+        threading: &threading,
         text: &text,
         html: draft.html.as_deref(),
     });
@@ -102,7 +93,7 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
         account_id: account.id.clone(),
         facts: RemoteFacts {
             message_id: Some(header_id.clone()),
-            references,
+            references: threading.read_back(),
             subject: draft.subject.clone(),
             from: RemoteAddress {
                 name: None,

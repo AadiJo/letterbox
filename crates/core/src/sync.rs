@@ -190,7 +190,8 @@ impl Inner {
             if !self.still_current(account_id, linked) {
                 return Ok(Pulled::Done);
             }
-            self.commit(|world, tx, _| {
+            let mut arrived = None;
+            let rev = self.commit(|world, tx, at| {
                 let Some(account) = world.accounts.get(account_id).cloned() else {
                     return;
                 };
@@ -201,10 +202,13 @@ impl Inner {
                     updated: set.updated,
                     removed: set.removed,
                 };
-                reconcile(world, tx, account_id, incoming);
+                arrived = Some(reconcile(world, tx, account_id, incoming, at));
                 let cursor = Some(set.cursor);
                 put_account(world, tx, AccountRecord { cursor, ..account });
             });
+            if let Some(arrived) = arrived {
+                self.announce(arrived, rev);
+            }
             return Ok(Pulled::Done);
         }
         if !self.still_current(account_id, linked) {

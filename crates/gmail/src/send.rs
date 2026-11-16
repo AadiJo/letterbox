@@ -21,6 +21,30 @@ use crate::adapter::GmailAdapter;
 use crate::api::CallError;
 use crate::wire::{Message, MessageList, Send};
 
+/// What a messages.send call says about the message: the one place that decides. Only a
+/// clean, fully read success is `sent`, and only a failure before the request arrived or an
+/// answer that refuses it says it did not land. Everything else may have landed, so it is
+/// `unconfirmed`, and the core looks the message up instead of sending it again.
+fn sent(result: Result<Message, CallError>) -> Outcome<SendResult> {
+    let refused = |reason| Ok(SendResult::Refused { reason });
+    match result {
+        Ok(message) => Ok(SendResult::Sent {
+            r#ref: MessageRef::new(message.id),
+        }),
+        Err(CallError::Failure(failure)) => Err(failure),
+        Err(CallError::Lost | CallError::Unreadable) => Ok(SendResult::Unconfirmed),
+        // Over a usage limit, sending included: Gmail did not take it, so the core tries again later.
+        Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),
+        Err(CallError::Status { status, .. }) => match status {
+            StatusCode::BAD_REQUEST => refused(ProviderRefusal::RefusedByProvider),
+            StatusCode::FORBIDDEN => refused(ProviderRefusal::NotPermitted),
+            // A server error may come after the message was taken.
+            status if status.is_server_error() => Ok(SendResult::Unconfirmed),
+            _ => Err(AdapterFailure::ProviderError),
+        },
+    }
+}
+
 impl GmailAdapter {
     /// The id of a message Gmail holds with this Message-ID, if any. Spam and trash count:
     /// a copy there was still sent. Gmail's search can lag a send by a little, so an empty
@@ -41,9 +65,10 @@ impl GmailAdapter {
     }
 
     pub(crate) async fn send_message(&self, outgoing: Outgoing) -> Outcome<SendResult> {
-        let refused = |reason| Ok(SendResult::Refused { reason });
         if !self.modify {
-            return refused(ProviderRefusal::NotPermitted);
+            return Ok(SendResult::Refused {
+                reason: ProviderRefusal::NotPermitted,
+            });
         }
         // Nothing has been sent yet, so any failure here surely left the message unsent.
         let thread_id = self
@@ -55,21 +80,6 @@ impl GmailAdapter {
             raw: &raw,
             thread_id: thread_id.as_deref(),
         };
-        match self.api.post_for::<Message>("messages/send", &body).await {
-            Ok(message) => Ok(SendResult::Sent {
-                r#ref: MessageRef::new(message.id),
-            }),
-            Err(CallError::Failure(failure)) => Err(failure),
-            Err(CallError::Lost) => Ok(SendResult::Unconfirmed),
-            // Over a usage limit, sending included: Gmail did not take it, so the core tries again later.
-            Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),
-            Err(CallError::Status { status, .. }) => match status {
-                StatusCode::BAD_REQUEST => refused(ProviderRefusal::RefusedByProvider),
-                StatusCode::FORBIDDEN => refused(ProviderRefusal::NotPermitted),
-                // A server error may come after the message was taken.
-                status if status.is_server_error() => Ok(SendResult::Unconfirmed),
-                _ => Err(AdapterFailure::ProviderError),
-            },
-        }
+        sent(self.api.post_for("messages/send", &body).await)
     }
 }

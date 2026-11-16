@@ -7,7 +7,7 @@
 //! scenario approves or denies it. Closing the socket cancels a pending oauth attempt.
 
 use letterbox_core::adapter::{
-    AdapterFailure, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken, SignInFailure,
+    AdapterFailure, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult, SignInFailure,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -122,6 +122,20 @@ fn ok_or<T: DeserializeOwned, F: DeserializeOwned>(value: Value) -> Result<T, F>
 /// Reads the outcome of an adapter call.
 pub fn outcome<T: DeserializeOwned>(value: Value) -> Outcome<T> {
     ok_or::<T, AdapterFailure>(value)
+}
+
+/// Reads the outcome of a send without trusting it, the one place that decides for the sim:
+/// only a whole `sent` or `refused`, or a failure the server reports before it acts, says what
+/// happened. Anything else is `unconfirmed`, since the server may have filed the message first.
+pub fn send_outcome(value: Value) -> Outcome<SendResult> {
+    #[derive(Deserialize)]
+    struct Failed {
+        failure: AdapterFailure,
+    }
+    if value.get("ok") == Some(&Value::Bool(true)) {
+        return Ok(serde_json::from_value(value).unwrap_or(SendResult::Unconfirmed));
+    }
+    serde_json::from_value::<Failed>(value).map_or(Ok(SendResult::Unconfirmed), |failed| Err(failed.failure))
 }
 
 /// Reads the result of a sign-in: `{"ok": true, "session": ...}` or a failure.

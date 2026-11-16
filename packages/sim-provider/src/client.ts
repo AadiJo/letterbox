@@ -56,7 +56,14 @@ const openLink = (socketPath: string): Promise<Link | null> =>
       onReply?.(value)
     })
     socket.setEncoding('utf8')
-    socket.on('data', (chunk: string) => read(chunk))
+    // A line that is not a reply ends the link like a dropped socket: every call still waiting gets no answer.
+    socket.on('data', (chunk: string) => {
+      try {
+        read(chunk)
+      } catch {
+        socket.destroy()
+      }
+    })
     socket.on('connect', () => {
       open = true
       resolve(link)

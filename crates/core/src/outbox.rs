@@ -22,7 +22,9 @@
 use std::rc::Rc;
 
 use chrono::TimeDelta;
-use letterbox_protocol::{AccountId, ChangeId, ChangeResult, CoreMessage, Delivery, Draft, MessageId, Refusal, Time};
+use letterbox_protocol::{
+    AccountId, ChangeId, ChangeResult, CoreMessage, Delivery, Draft, MessageId, Refusal, Rev, Time,
+};
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
@@ -64,6 +66,12 @@ pub enum Stage {
     /// passes look up its Message-ID until `until`, then it fails `unconfirmed`.
     Unconfirmed { until: Time },
 }
+
+/// Sends whose provider copy a sync just found, already settled `done` in that sync's commit
+/// (see `outbox_copy` in reconcile.rs). Their confirmation ends with them: a pass skips a
+/// settled change. The caller announces them once the commit is in.
+#[must_use = "each send settled here needs its `settled` message: pass it to `Inner::announce` after the commit"]
+pub struct Arrived(pub(crate) Vec<ChangeId>);
 
 /// How many more times an unconfirmed send is looked up after the first, spread across the window.
 const MORE_LOOKUPS: u32 = 4;
@@ -214,10 +222,20 @@ impl Inner {
         });
     }
 
-    /// Restarts the undo window of every send a restart found held. One whose window ended
-    /// while the core was stopped becomes due at once.
+    /// Sends `settled` for each send a sync's commit at `rev` found the copy of.
+    pub(crate) fn announce(&self, arrived: Arrived, rev: Rev) {
+        for change in arrived.0 {
+            let result = ChangeResult::Done;
+            self.send(CoreMessage::Settled { change, rev, result });
+        }
+    }
+
+    /// Picks up every send a restart found on its way. A held one restarts its undo window,
+    /// and one whose window ended while the core was stopped becomes due at once. One that may
+    /// have reached the provider (sending or unconfirmed) is looked up at once: found it is
+    /// done, past its saved `until` and not found it fails, else its lookups go on.
     pub(crate) fn resume_outbox(self: &Rc<Self>) {
-        let held: Vec<(ChangeId, Time)> = self
+        let waiting: Vec<(ChangeRecord, Stage)> = self
             .state
             .borrow()
             .world
@@ -225,15 +243,21 @@ impl Inner {
             .values()
             .filter(|change| change.outcome.is_none())
             .filter_map(|change| match &change.op {
-                Some(Op::Send(Outbound {
-                    stage: Stage::Held { until },
-                    ..
-                })) => Some((change.id.clone(), until.clone())),
+                Some(Op::Send(outbound)) => Some((change.clone(), outbound.stage.clone())),
                 _ => None,
             })
             .collect();
-        for (change, until) in held {
-            self.hold(change, &until);
+        for (change, stage) in waiting {
+            match stage {
+                Stage::Held { until } => self.hold(change.id, &until),
+                Stage::Sending | Stage::Unconfirmed { .. } => {
+                    self.background(
+                        &change.account_id,
+                        Rc::clone(self).pass(change.account_id.clone(), false),
+                    );
+                }
+                Stage::Due => {}
+            }
         }
     }
 
@@ -362,10 +386,18 @@ impl Inner {
         outbound: Outbound,
         until: &Time,
     ) -> PassResult {
-        let found = linked.adapter.find(outbound.header_id.clone()).await?;
+        let found = linked.adapter.find(outbound.header_id.clone()).await;
         if !self.still_current(account_id, linked) {
             return Ok(());
         }
+        let found = match found {
+            Ok(found) => found,
+            // A failed lookup says nothing about the send, so the next check stays booked.
+            Err(failure) => {
+                self.look_again(account_id, until);
+                return Err(failure);
+            }
+        };
         match found.r#ref {
             Some(r#ref) => self.delivered(account_id, record, &outbound, r#ref),
             None if parse(&self.env.now()) >= parse(until) => {
@@ -377,12 +409,21 @@ impl Inner {
     }
 
     /// Queues the next lookup of an unconfirmed send, a step into its window or at its end.
-    /// Like the undo window, the wait is not work a closing core finishes.
+    /// None once the window has ended: the next pass that looks decides. Like the undo
+    /// window, the wait is not work a closing core finishes.
     fn look_again(self: &Rc<Self>, account_id: &AccountId, until: &Time) {
         let step = TimeDelta::from_std(self.confirm_window / MORE_LOOKUPS).unwrap_or(TimeDelta::MAX);
-        let now = parse(&self.env.now());
-        let next = now.checked_add_signed(step).unwrap_or(now).min(parse(until));
-        let wait = self.env.until(&iso(next));
+        let (now, until) = (parse(&self.env.now()), parse(until));
+        if now >= until {
+            return;
+        }
+        let next = now.checked_add_signed(step).unwrap_or(now).min(until);
+        self.check_at(account_id, &iso(next));
+    }
+
+    /// Queues a pass for the account once the clock reads `at`, so it carries its sends on.
+    fn check_at(self: &Rc<Self>, account_id: &AccountId, at: &Time) {
+        let wait = self.env.until(at);
         let core = Rc::clone(self);
         let account_id = account_id.clone();
         spawn_local(async move {

@@ -281,7 +281,7 @@ impl GmailAdapter {
             Ok(0) => refused(ProviderRefusal::UnknownTarget),
             Ok(_) => Ok(ApplyResult::Applied { moved: Vec::new() }),
             // Setting labels again does no harm, so a lost answer is offline here.
-            Err(error @ (CallError::Failure(_) | CallError::Lost)) => Err(error.failure()),
+            Err(error @ (CallError::Failure(_) | CallError::Lost | CallError::Unreadable)) => Err(error.failure()),
             // Over a usage limit, not refused: the core keeps the change and tries it again later.
             Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),
             Err(CallError::Status { status, .. }) => match status {

@@ -14,7 +14,16 @@ import type {
   SendResult,
   SnapshotPage,
 } from './adapter.ts'
-import type { CallCounts, Dialect, SentCopy, SimMailbox, Seed, SeedMailbox, SeedMessage } from './contract.ts'
+import type {
+  CallCounts,
+  Dialect,
+  SendDamage,
+  SentCopy,
+  SimMailbox,
+  Seed,
+  SeedMailbox,
+  SeedMessage,
+} from './contract.ts'
 import { foldersEngine } from './folders.ts'
 import { labelsEngine } from './labels.ts'
 import { readSent } from './sent.ts'
@@ -39,7 +48,7 @@ export type MailboxEntry = {
   session: Session
   isOffline(): boolean
   /** Answers one adapter call through `reply`. A body, apply, send or snapshot call waits while its method is held. */
-  respond(call: Call, reply: (result: CallResult) => void): void
+  respond(call: Call, reply: (result: CallResult, damage?: SendDamage) => void): void
 }
 
 /** Where a snapshot page starts: below this delivery count, with the first page's cursor. */
@@ -105,6 +114,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let offline = false
   let refusal: Refusal | null = null
   let sendRefusal: SendRefusal | null = null
+  let sendDamage: SendDamage | null = null
+  let findFails = false
+  let searchLags = false
   // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
   let generation = 0
   const holds = { body: createHold(), apply: createHold(), snapshot: createHold(), send: createHold() }
@@ -223,6 +235,15 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     },
     refuseNextSend: (reason) => {
       sendRefusal = reason
+    },
+    damageNextSendAnswer: (how) => {
+      sendDamage = how
+    },
+    failNextFind: () => {
+      findFails = true
+    },
+    setSearchLag: (lagging) => {
+      searchLags = lagging
     },
     expirePageTokens: () => {
       generation += 1
@@ -362,8 +383,12 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       case 'send':
         return { method: 'send', outcome: { ok: true, ...send(call.arg) } }
       case 'find': {
+        if (findFails) {
+          findFails = false
+          return failedCall(call, 'provider-error')
+        }
         const found = [...store.messages.values()].find((message) => message.facts.messageId === call.arg)
-        return { method: 'find', outcome: { ok: true, ref: found?.ref ?? null } }
+        return { method: 'find', outcome: { ok: true, ref: searchLags ? null : (found?.ref ?? null) } }
       }
     }
   }
@@ -379,8 +404,15 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     session: { address: seed.address, dialect, modify: canModify },
     isOffline: () => offline,
     respond: (call, reply) => {
+      const answerNow = () => {
+        const result = answer(call)
+        const damage = call.method === 'send' ? sendDamage : null
+        if (damage === null) return reply(result)
+        sendDamage = null
+        reply(result, damage)
+      }
       const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
-      if (!hold?.keep(() => reply(answer(call)))) reply(answer(call))
+      if (!hold?.keep(answerNow)) answerNow()
     },
   }
 }

@@ -16,6 +16,9 @@
 //   X10 a message with a line over RFC 5322's 998 characters is filed
 //   X11 a send whose socket drops after the request went out answers offline, which lets the
 //       core send it again, or one that never reached a socket answers anything but offline
+//   X12 a damaged answer to a delivered send (disconnect, cut off, not JSON) answers anything
+//       but unconfirmed, or the message is not filed
+//   X13 failNextFind does not fail once, or a lagging search finds the message
 //   M01 folded headers, Q and B encoded words, quoted names or a quoted-printable part read wrong
 //   M02 withoutBcc keeps the Bcc header, loses its addresses, or touches the body
 
@@ -290,6 +293,27 @@ await check('X11 a dropped answer is unconfirmed, and no socket at all is offlin
   await provider.close()
   assert.deepEqual(await answer, { ok: true, kind: 'unconfirmed' })
   assert.deepEqual(await adapter.send(outgoing()), { ok: false, failure: 'offline' })
+})
+
+await check('X12 a damaged answer to a delivered send is unconfirmed', BOTH, async (dialect) => {
+  const { box, adapter } = await open(dialect)
+  for (const how of ['disconnect', 'truncated', 'invalid-json'] as const) {
+    box.damageNextSendAnswer(how)
+    assert.deepEqual(await adapter.send(outgoing()), { ok: true, kind: 'unconfirmed' }, `${how} was not unconfirmed`)
+  }
+  assert.equal(box.sent().length, 3, 'a damaged answer kept its message from being filed')
+  await sent(adapter)
+})
+
+await check('X13 failNextFind fails once, and a lagging search finds nothing', BOTH, async (dialect) => {
+  const { box, adapter } = await open(dialect)
+  const ref = await sent(adapter)
+  box.failNextFind()
+  assert.deepEqual(await adapter.find('reply-1@sim.test'), { ok: false, failure: 'provider-error' })
+  box.setSearchLag(true)
+  assert.deepEqual(await adapter.find('reply-1@sim.test'), { ok: true, ref: null })
+  box.setSearchLag(false)
+  assert.deepEqual(await adapter.find('reply-1@sim.test'), { ok: true, ref })
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

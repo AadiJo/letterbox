@@ -33,7 +33,7 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import type { MessageRef, PageToken } from '../adapter.ts'
-import type { Seed, SimMailbox } from '../contract.ts'
+import type { Seed, SendDamage, SimMailbox } from '../contract.ts'
 import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { ask, modify, parse, strings } from './modify.ts'
@@ -107,6 +107,25 @@ const send = (response: ServerResponse, status: number, body?: unknown): void =>
   response.writeHead(status, { 'Content-Type': 'application/json; charset=UTF-8' }).end(JSON.stringify(body))
 }
 
+/**
+ * A 200 that goes wrong on its way back. The status line and headers promise the whole body,
+ * then the connection ends before any of it, or halfway through it, or the body arrives
+ * whole but is not JSON.
+ */
+const damaged = (response: ServerResponse, body: string, how: SendDamage): void => {
+  const sent = how === 'invalid-json' ? '{"id": ' : body
+  response.writeHead(200, {
+    'Content-Type': 'application/json; charset=UTF-8',
+    'Content-Length': String(Buffer.byteLength(sent)),
+  })
+  if (how === 'invalid-json') return void response.end(sent)
+  // Write what goes, then end the connection with the rest of the body still owed.
+  if (how === 'truncated')
+    return void response.write(sent.slice(0, Math.floor(sent.length / 2)), () => response.socket?.end())
+  response.flushHeaders()
+  response.socket?.end()
+}
+
 /** An error in the shape every Gmail endpoint uses. https://developers.google.com/gmail/api/guides/handle-errors */
 const fail = (response: ServerResponse, code: number, message: string): void => {
   const [status, reason] = STATUS_NAMES[code] ?? ['UNKNOWN', 'backendError']
@@ -164,8 +183,9 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     }
     const q = query.get('q')
     if (method === 'GET' && path === 'messages' && q !== null) {
-      const found = searchMessageId(entry, q)
+      const found = await searchMessageId(entry, q)
       if (found === null) return fail(response, 400, `The fake searches by rfc822msgid: only, not ${q}`)
+      if ('status' in found) return fail(response, found.status, found.message)
       const messages = found.map(
         (ref) => (remember(gmailIdOf(ref)), { id: gmailIdOf(ref), threadId: threadOf(entry, ref) }),
       )
@@ -179,7 +199,9 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       if ('status' in sent) return fail(response, sent.status, sent.message)
       if (sent.threadId !== null) threads.set(`${entry.control.address}\n${sent.ref}`, sent.threadId)
       const id = remember(gmailIdOf(sent.ref))
-      return send(response, 200, { id, threadId: threadOf(entry, sent.ref), labelIds: ['SENT'] })
+      const answer = { id, threadId: threadOf(entry, sent.ref), labelIds: ['SENT'] }
+      if (sent.damage === null) return send(response, 200, answer)
+      return damaged(response, JSON.stringify(answer), sent.damage)
     }
     if (method === 'GET' && path === 'messages') {
       const result = await ask(entry, { method: 'snapshot', arg: query.get('pageToken') as PageToken | null })
@@ -334,6 +356,8 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
         entry.control.setOffline(offline)
         listenWhileReachable()
       }
+      // A new account is online, so a fake that every account had left listens again.
+      listenWhileReachable()
       return { ...entry.control, setOffline }
     },
     approveSignIn: (consent, address) => {

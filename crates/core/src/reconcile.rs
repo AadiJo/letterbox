@@ -10,15 +10,16 @@
 
 use std::sync::LazyLock;
 
-use letterbox_protocol::{AccountId, MailboxId, MessageId, ThreadId};
+use letterbox_protocol::{AccountId, ChangeResult, MailboxId, MessageId, Rev, ThreadId};
 use regex::Regex;
 
 use crate::adapter::{MessageRef, RemoteFacts, RemoteMailbox, RemoteMessage, RemoteState};
 use crate::maps::{HashMap, HashSet, IndexMap, IndexSet};
+use crate::outbox::Arrived;
 use crate::store::Transaction;
 use crate::world::{
-    MailboxRecord, MessageRecord, MessageState, Origin, ThreadRecord, World, messages_of, put_mailbox, put_message,
-    put_thread, remove_mailbox, remove_message, remove_thread, scoped,
+    ChangeOutcome, ChangeRecord, MailboxRecord, MessageRecord, MessageState, Origin, ThreadRecord, World, messages_of,
+    put_change, put_mailbox, put_message, put_thread, remove_mailbox, remove_message, remove_thread, scoped,
 };
 
 pub struct Incoming {
@@ -154,8 +155,16 @@ fn known(world: &World, account_id: &AccountId, r#ref: &MessageRef) -> Option<Me
     world.messages.get(id).cloned()
 }
 
-/// Applies one report from an adapter to the world, inside the caller's transaction.
-pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, incoming: Incoming) {
+/// Applies one report from an adapter to the world, inside the caller's transaction, which
+/// writes at revision `at`. Returns the sends whose copy it found, settled in that transaction.
+pub fn reconcile(
+    world: &mut World,
+    tx: &Transaction<'_>,
+    account_id: &AccountId,
+    incoming: Incoming,
+    at: Rev,
+) -> Arrived {
+    let mut arrived = Vec::new();
     if let Some(mailboxes) = incoming.mailboxes {
         let mut seen: HashSet<MailboxId> = HashSet::default();
         for remote in mailboxes {
@@ -217,8 +226,26 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
             );
             continue;
         }
-        // A send of the user's that the provider holds after all: its copy takes its place.
+        // A send of the user's that the provider holds: its copy takes its place, and a send
+        // still waiting to be confirmed is done, in this same transaction.
         if let Some(sent) = outbox_copy(world, account_id, &remote.facts) {
+            if let Origin::Outbox { outbox } = &sent.origin
+                && let Some(change) = world.changes.get(outbox).filter(|change| change.outcome.is_none())
+            {
+                let outcome = Some(ChangeOutcome {
+                    rev: at,
+                    result: ChangeResult::Done,
+                });
+                arrived.push(change.id.clone());
+                put_change(
+                    world,
+                    tx,
+                    ChangeRecord {
+                        outcome,
+                        ..change.clone()
+                    },
+                );
+            }
             let server = state_of(world, account_id, &remote.state);
             put_message(
                 world,
@@ -293,6 +320,7 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
     for id in vanished.keys() {
         remove_with_thread(world, tx, id);
     }
+    Arrived(arrived)
 }
 
 /// The outbox message a newly reported message is the provider's copy of: the one with its

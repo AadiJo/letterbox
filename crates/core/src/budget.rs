@@ -199,7 +199,7 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
         let inner = &core.inner;
         let (messages, conversations) = mailbox(MESSAGES);
         let account_id: AccountId = inner.store.next_id();
-        inner.commit(|world, tx, _| {
+        inner.commit(|world, tx, at| {
             put_account(
                 world,
                 tx,
@@ -228,7 +228,8 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                 updated: vec![],
                 removed: vec![],
             };
-            reconcile(world, tx, &account_id, incoming);
+            let arrived = reconcile(world, tx, &account_id, incoming, at);
+            assert!(arrived.0.is_empty(), "the test mailbox has no sends");
         });
 
         let receive = |message: Value| core.receive(message);
@@ -328,7 +329,7 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
         let delivered = RefCell::new(Some(delivered));
         measure("sync 200 new messages", DELIVERED as u64, &|| {
             let added = delivered.borrow_mut().take().unwrap_or_default();
-            inner.commit(|world, tx, _| {
+            inner.commit(|world, tx, at| {
                 let incoming = Incoming {
                     page_of: None,
                     mailboxes: None,
@@ -336,7 +337,8 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                     updated: vec![],
                     removed: vec![],
                 };
-                reconcile(world, tx, &account_id, incoming);
+                let arrived = reconcile(world, tx, &account_id, incoming, at);
+                assert!(arrived.0.is_empty(), "the test mailbox has no sends");
             });
         });
 

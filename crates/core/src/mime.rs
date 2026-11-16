@@ -2,7 +2,7 @@
 //! is the one place the core writes MIME, so every rule about the format lives here:
 //!   - Every line ends in CRLF and stays within RFC 5322's 998 characters. Free text and
 //!     lists fold to stay within 78. An address or Message-ID that is longer on its own is
-//!     bounded instead (`is_plain_address`, `MAX_ID`).
+//!     bounded instead (`is_plain_address`, `Threading`).
 //!   - A header value that is not printable ASCII travels as RFC 2047 encoded words.
 //!   - Text parts are UTF-8 in base64, so no body line is too long and none can look like
 //!     the boundary, which holds "=_", two characters base64 never writes.
@@ -19,8 +19,8 @@ pub struct Letter<'a> {
     pub date: DateTime<Utc>,
     /// Without angle brackets.
     pub message_id: &'a str,
-    /// The Message-IDs it answers, oldest first, without angle brackets. The last is its In-Reply-To.
-    pub references: &'a [String],
+    /// The messages it answers (see `Threading`).
+    pub threading: &'a Threading,
     pub text: &'a str,
     pub html: Option<&'a str>,
 }
@@ -31,8 +31,43 @@ const LINE: usize = 78;
 /// The most UTF-8 bytes in one encoded word, so the word stays well inside 75 characters.
 const WORD_BYTES: usize = 39;
 
-/// The longest Message-ID the core writes in a header. One line holds a whole id.
-pub const MAX_ID: usize = 900;
+/// The longest Message-ID the core writes in References, where each id takes a line of its own.
+const MAX_REFERENCE: usize = 900;
+/// The longest Message-ID that fits on an In-Reply-To line: 998 less `In-Reply-To: <` and `>`.
+const MAX_IN_REPLY_TO: usize = 998 - 15;
+
+/// What a reply says about the messages it answers, as it is written. Message-IDs have no
+/// place to fold inside them, so a long one is left out instead: of References past
+/// `MAX_REFERENCE`, and of In-Reply-To only when not even a line of its own can hold it. The
+/// parent stays in In-Reply-To even when it is too long for References.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Threading {
+    /// The parent's Message-ID, without angle brackets.
+    pub in_reply_to: Option<String>,
+    /// The chain it answers, oldest first, without angle brackets.
+    pub references: Vec<String>,
+}
+
+impl Threading {
+    /// The headers of a reply to a message with Message-ID `parent` that answered `ancestors`.
+    pub fn of(ancestors: &[String], parent: Option<&str>) -> Threading {
+        let chain = ancestors.iter().map(String::as_str).chain(parent);
+        Threading {
+            in_reply_to: parent.filter(|id| id.len() <= MAX_IN_REPLY_TO).map(str::to_owned),
+            references: chain
+                .filter(|id| id.len() <= MAX_REFERENCE)
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
+
+    /// The ids a reader takes from these headers, as `RemoteFacts::references` holds them:
+    /// References, then In-Reply-To unless References has it already.
+    pub fn read_back(&self) -> Vec<String> {
+        let parent = self.in_reply_to.iter().filter(|id| !self.references.contains(id));
+        self.references.iter().chain(parent).cloned().collect()
+    }
+}
 
 /// True for an address the core can write as it is: printable ASCII with no spaces, one
 /// `@` with text on both sides, none of the characters that would need quoting, and at most
@@ -57,12 +92,12 @@ pub fn write(letter: &Letter<'_>) -> String {
     push_unstructured(&mut out, "Subject", letter.subject);
     push(&mut out, "Date", &letter.date.to_rfc2822());
     push(&mut out, "Message-ID", &format!("<{}>", letter.message_id));
-    if let Some(last) = letter.references.last() {
-        push(&mut out, "In-Reply-To", &format!("<{last}>"));
-        let ids: Vec<String> = letter.references.iter().map(|id| format!("<{id}>")).collect();
-        out.push_str("References: ");
-        out.push_str(&ids.join("\r\n "));
-        out.push_str("\r\n");
+    if let Some(parent) = &letter.threading.in_reply_to {
+        push(&mut out, "In-Reply-To", &format!("<{parent}>"));
+    }
+    if !letter.threading.references.is_empty() {
+        let ids: Vec<String> = letter.threading.references.iter().map(|id| format!("<{id}>")).collect();
+        push(&mut out, "References", &ids.join("\r\n "));
     }
     push(&mut out, "MIME-Version", "1.0");
     match letter.html {

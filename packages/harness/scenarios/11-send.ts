@@ -216,14 +216,9 @@ scenario('a core killed in the middle of a delivery sends it once after the rest
   first.box.releaseSends()
   t.equal(first.box.sent().length, 1, 'the provider holds the message')
 
+  // The restart looks up the send it was in the middle of at once, with no sync.
   const core = t.startCore()
   await core.hello()
-  t.equal(
-    (await readThread(core, threadId))?.messages[1]?.delivery?.state,
-    'sending',
-    'the restarted core still shows the reply on its way',
-  )
-  await sync(core)
   t.equal((await core.settled(send.change)).result, 'done', 'it settles as done')
   t.equal(first.box.sent().length, 1, 'the provider still holds one copy, not two')
   t.equal((await readThread(core, threadId))?.messages.length, 2, 'the conversation shows it once')
