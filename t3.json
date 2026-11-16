@@ -1,0 +1,17 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [
+    {
+      "name": "Setup Worktree",
+      "command": "node packages/dev-host/src/setup.ts",
+      "icon": "configure",
+      "runOnWorktreeCreate": true
+    },
+    {
+      "name": "Dev",
+      "command": "pnpm dev",
+      "icon": "play",
+      "stopOnSettle": true
+    }
+  ]
+}

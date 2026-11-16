@@ -11,7 +11,8 @@ import { defineRule, type ESTree } from '@oxlint/plugins'
 const MESSAGE =
   "This relative path leaves the package the file is in. Import another package by its name, for example '@letterbox/core/adapter'. " +
   'If that name does not resolve, the package is not allowed to depend on it. ' +
-  'Allowed directions: protocol depends on nothing, core on protocol, sim-provider on core and protocol, harness on all three.'
+  'Allowed directions: protocol depends on nothing, client on protocol, sim-provider on protocol, ' +
+  'harness and dev-host on client, protocol and sim-provider, and the desktop renderer on client and protocol.'
 
 /** The nearest folder at or above `folder` that has a package.json, or undefined above the last one. */
 const packageRootOf = (folder: string): string | undefined => {

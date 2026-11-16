@@ -1,6 +1,6 @@
 # Runs every check on each pull request and on main: format, types, lint, the lint
-# self-test, the scenarios and the break test. `pnpm check` is the same command a
-# person runs locally. The runner's preinstalled Rust toolchain builds the core.
+# self-test, the scenarios, the break test and the UI check. `pnpm check` is the same
+# command a person runs locally. The runner's preinstalled Rust toolchain builds the core.
 
 name: check
 
@@ -35,6 +35,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The UI check (`pnpm check:ui`) drives Playwright's headless Chromium. The Playwright
+      # version, and so the browser's, comes from packages/dev-host/package.json.
+      - run: pnpm --filter @letterbox/dev-host exec playwright install --with-deps --only-shell chromium
+
       # A squash merge makes the PR title the commit on main, so it follows the commit rules.
       # The title goes through an environment variable, never straight into the script.
       - if: github.event_name == 'pull_request'
@@ -51,7 +55,8 @@ jobs:
         env:
           FILE_SIZE_BASE: ${{ github.event.pull_request.base.sha }}
 
-      # One transcript per scenario run. Uploaded on failure too, when it matters most.
+      # One transcript per scenario run, and the UI check's screenshots and trace.
+      # Uploaded on failure too, when it matters most.
       - uses: actions/upload-artifact@v7
         if: always()
         with:

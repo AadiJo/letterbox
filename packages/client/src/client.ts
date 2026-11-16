@@ -1,7 +1,7 @@
 // The typed client for the core, shared by every UI and by the test harness. It speaks
 // only the protocol in @letterbox/protocol and reaches the core through a Transport:
-// IPC in the desktop renderer, the native bridge in the mobile app, a child process in
-// packages/harness.
+// a WebSocket to a host process (websocket.ts) in the desktop renderer, the native bridge
+// in the mobile app, a child process in packages/harness.
 //
 // It runs in a browser renderer and in Hermes, so it imports no Node module and reads no
 // Node global. .oxlintrc.json enforces that for this package.
@@ -77,6 +77,11 @@ export type Subscription<V extends View> = {
   count(): number
   /** Resolves with the next update that arrives after this call. Rejects once the subscription is closed or the core is gone. */
   next(): Promise<Queries[V]['result']>
+  /**
+   * Calls `listener` after each update, once `latest` holds it, until the returned function
+   * runs or the subscription closes. For a UI store, such as React's useSyncExternalStore.
+   */
+  watch(listener: () => void): () => void
   /** Stops the view. Waiting `next` calls reject. */
   close(): void
 }
@@ -118,6 +123,7 @@ type Open = {
   count: number
   closed: boolean
   waiting: { resolve: (update: Of<'update'>) => void; reject: (error: Error) => void }[]
+  watchers: Set<() => void>
 }
 
 /** Builds a client over `transport`. */
@@ -140,6 +146,7 @@ export function createClient(transport: Transport, options: Options): KeepingCli
         open.latest = message
         open.count += 1
         for (const waiting of open.waiting.splice(0)) waiting.resolve(message)
+        for (const watcher of open.watchers) watcher()
         return true
       }
       const index = waiters.findIndex((waiter) => waiter.matches(message))
@@ -196,7 +203,7 @@ export function createClient(transport: Transport, options: Options): KeepingCli
 
   const subscribe = <V extends View>(query: QueryFor<V>): Subscription<V> => {
     const sub = options.newId('sub') as SubscriptionId
-    const open: Open = { latest: undefined, count: 0, closed: false, waiting: [] }
+    const open: Open = { latest: undefined, count: 0, closed: false, waiting: [], watchers: new Set() }
     subscriptions.set(sub, open)
     transport.send({ kind: 'subscribe', sub, query })
     // Updates on this subscription carry the data for the view it asked for.
@@ -211,9 +218,16 @@ export function createClient(transport: Transport, options: Options): KeepingCli
           if (open.closed) return reject(new Error(`the subscription to ${query.view} is closed`))
           open.waiting.push({ resolve: (update) => resolve(dataOf(update)), reject })
         }),
+      watch: (listener) => {
+        // A fresh function per call, so the same listener can watch twice and stop each once.
+        const watcher = () => listener()
+        if (!open.closed) open.watchers.add(watcher)
+        return () => void open.watchers.delete(watcher)
+      },
       close: () => {
         if (open.closed) return
         open.closed = true
+        open.watchers.clear()
         subscriptions.delete(sub)
         const error = new Error(`the subscription to ${query.view} was closed`)
         for (const waiting of open.waiting.splice(0)) waiting.reject(error)
