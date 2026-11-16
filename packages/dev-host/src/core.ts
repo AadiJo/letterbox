@@ -22,14 +22,14 @@ export type Paths = {
 /** How long a core gets to finish its work after its input closes, before it is killed. */
 const STOP_MS = 3000
 
-/** Builds core-sim in debug. Rejects with cargo's output if it does not build. */
-export async function buildCore(paths: Paths) {
-  const cargo = startChild('cargo', ['build', '--quiet', '--bin', 'core-sim'], paths.root)
+/** Builds a core program in debug: core-sim, or the app's letterbox-core. Rejects with cargo's output if it does not build. */
+export async function buildCore(paths: Paths, program: 'core-sim' | 'letterbox-core' = 'core-sim') {
+  const cargo = startChild('cargo', ['build', '--quiet', '--bin', program], paths.root)
   let output = ''
   cargo.stdout.on('data', (chunk: Buffer) => void (output += chunk.toString()))
   cargo.stderr.on('data', (chunk: Buffer) => void (output += chunk.toString()))
   await exited(cargo)
-  if (cargo.exitCode !== 0) throw new Error(`core-sim did not build:\n${output}`)
+  if (cargo.exitCode !== 0) throw new Error(`${program} did not build:\n${output}`)
 }
 
 export type CoreProcess = {

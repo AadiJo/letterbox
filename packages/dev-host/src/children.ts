@@ -30,8 +30,8 @@ const signal = (pid: number, name: NodeJS.Signals) => {
 }
 
 /** Starts `program` with piped stdio, attached to this process, and tracks it until it exits. */
-export function startChild(program: string, args: string[], cwd: string): Child {
-  const child = spawn(program, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] })
+export function startChild(program: string, args: string[], cwd: string, env = process.env): Child {
+  const child = spawn(program, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
   const { pid } = child
   if (pid === undefined) {
     // Node also emits the reason as an 'error' event. The throw below reports it instead.
@@ -54,16 +54,22 @@ export const exited = (child: Child) =>
     child.once('exit', () => resolve())
   })
 
-/** Sends SIGTERM to every child still running and waits for each to exit. SIGKILL after `graceMs`. */
-export async function stopChildren(graceMs = 3000) {
-  await Promise.all(
-    [...running.entries()].map(async ([pid, child]) => {
-      signal(pid, 'SIGTERM')
-      const timer = setTimeout(() => signal(pid, 'SIGKILL'), graceMs)
-      await exited(child)
-      clearTimeout(timer)
-    }),
-  )
+/**
+ * Sends SIGTERM to every child still running and waits for each to exit. SIGKILL after `graceMs`,
+ * which is longer than the desktop shell's own wait for its core (STOP_MS in its main/core.ts).
+ */
+export async function stopChildren(graceMs = 10_000) {
+  await Promise.all([...running.values()].map((child) => stopChild(child, graceMs)))
+}
+
+/** Sends SIGTERM to one child, if it still runs, and waits for it to exit. SIGKILL after `graceMs`. */
+export async function stopChild(child: Child, graceMs = 10_000) {
+  const { pid } = child
+  if (pid === undefined || !running.has(pid)) return
+  signal(pid, 'SIGTERM')
+  const timer = setTimeout(() => signal(pid, 'SIGKILL'), graceMs)
+  await exited(child)
+  clearTimeout(timer)
 }
 
 /** For a last-chance exit handler, which cannot wait: SIGKILL to every child still running. */

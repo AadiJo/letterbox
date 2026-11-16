@@ -1,6 +1,6 @@
 # Runs every check on each pull request and on main: format, types, lint, the lint
-# self-test, the scenarios, the break test and the UI check. `pnpm check` is the same
-# command a person runs locally. The runner's preinstalled Rust toolchain builds the core.
+# self-test, the scenarios, the break test, the UI check and the Electron check. `pnpm check`
+# is the same command a person runs locally. The runner's preinstalled Rust toolchain builds the core.
 
 name: check
 
@@ -51,11 +51,16 @@ jobs:
       - if: github.event_name == 'pull_request'
         run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
 
-      - run: pnpm check
+      # The Electron check (`pnpm check:electron`) opens real windows, sandboxed. Ubuntu 24.04
+      # stops unprivileged user namespaces through AppArmor, and Chromium's sandbox needs them.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # xvfb-run gives the Electron check a display. Without one it fails and says so.
+      - run: xvfb-run -a pnpm check
         env:
           FILE_SIZE_BASE: ${{ github.event.pull_request.base.sha }}
 
-      # One transcript per scenario run, and the UI check's screenshots and trace.
+      # One transcript per scenario run, and the UI and Electron checks' screenshots, trace and logs.
       # Uploaded on failure too, when it matters most.
       - uses: actions/upload-artifact@v7
         if: always()

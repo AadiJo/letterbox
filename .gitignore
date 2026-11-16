@@ -13,3 +13,6 @@ target
 
 # Local stores made by running the core by hand.
 data
+
+# The desktop shell's build (apps/desktop/shell/src/build.ts).
+apps/desktop/shell/dist

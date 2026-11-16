@@ -1,9 +1,11 @@
 // This tab's connection to the core, and the hooks React reads it through.
 //
-// The core is at `/core` on the page's own origin. In the dev loop packages/dev-host serves
-// that route, so the bundle names no backend URL.
+// In the desktop shell, the preload hands this page a MessagePort to a core of its own. In a
+// plain browser tab the core is at `/core` on the page's own origin, which packages/dev-host
+// serves in the dev loop, so the bundle names no backend URL.
 
 import { createClient, type Subscription, type Transport } from '@letterbox/client'
+import { messagePortTransport, shellPort, type ShellBridge } from '@letterbox/client/message-port'
 import { webSocketTransport } from '@letterbox/client/websocket'
 import type { Queries, Query } from '@letterbox/protocol'
 import { useState, useSyncExternalStore } from 'react'
@@ -18,12 +20,21 @@ coreUrl.protocol = coreUrl.protocol === 'https:' ? 'wss:' : 'ws:'
 let lost: string | null = null
 const lostWatchers = new Set<() => void>()
 
-const socket = webSocketTransport(coreUrl.href)
-/** The WebSocket transport, plus a note of why it ended for `useLost`. */
+declare global {
+  interface Window {
+    /** Set by the desktop shell's preload. Absent in a plain browser tab. */
+    letterbox?: ShellBridge
+  }
+}
+
+const connection = window.letterbox
+  ? messagePortTransport(shellPort(window.letterbox))
+  : webSocketTransport(coreUrl.href)
+/** The connection, plus a note of why it ended for `useLost`. */
 const transport: Transport = {
-  send: socket.send,
+  send: connection.send,
   listen: (listener) =>
-    socket.listen({
+    connection.listen({
       receive: listener.receive,
       end: (error) => {
         listener.end(error)
