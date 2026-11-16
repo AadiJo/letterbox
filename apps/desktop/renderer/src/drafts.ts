@@ -2,7 +2,16 @@
 // between conversations and screens. The composer reads and edits its draft here, and
 // sending.ts takes it from here when it goes. Nothing else holds a draft.
 
-import type { AccountId, Draft, Message, MessageId, Person, ThreadDetail, ThreadId } from '@letterbox/protocol'
+import type {
+  AccountId,
+  ChangeId,
+  Draft,
+  Message,
+  MessageId,
+  Person,
+  ThreadDetail,
+  ThreadId,
+} from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 
 /** One person on the To, Cc or Bcc line. `name` is only for the chip. The core gets the address. */
@@ -29,12 +38,20 @@ export type Problem = { at: Field | 'send'; text: string }
 
 /**
  * A conversation's draft. `open` shows the docked editor and `collapsed` the bar under the
- * thread. `submitting` waits for the core's answer to Send. The core's change id exists only
- * once it accepts, and from then on sending.ts owns the reply, so no draft carries one.
+ * thread. `submitting` waits for the core's answer to Send under `change`. `checking` lost
+ * that answer: the core may hold the reply, so it cannot be sent again, only asked about
+ * under the same change (sending.ts). Once the core accepts, the draft goes and sending.ts
+ * owns the reply.
  */
 export type Composer =
   | { state: 'open' | 'collapsed'; reply: Reply; extra: boolean; problem: Problem | null }
-  | { state: 'submitting'; reply: Reply; extra: boolean }
+  | { state: 'submitting' | 'checking'; reply: Reply; extra: boolean; change: ChangeId }
+
+/** True while the draft waits on the core, and must not change or go again. */
+export const isBusy = (
+  composer: Composer | undefined,
+): composer is Extract<Composer, { state: 'submitting' | 'checking' }> =>
+  composer?.state === 'submitting' || composer?.state === 'checking'
 
 const drafts = new Map<ThreadId, Composer>()
 const watchers = new Set<() => void>()
@@ -133,7 +150,7 @@ export function newReply(thread: ThreadDetail, all: boolean, before?: Message): 
  */
 export function openReply(thread: ThreadDetail, all: boolean) {
   const current = drafts.get(thread.id)
-  if (current?.state === 'submitting') return
+  if (isBusy(current)) return
   const fresh = newReply(thread, all)
   if (!current && !fresh) return
   opening = thread.id
@@ -149,14 +166,39 @@ export function openReply(thread: ThreadDetail, all: boolean) {
   set(thread.id, { ...current, state: 'open', reply: { ...reply, cc }, extra: current.extra || cc.length > 0 })
 }
 
-/** Puts a reply back in the editor, as after an undo or for "Edit and send again". A draft with text of its own wins. */
+/** Replies waiting to come back to a conversation whose draft waits on the core. They join it once it settles. */
+const waiting = new Map<ThreadId, Reply[]>()
+
+/** Everyone in `first`, then anyone in `then` who is not already there. */
+const union = (first: readonly Recipient[], then: readonly Recipient[]) => [
+  ...first,
+  ...then.filter((person) => !first.some((had) => sameAddress(had, person))),
+]
+
+/**
+ * Puts a reply back in the editor, as after an undo or for "Edit and send again". No text is
+ * ever lost: over a newer draft, the reply's text comes first and the newer draft's after
+ * it, below a blank line, and the newer draft gains the reply's people it lacks. While the
+ * newer draft waits on the core, the reply waits too (`settle`).
+ */
 export function restore(id: ThreadId, reply: Reply) {
   const current = drafts.get(id)
-  if (current?.state === 'submitting') return
+  if (isBusy(current)) {
+    waiting.set(id, [...(waiting.get(id) ?? []), reply])
+    return
+  }
   opening = id
-  if (current && current.reply.text.trim() !== '') return set(id, { ...current, state: 'open' })
-  const extra = reply.cc.length > 0 || reply.bcc.length > 0
-  set(id, { state: 'open', reply, extra, problem: null })
+  const joined = current
+    ? {
+        ...current.reply,
+        to: union(reply.to, current.reply.to),
+        cc: union(reply.cc, current.reply.cc),
+        bcc: union(reply.bcc, current.reply.bcc),
+        text: [reply.text, current.reply.text].filter((text) => text.trim() !== '').join('\n\n'),
+      }
+    : reply
+  const extra = (current?.extra ?? false) || joined.cc.length > 0 || joined.bcc.length > 0
+  set(id, { state: 'open', reply: joined, extra, problem: null })
 }
 
 /** Changes the open draft. Any problem shown goes, since the user is fixing it. */
@@ -187,19 +229,29 @@ export function flag(id: ThreadId, reply: Reply, problem: Problem) {
   if (current?.state === 'open') set(id, { ...current, reply, problem })
 }
 
-/** Marks the draft as handed to the core. Only sending.ts calls this, and then `settle`. */
-export function submit(id: ThreadId, reply: Reply) {
+/** Marks the open draft as handed to the core under `change`. Only sending.ts calls this, and then `settle`. */
+export function submit(id: ThreadId, reply: Reply, change: ChangeId) {
   const current = drafts.get(id)
-  if (current?.state !== 'open') return false
-  set(id, { state: 'submitting', reply, extra: current.extra })
-  return true
+  if (current?.state === 'open') set(id, { state: 'submitting', reply, extra: current.extra, change })
 }
 
-/** Ends a submit: the core accepted it, so the draft goes, or it did not, so the editor shows why. */
+/**
+ * Marks `reply` as sent under `change` with no answer known: the answer was lost, or this is
+ * a reload asking again. Only sending.ts calls this, and `settle` once the core says.
+ */
+export function unsure(id: ThreadId, reply: Reply, change: ChangeId) {
+  const current = drafts.get(id)
+  set(id, { state: 'checking', reply, extra: current?.extra ?? reply.cc.length + reply.bcc.length > 0, change })
+}
+
+/** Ends a submit or a check: the core accepted it, so the draft goes, or it did not, so the editor shows why. */
 export function settle(id: ThreadId, problem: Problem | null) {
   const current = drafts.get(id)
-  if (current?.state !== 'submitting') return
+  if (!isBusy(current)) return
   set(id, problem ? { state: 'open', reply: current.reply, extra: current.extra, problem } : null)
+  const queued = waiting.get(id) ?? []
+  waiting.delete(id)
+  for (const reply of queued) restore(id, reply)
 }
 
 /**

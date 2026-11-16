@@ -93,7 +93,7 @@ function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { 
   }
   const { reply } = composer
   const problem = composer.state === 'open' ? composer.problem : null
-  const busy = composer.state === 'submitting'
+  const busy = composer.state !== 'open'
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
@@ -163,7 +163,11 @@ function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { 
               {SEND_KEY}
             </kbd>
           </button>
-          {problem?.at === 'send' ? (
+          {composer.state === 'checking' ? (
+            <p role="status" data-field="send-checking" className="truncate text-[12.5px] text-fg2">
+              Checking whether this was sent…
+            </p>
+          ) : problem?.at === 'send' ? (
             <p
               role="alert"
               data-field="send-problem"

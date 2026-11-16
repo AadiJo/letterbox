@@ -11,7 +11,8 @@ import { Reader } from './Reader.tsx'
 import { threadDetail, threadRecord, useThread } from './threads.ts'
 import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
-import { notify, undo, UNDO_KEY, withdraw } from './undo.ts'
+import { undoSend } from './sending.ts'
+import { hasNotice, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
 
 /** What App hands every screen. */
 export type Chrome = {
@@ -89,10 +90,13 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     if (thread && detail && canReply(thread, mail)) openReply(detail, all)
   }
 
-  /** Undoes the action on the toast, if it can be. Once the core accepts, its conversation is back and opens again. */
+  /**
+   * Undoes what the toast shows: the last action's notice, or else the reply in its undo
+   * window. Once the core accepts, its conversation is back and opens again.
+   */
   const undoLast = async () => {
     const started = generation.current
-    const id = await undo()
+    const id = hasNotice() ? await undo() : await undoSend()
     if (!id || !live.current) return
     release(id)
     if (generation.current === started) select(id)

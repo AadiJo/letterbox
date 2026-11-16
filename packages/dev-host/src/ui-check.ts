@@ -10,7 +10,7 @@
 //   many          `pnpm dev` with 6,000 conversations: scrolls All mail top to bottom (ui/scroll.ts)
 //   first sync    the dev host's parts in this process, with snapshot pages held (ui/first-sync.ts)
 //   rollback      the same parts, with an archive the provider refuses (ui/rollback.ts)
-//   reply         the same parts: the docked reply editor, sending, undo and a refused send (ui/reply.ts)
+//   reply         the same parts: the docked reply editor, sending, undo, a refused send and a lost answer (ui/reply.ts)
 // Every process a run started must be gone at its end.
 //
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
