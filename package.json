@@ -10,9 +10,10 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "scenarios": "node packages/harness/src/run.ts",
+    "check:app-host": "node packages/harness/src/app-host.ts",
     "bench": "node packages/harness/src/bench.ts",
     "check:rust": "cargo xtask provider-names && cargo xtask file-size && cargo xtask protocol-ts --check && cargo fmt --check && cargo clippy --all-targets --quiet -- -D warnings && cargo test --quiet --package xtask",
-    "check": "pnpm fmt:check && pnpm typecheck && pnpm lint && pnpm check:rust && pnpm lint:selftest && pnpm selfcheck:sim-provider && pnpm selfcheck:client && pnpm scenarios && pnpm scenarios:selftest",
+    "check": "pnpm fmt:check && pnpm typecheck && pnpm lint && pnpm check:rust && pnpm lint:selftest && pnpm selfcheck:sim-provider && pnpm selfcheck:client && pnpm scenarios && pnpm check:app-host && pnpm scenarios:selftest",
     "selfcheck:sim-provider": "node packages/sim-provider/src/selfcheck.ts",
     "selfcheck:client": "node packages/client/src/selfcheck.ts",
     "scenarios:selftest": "node packages/harness/src/mutations.ts"
