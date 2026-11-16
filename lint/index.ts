@@ -6,6 +6,7 @@
 
 import type { Plugin } from '@oxlint/plugins'
 import noCrossPackageRelativeImport from './rules/no-cross-package-relative-import.ts'
+import noNodeInRenderer from './rules/no-node-in-renderer.ts'
 import noProviderNames from './rules/no-provider-names.ts'
 import noStdoutInCore from './rules/no-stdout-in-core.ts'
 import requireSuppressionReason from './rules/require-suppression-reason.ts'
@@ -17,6 +18,7 @@ export default {
   meta: { name: 'letterbox' },
   rules: {
     'no-cross-package-relative-import': noCrossPackageRelativeImport,
+    'no-node-in-renderer': noNodeInRenderer,
     'no-provider-names': noProviderNames,
     'no-stdout-in-core': noStdoutInCore,
     'require-suppression-reason': requireSuppressionReason,

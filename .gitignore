@@ -2,8 +2,11 @@ node_modules
 *.tsbuildinfo
 .DS_Store
 
-# Written by `pnpm scenarios`: one transcript per scenario run.
+# Written by `pnpm scenarios` and `pnpm check:ui`: transcripts, screenshots and a trace.
 artifacts
+
+# The dev host's state (`pnpm dev`) and the worktree setup markers. See packages/dev-host.
+.letterbox
 
 # Cargo's build output.
 target

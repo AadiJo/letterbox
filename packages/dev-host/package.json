@@ -1,0 +1,16 @@
+{
+  "name": "@letterbox/dev-host",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@letterbox/client": "workspace:*",
+    "@letterbox/protocol": "workspace:*",
+    "@letterbox/sim-provider": "workspace:*",
+    "vite": "^8.3.8",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2",
+    "playwright": "1.64.0"
+  }
+}
