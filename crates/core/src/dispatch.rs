@@ -9,9 +9,9 @@ use letterbox_protocol::{
     Refusal, Request, RequestId, Response, Rev,
 };
 
+use crate::Inner;
 use crate::changes::{Edit, resolve, targets};
 use crate::world::{ChangeOutcome, ChangeRecord, ThreadRecord, put_change, put_thread};
-use crate::{Inner, Subscription};
 
 impl Inner {
     pub(crate) fn send(&self, message: CoreMessage) {
@@ -160,14 +160,7 @@ impl Inner {
                     rev: self.store.rev(),
                 });
             }
-            ClientMessage::Subscribe { sub, query } => {
-                let subscription = Subscription {
-                    query,
-                    sent: String::new(),
-                };
-                self.state.borrow_mut().subscriptions.insert(sub, subscription);
-                self.flush();
-            }
+            ClientMessage::Subscribe { sub, query } => self.subscribe(sub, query),
             ClientMessage::Unsubscribe { sub } => {
                 self.state.borrow_mut().subscriptions.shift_remove(&sub);
             }

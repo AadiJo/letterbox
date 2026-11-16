@@ -311,11 +311,25 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'saved before it exits',
   },
   {
-    name: 'the mailbox filter reads what the provider holds and misses pending changes',
-    file: core('views.rs'),
-    find: 'records().any(|record| pending.view_state(record).mailboxes.contains(mailbox))',
-    replace: 'records().any(|record| record.server.mailboxes.contains(mailbox))',
+    name: 'an open list keeps a thread after it leaves the filter',
+    file: core('live_view.rs'),
+    find: 'moved |= listed.remove(&place(before));',
+    replace: 'moved |= listed.contains(&place(before));',
+    scenarios: 'open list follows',
+  },
+  {
+    name: 'a pending change does not mark its threads, so open lists show them unchanged',
+    file: core('world.rs'),
+    find: '    touch_op(&mut world.touched, &world.messages, record.op.as_ref());\n    world.changes.0.insert',
+    replace: '    world.changes.0.insert',
     scenarios: 'each list filter agrees',
+  },
+  {
+    name: 'an open conversation shows a body loading after the fetch failed',
+    file: core('live_view.rs'),
+    find: 'touched || loading_changed',
+    replace: 'touched',
+    scenarios: 'cannot load offline',
   },
   {
     name: 'the session goes back into the account record',
@@ -368,7 +382,7 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'a provider ref reaches the UI',
-    file: core('views.rs'),
+    file: core('rows.rs'),
     find: 'snippet: last.facts.preview.clone(),',
     replace: 'snippet: last.r#ref.as_str().to_owned(),',
     scenarios: 'first sync shows',

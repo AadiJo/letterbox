@@ -30,9 +30,11 @@ pub mod adapter;
 mod changes;
 pub mod clock;
 mod dispatch;
+mod live_view;
 mod maps;
 mod queue;
 mod reconcile;
+mod rows;
 pub mod secrets;
 mod sign_in;
 mod snapshot;
@@ -41,7 +43,11 @@ mod subscriptions;
 mod sync;
 mod turns;
 mod views;
+mod work;
 mod world;
+
+#[cfg(test)]
+mod budget;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -53,13 +59,16 @@ use tokio_util::task::TaskTracker;
 
 use crate::adapter::{Adapter, AdapterFactory};
 use crate::clock::Environment;
+use crate::live_view::LiveView;
 use crate::maps::{HashMap, HashSet, IndexMap};
 use crate::queue::Job;
+use crate::rows::Rows;
 use crate::secrets::Secrets;
 use crate::sign_in::Attempts;
 use crate::snapshot::Backfill;
 use crate::store::Store;
 pub use crate::store::StoreError;
+use crate::work::Meter;
 use crate::world::{AccountRecord, Health, World, load_world, put_account};
 
 pub struct CoreOptions {
@@ -96,6 +105,11 @@ impl Core {
                  [profile.dev] and [profile.release] in Cargo.toml."
             );
         }
+        Core::open(options)
+    }
+
+    /// `new` without its check on how the program handles a panic. Tests unwind, so they start the core here.
+    fn open(options: CoreOptions) -> Result<Core, StoreError> {
         let store = Store::open(&options.data_path)?;
         let mut world = load_world(&store);
         let factories: IndexMap<String, Rc<dyn AdapterFactory>> = options
@@ -156,6 +170,7 @@ impl Core {
                 send: options.send,
                 state: RefCell::new(State {
                     world,
+                    rows: Rows::default(),
                     adapters,
                     subscriptions: IndexMap::default(),
                     syncing: HashSet::default(),
@@ -167,6 +182,7 @@ impl Core {
                 }),
                 queues: RefCell::new(HashMap::default()),
                 work: TaskTracker::new(),
+                meter: Meter::default(),
             }),
         })
     }
@@ -214,11 +230,15 @@ struct Inner {
     queues: RefCell<HashMap<AccountId, mpsc::UnboundedSender<Job>>>,
     /// Every queued job and request task that has not finished. `Core::close` waits for it to empty.
     work: TaskTracker,
+    /// The view work done so far, which budget.rs holds to a budget.
+    meter: Meter,
 }
 
 /// Everything that changes while the core runs. Borrow it only between awaits.
 struct State {
     world: World,
+    /// Every thread's row, rebuilt for what each commit touched. `flush` keeps it in step with `world`.
+    rows: Rows,
     /// The adapter serving each signed-in account.
     adapters: HashMap<AccountId, Linked>,
     /// In the order they were made, which is the order updates go out.
@@ -243,6 +263,8 @@ struct Linked {
 
 struct Subscription {
     query: Query,
+    /// None until the first `flush` after the subscribe opens it.
+    view: Option<LiveView>,
     /// The JSON of the last answer sent, so an unchanged answer is not sent again.
     sent: String,
 }

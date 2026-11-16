@@ -1,18 +1,22 @@
 //! Commits and the updates they send. `commit` is the only way the world changes,
-//! and after each one `flush` sends every subscription whose answer changed, then
-//! starts loading the bodies a subscribed conversation shows.
+//! and after each one `flush` rebuilds the rows the commit touched (see rows.rs), answers
+//! again every subscription whose view says the commit could change its answer (see
+//! live_view.rs), sends the answers that did change, then starts loading the bodies a
+//! subscribed conversation shows.
 
 use std::rc::Rc;
 
 use letterbox_protocol::{
-    AccountErrorReason, AccountId, AccountStatus, Body, CoreMessage, MessageId, Query, Rev, SignInOption, Unavailable,
+    AccountErrorReason, AccountId, AccountStatus, Body, CoreMessage, MessageId, Query, Rev, SignInOption,
+    SubscriptionId, Unavailable,
 };
 
+use crate::live_view::LiveView;
 use crate::maps::{HashMap, HashSet};
 use crate::store::Transaction;
-use crate::views::{Live, evaluate};
+use crate::views::Live;
 use crate::world::{AccountRecord, Health, MessageRecord, World, messages_of};
-use crate::{Inner, Linked, State};
+use crate::{Inner, Linked, State, Subscription};
 
 /// What a view needs from outside the world while the core answers it.
 struct LiveState<'a> {
@@ -65,6 +69,17 @@ impl Live for LiveState<'_> {
 }
 
 impl Inner {
+    /// Adds a subscription and sends its first answer.
+    pub(crate) fn subscribe(self: &Rc<Self>, sub: SubscriptionId, query: Query) {
+        let subscription = Subscription {
+            query,
+            view: None,
+            sent: String::new(),
+        };
+        self.state.borrow_mut().subscriptions.insert(sub, subscription);
+        self.flush();
+    }
+
     /// Sends an update to every subscription whose answer changed, then starts loading bodies someone is looking at.
     pub(crate) fn flush(self: &Rc<Self>) {
         let rev = self.store.rev();
@@ -73,6 +88,7 @@ impl Inner {
             let mut state = self.state.borrow_mut();
             let State {
                 world,
+                rows,
                 adapters,
                 subscriptions,
                 syncing,
@@ -86,8 +102,21 @@ impl Inner {
                 adapters: &*adapters,
                 options: &self.options,
             };
+            let touched = world.take_touched();
+            let refresh = rows.refresh(world, touched, &self.meter);
             for (sub, entry) in subscriptions.iter_mut() {
-                let update = evaluate(world, &entry.query, &live);
+                let view = match &mut entry.view {
+                    Some(view) => {
+                        if !view.catch_up(&refresh, world, rows, &live, &self.meter) {
+                            continue;
+                        }
+                        view
+                    }
+                    None => entry
+                        .view
+                        .insert(LiveView::open(&entry.query, world, rows, &live, &self.meter)),
+                };
+                let update = view.answer(world, rows, &live);
                 let text = serde_json::to_string(&update).expect("updates are plain data");
                 if text == entry.sent {
                     continue;

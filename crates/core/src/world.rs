@@ -1,6 +1,8 @@
 //! Everything the core knows, held in memory and mirrored to the store.
 //! Every change to a record goes through a function in this file, which updates
-//! the lookup tables and writes the record in the caller's transaction.
+//! the lookup tables, writes the record in the caller's transaction, and marks what
+//! it touched for the views (see `Touched`). Outside this file the tables are
+//! read-only (see `Table`), so no change can skip those steps.
 //!
 //! Maps that are read in order are IndexMaps, and removal uses `shift_remove`,
 //! so iteration follows insertion order. Pending changes are pushed in that
@@ -9,6 +11,8 @@
 use letterbox_protocol::{
     AccountId, BlobId, ChangeId, ChangeResult, MailboxId, MessageId, Rev, Role, ThreadId, Time, Turn,
 };
+use std::ops::Deref;
+
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::{
@@ -198,20 +202,57 @@ record!(
     ChangeRecord in "changes" by ChangeId,
 );
 
+/// One of the world's tables. Outside this file it can only be read. To change a record,
+/// call the put_ or remove_ function for it below.
+pub struct Table<T>(T);
+
+impl<T> Deref for Table<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
 pub struct World {
-    pub accounts: IndexMap<AccountId, AccountRecord>,
-    pub mailboxes: IndexMap<MailboxId, MailboxRecord>,
-    pub messages: IndexMap<MessageId, MessageRecord>,
-    pub threads: IndexMap<ThreadId, ThreadRecord>,
+    pub accounts: Table<IndexMap<AccountId, AccountRecord>>,
+    pub mailboxes: Table<IndexMap<MailboxId, MailboxRecord>>,
+    pub messages: Table<IndexMap<MessageId, MessageRecord>>,
+    pub threads: Table<IndexMap<ThreadId, ThreadRecord>>,
     /// In the order they were accepted.
-    pub changes: IndexMap<ChangeId, ChangeRecord>,
-    pub message_by_ref: HashMap<String, MessageId>,
-    pub mailbox_by_ref: HashMap<String, MailboxId>,
-    pub messages_by_thread: HashMap<ThreadId, IndexSet<MessageId>>,
+    pub changes: Table<IndexMap<ChangeId, ChangeRecord>>,
+    pub message_by_ref: Table<HashMap<String, MessageId>>,
+    pub mailbox_by_ref: Table<HashMap<String, MailboxId>>,
+    pub messages_by_thread: Table<HashMap<ThreadId, IndexSet<MessageId>>>,
     /// Messages by their own Message-ID header.
-    pub messages_by_message_id: HashMap<String, IndexSet<MessageId>>,
+    pub messages_by_message_id: Table<HashMap<String, IndexSet<MessageId>>>,
     /// Messages by each Message-ID they reply to.
-    pub messages_by_reference: HashMap<String, IndexSet<MessageId>>,
+    pub messages_by_reference: Table<HashMap<String, IndexSet<MessageId>>>,
+    touched: Touched,
+}
+
+/// What changed since the views last caught up, so they rebuild only that (see rows.rs).
+#[derive(Default)]
+pub struct Touched {
+    /// Threads whose record, messages or pending changes changed.
+    pub threads: IndexSet<ThreadId>,
+    /// True when something every row reads changed: which accounts exist or their addresses,
+    /// or which mailboxes exist. True after loading too, before the views have read anything.
+    pub everything: bool,
+}
+
+impl World {
+    /// What changed since the last call. Only the views call this, once per commit.
+    pub fn take_touched(&mut self) -> Touched {
+        std::mem::take(&mut self.touched)
+    }
+}
+
+/// Marks the threads of the messages an Op names. Those messages look different while it is pending.
+fn touch_op(touched: &mut Touched, messages: &IndexMap<MessageId, MessageRecord>, op: Option<&Op>) {
+    let named = op.map_or(&[][..], Op::message_ids).iter();
+    for record in named.filter_map(|id| messages.get(id)) {
+        touched.threads.insert(record.thread_id.clone());
+    }
 }
 
 /// The id of one attachment: its message and its place in the message.
@@ -241,34 +282,39 @@ fn index(world: &mut World, record: &MessageRecord) {
     let account = &record.account_id;
     world
         .message_by_ref
+        .0
         .insert(scoped(account, record.r#ref.as_str()), record.id.clone());
-    add_to(&mut world.messages_by_thread, record.thread_id.clone(), &record.id);
+    add_to(&mut world.messages_by_thread.0, record.thread_id.clone(), &record.id);
     if let Some(message_id) = &record.facts.message_id {
         add_to(
-            &mut world.messages_by_message_id,
+            &mut world.messages_by_message_id.0,
             scoped(account, message_id),
             &record.id,
         );
     }
     for reference in &record.facts.references {
-        add_to(&mut world.messages_by_reference, scoped(account, reference), &record.id);
+        add_to(
+            &mut world.messages_by_reference.0,
+            scoped(account, reference),
+            &record.id,
+        );
     }
 }
 
 fn unindex(world: &mut World, record: &MessageRecord) {
     let account = &record.account_id;
-    world.message_by_ref.remove(&scoped(account, record.r#ref.as_str()));
-    drop_from(&mut world.messages_by_thread, &record.thread_id, &record.id);
+    world.message_by_ref.0.remove(&scoped(account, record.r#ref.as_str()));
+    drop_from(&mut world.messages_by_thread.0, &record.thread_id, &record.id);
     if let Some(message_id) = &record.facts.message_id {
         drop_from(
-            &mut world.messages_by_message_id,
+            &mut world.messages_by_message_id.0,
             &scoped(account, message_id),
             &record.id,
         );
     }
     for reference in &record.facts.references {
         drop_from(
-            &mut world.messages_by_reference,
+            &mut world.messages_by_reference.0,
             &scoped(account, reference),
             &record.id,
         );
@@ -277,15 +323,17 @@ fn unindex(world: &mut World, record: &MessageRecord) {
 
 /// Loads every record from the store and builds the lookup tables.
 pub fn load_world(store: &Store) -> World {
-    fn by_id<R: Record>(store: &Store) -> IndexMap<R::Id, R>
+    fn by_id<R: Record>(store: &Store) -> Table<IndexMap<R::Id, R>>
     where
         R::Id: Clone + std::hash::Hash + Eq,
     {
-        store
-            .load::<R>()
-            .into_iter()
-            .map(|record| (record.id().clone(), record))
-            .collect()
+        Table(
+            store
+                .load::<R>()
+                .into_iter()
+                .map(|record| (record.id().clone(), record))
+                .collect(),
+        )
     }
     let mut world = World {
         accounts: by_id(store),
@@ -293,15 +341,20 @@ pub fn load_world(store: &Store) -> World {
         messages: by_id(store),
         threads: by_id(store),
         changes: by_id(store),
-        message_by_ref: HashMap::default(),
-        mailbox_by_ref: HashMap::default(),
-        messages_by_thread: HashMap::default(),
-        messages_by_message_id: HashMap::default(),
-        messages_by_reference: HashMap::default(),
+        message_by_ref: Table(HashMap::default()),
+        mailbox_by_ref: Table(HashMap::default()),
+        messages_by_thread: Table(HashMap::default()),
+        messages_by_message_id: Table(HashMap::default()),
+        messages_by_reference: Table(HashMap::default()),
+        touched: Touched {
+            everything: true,
+            ..Touched::default()
+        },
     };
     for record in world.mailboxes.values() {
         world
             .mailbox_by_ref
+            .0
             .insert(scoped(&record.account_id, record.r#ref.as_str()), record.id.clone());
     }
     let messages: Vec<MessageRecord> = world.messages.values().cloned().collect();
@@ -313,26 +366,32 @@ pub fn load_world(store: &Store) -> World {
 
 pub fn put_account(world: &mut World, tx: &Transaction<'_>, record: AccountRecord) {
     tx.put(&record);
-    world.accounts.insert(record.id.clone(), record);
+    let old = world.accounts.get(&record.id);
+    world.touched.everything |= old.is_none_or(|old| old.address != record.address);
+    world.accounts.0.insert(record.id.clone(), record);
 }
 
 pub fn remove_account(world: &mut World, tx: &Transaction<'_>, id: &AccountId) {
-    world.accounts.shift_remove(id);
+    world.touched.everything |= world.accounts.0.shift_remove(id).is_some();
     tx.remove::<AccountRecord>(id);
 }
 
 pub fn put_mailbox(world: &mut World, tx: &Transaction<'_>, record: MailboxRecord) {
     tx.put(&record);
+    world.touched.everything |= !world.mailboxes.contains_key(&record.id);
     world
         .mailbox_by_ref
+        .0
         .insert(scoped(&record.account_id, record.r#ref.as_str()), record.id.clone());
-    world.mailboxes.insert(record.id.clone(), record);
+    world.mailboxes.0.insert(record.id.clone(), record);
 }
 
 pub fn remove_mailbox(world: &mut World, tx: &Transaction<'_>, id: &MailboxId) {
-    if let Some(record) = world.mailboxes.shift_remove(id) {
+    if let Some(record) = world.mailboxes.0.shift_remove(id) {
+        world.touched.everything = true;
         world
             .mailbox_by_ref
+            .0
             .remove(&scoped(&record.account_id, record.r#ref.as_str()));
     }
     tx.remove::<MailboxRecord>(id);
@@ -341,16 +400,19 @@ pub fn remove_mailbox(world: &mut World, tx: &Transaction<'_>, id: &MailboxId) {
 /// Writes a message. The lookups of the record it replaces, if any, are cleared first.
 pub fn put_message(world: &mut World, tx: &Transaction<'_>, record: MessageRecord) {
     if let Some(replaced) = world.messages.get(&record.id).cloned() {
+        world.touched.threads.insert(replaced.thread_id.clone());
         unindex(world, &replaced);
     }
     tx.put(&record);
     index(world, &record);
-    world.messages.insert(record.id.clone(), record);
+    world.touched.threads.insert(record.thread_id.clone());
+    world.messages.0.insert(record.id.clone(), record);
 }
 
 /// Removes a message and returns it, if it was there.
 pub fn remove_message(world: &mut World, tx: &Transaction<'_>, id: &MessageId) -> Option<MessageRecord> {
-    let record = world.messages.shift_remove(id)?;
+    let record = world.messages.0.shift_remove(id)?;
+    world.touched.threads.insert(record.thread_id.clone());
     unindex(world, &record);
     tx.remove::<MessageRecord>(id);
     Some(record)
@@ -358,21 +420,28 @@ pub fn remove_message(world: &mut World, tx: &Transaction<'_>, id: &MessageId) -
 
 pub fn put_thread(world: &mut World, tx: &Transaction<'_>, record: ThreadRecord) {
     tx.put(&record);
-    world.threads.insert(record.id.clone(), record);
+    world.touched.threads.insert(record.id.clone());
+    world.threads.0.insert(record.id.clone(), record);
 }
 
 pub fn remove_thread(world: &mut World, tx: &Transaction<'_>, id: &ThreadId) {
-    world.threads.shift_remove(id);
+    world.touched.threads.insert(id.clone());
+    world.threads.0.shift_remove(id);
     tx.remove::<ThreadRecord>(id);
 }
 
 pub fn put_change(world: &mut World, tx: &Transaction<'_>, record: ChangeRecord) {
     tx.put(&record);
-    world.changes.insert(record.id.clone(), record);
+    let old = world.changes.get(&record.id).and_then(|old| old.op.as_ref());
+    touch_op(&mut world.touched, &world.messages, old);
+    touch_op(&mut world.touched, &world.messages, record.op.as_ref());
+    world.changes.0.insert(record.id.clone(), record);
 }
 
 pub fn remove_change(world: &mut World, tx: &Transaction<'_>, id: &ChangeId) {
-    world.changes.shift_remove(id);
+    if let Some(record) = world.changes.0.shift_remove(id) {
+        touch_op(&mut world.touched, &world.messages, record.op.as_ref());
+    }
     tx.remove::<ChangeRecord>(id);
 }
 
