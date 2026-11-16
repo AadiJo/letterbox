@@ -1,0 +1,237 @@
+//! Every thread's row and every mailbox's counts, kept between commits. Each commit marks
+//! the threads it touched (see `Touched` in world.rs), and `refresh` rebuilds only those,
+//! so no view reads every thread to answer.
+//!
+//! In the core's tests every refresh also checks the kept rows against rows built afresh
+//! (see budget.rs), so a change to the world that marks too little fails a check instead of
+//! showing stale rows. Only tests check: the scenarios' transcripts depend on how fast the
+//! core answers, and a full rebuild per commit slows it enough to change them.
+
+use std::borrow::Cow;
+
+use letterbox_protocol::{MailboxId, Person, ThreadId, ThreadSummary};
+
+use crate::changes::Pending;
+use crate::maps::{HashMap, IndexMap, IndexSet};
+use crate::turns::{TurnMessage, decide_turn, is_automated};
+use crate::views::{person, same};
+use crate::work::Meter;
+use crate::world::{MessageRecord, MessageState, Touched, World, messages_of};
+
+/// How many messages a mailbox holds, as the user sees them, and how many of those are unread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub total: u64,
+    pub unread: u64,
+}
+
+/// What one thread adds to the views.
+#[derive(Debug, Default, PartialEq)]
+struct Row {
+    /// None when the thread has no row (see `summarize`). Its messages still count in their mailboxes.
+    summary: Option<ThreadSummary>,
+    /// What its messages add to each mailbox's counts.
+    counts: Vec<(MailboxId, Counts)>,
+}
+
+/// A thread whose row changed in a refresh, and its row before.
+pub struct Changed {
+    pub id: ThreadId,
+    pub before: Option<ThreadSummary>,
+}
+
+/// What a refresh rebuilt.
+pub enum Refresh {
+    /// Every row, because something every row reads changed. Every view answers again.
+    Everything,
+    /// The rows of the threads a commit touched. `changed` lists the ones whose row is different now.
+    Threads {
+        touched: IndexSet<ThreadId>,
+        changed: Vec<Changed>,
+    },
+}
+
+#[derive(Default)]
+pub struct Rows {
+    rows: HashMap<ThreadId, Row>,
+    /// The sum of every row's counts. A mailbox no message is in has no entry.
+    counts: HashMap<MailboxId, Counts>,
+}
+
+impl Rows {
+    /// Rebuilds the rows of what changed since the last refresh. Call it before reading
+    /// rows after any change to the world.
+    pub fn refresh(&mut self, world: &World, touched: Touched, meter: &Meter) -> Refresh {
+        if touched.everything {
+            *self = Rows::build(world, meter);
+            return Refresh::Everything;
+        }
+        let mut changed = Vec::new();
+        if !touched.threads.is_empty() {
+            let pending = Pending::of(world);
+            for id in &touched.threads {
+                let row = row(world, id, &pending, meter);
+                let before = self.rows.remove(id).unwrap_or_default();
+                self.add(&before.counts, Counts::minus);
+                self.add(&row.counts, Counts::plus);
+                if row.summary != before.summary {
+                    changed.push(Changed {
+                        id: id.clone(),
+                        before: before.summary,
+                    });
+                }
+                if row.summary.is_some() || !row.counts.is_empty() {
+                    self.rows.insert(id.clone(), row);
+                }
+            }
+        }
+        if cfg!(test) {
+            self.check(world);
+        }
+        Refresh::Threads {
+            touched: touched.threads,
+            changed,
+        }
+    }
+
+    pub fn summary(&self, id: &ThreadId) -> Option<&ThreadSummary> {
+        self.rows.get(id)?.summary.as_ref()
+    }
+
+    /// Every thread that has a row, in no particular order.
+    pub fn summaries(&self) -> impl Iterator<Item = &ThreadSummary> {
+        self.rows.values().filter_map(|row| row.summary.as_ref())
+    }
+
+    pub fn counts(&self, mailbox: &MailboxId) -> Counts {
+        self.counts.get(mailbox).copied().unwrap_or_default()
+    }
+
+    /// Every row, built from the world as it is now.
+    fn build(world: &World, meter: &Meter) -> Rows {
+        let pending = Pending::of(world);
+        let ids: IndexSet<&ThreadId> = world.threads.keys().chain(world.messages_by_thread.keys()).collect();
+        let mut rows = Rows::default();
+        for id in ids {
+            let row = row(world, id, &pending, meter);
+            rows.add(&row.counts, Counts::plus);
+            rows.rows.insert(id.clone(), row);
+        }
+        rows.rows
+            .retain(|_, row| row.summary.is_some() || !row.counts.is_empty());
+        rows
+    }
+
+    fn add(&mut self, counts: &[(MailboxId, Counts)], apply: fn(Counts, Counts) -> Counts) {
+        for (mailbox, count) in counts {
+            let total = apply(self.counts(mailbox), *count);
+            if total == Counts::default() {
+                self.counts.remove(mailbox);
+            } else {
+                self.counts.insert(mailbox.clone(), total);
+            }
+        }
+    }
+
+    /// Panics when the kept rows differ from rows built afresh.
+    fn check(&self, world: &World) {
+        let fresh = Rows::build(world, &Meter::default());
+        assert!(
+            self.rows == fresh.rows && self.counts == fresh.counts,
+            "the rows kept between commits differ from rows built afresh, so a change to the world \
+             did not mark every thread it affects. Mark them in `Touched` from the put_ or remove_ \
+             function in world.rs that made the change."
+        );
+    }
+}
+
+impl Counts {
+    fn plus(self, other: Counts) -> Counts {
+        Counts {
+            total: self.total + other.total,
+            unread: self.unread + other.unread,
+        }
+    }
+
+    fn minus(self, other: Counts) -> Counts {
+        Counts {
+            total: self.total - other.total,
+            unread: self.unread - other.unread,
+        }
+    }
+}
+
+/// The row of one thread, from its messages as the user sees them.
+fn row<'a>(world: &'a World, id: &ThreadId, pending: &Pending<'a>, meter: &Meter) -> Row {
+    meter.summarized();
+    let records = messages_of(world, id);
+    let states: Vec<Cow<'a, MessageState>> = records.iter().map(|record| pending.view_state(record)).collect();
+    let mut counts: Vec<(MailboxId, Counts)> = Vec::new();
+    for state in &states {
+        let one = Counts {
+            total: 1,
+            unread: u64::from(state.unread),
+        };
+        for mailbox in &state.mailboxes {
+            match counts.iter_mut().find(|(id, _)| id == mailbox) {
+                Some((_, count)) => *count = count.plus(one),
+                None => counts.push((mailbox.clone(), one)),
+            }
+        }
+    }
+    Row {
+        summary: summarize(world, id, &records, &states, pending),
+        counts,
+    }
+}
+
+/// One row for a thread, or None when the thread or its account is gone, or it has no messages left.
+fn summarize(
+    world: &World,
+    thread_id: &ThreadId,
+    records: &[&MessageRecord],
+    states: &[Cow<'_, MessageState>],
+    pending: &Pending<'_>,
+) -> Option<ThreadSummary> {
+    let thread = world.threads.get(thread_id)?;
+    let account = world.accounts.get(&thread.account_id)?;
+    let (first, last) = (records.first()?, records.last()?);
+
+    let mut people: IndexMap<String, Person> = IndexMap::default();
+    for record in records {
+        let from = person(&record.facts.from, &account.address);
+        people.entry(from.address.to_lowercase()).or_insert(from);
+    }
+    let turn = decide_turn(
+        &records
+            .iter()
+            .map(|record| TurnMessage {
+                from_me: same(&record.facts.from.address, &account.address),
+                to_me: record.facts.to.iter().any(|to| same(&to.address, &account.address)),
+                to_addresses: record.facts.to.iter().map(|to| to.address.clone()).collect(),
+                automated: is_automated(&record.facts),
+            })
+            .collect::<Vec<_>>(),
+        thread.turn_override,
+    );
+    let mailbox_ids: IndexSet<&MailboxId> = states.iter().flat_map(|state| &state.mailboxes).collect();
+    Some(ThreadSummary {
+        id: thread.id.clone(),
+        account_id: account.id.clone(),
+        subject: first.facts.subject.clone(),
+        people: people.into_values().collect(),
+        snippet: last.facts.preview.clone(),
+        last_message_at: last.facts.sent_at.clone(),
+        message_count: records.len() as u64,
+        unread: states.iter().any(|state| state.unread),
+        flagged: states.iter().any(|state| state.flagged),
+        has_attachments: records.iter().any(|record| record.facts.has_attachments),
+        mailbox_ids: mailbox_ids
+            .into_iter()
+            .filter(|id| world.mailboxes.contains_key(*id))
+            .cloned()
+            .collect(),
+        turn,
+        pending: records.iter().any(|record| pending.touches(&record.id)),
+    })
+}

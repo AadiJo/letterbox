@@ -3,6 +3,7 @@
 //
 //   pnpm bench                                     the Rust core, release build
 //   pnpm bench --sizes 1000,10000 --runs 3         mailbox sizes and runs per size
+//   pnpm bench:scale                               10k and 100k messages, one run each
 //   pnpm bench --core "<command>" --label <name>   any other core program with the same arguments
 //
 // To compare with the TypeScript core this repo used to have (commit 1451819):
@@ -168,13 +169,16 @@ async function run(size: number): Promise<Phases> {
     await core.hello()
     phases['start (ms)'] = now() - at
 
-    // What a UI keeps open: the accounts, the mailbox list and the first page of the inbox.
+    // What a UI keeps open: the accounts, the mailbox list, the first page of the inbox and
+    // the People screen's first page, which filters by turn and so reads every thread's turn.
     const accounts = core.subscribe({ view: 'accounts' })
     await accounts.next()
     const mailboxes = core.subscribe({ view: 'mailboxes' })
     await mailboxes.next()
     const list = core.subscribe({ view: 'threads', filter: {}, offset: 0, limit: 50 })
     await list.next()
+    const people = core.subscribe({ view: 'threads', filter: { turn: 'mine' }, offset: 0, limit: 50 })
+    await people.next()
 
     const options = await core.query({ view: 'sign-in-options' })
     const password = options.find((option) => option.method === 'password')
@@ -216,6 +220,7 @@ async function run(size: number): Promise<Phases> {
 
     phases['peak memory (MB)'] = core.peakMegabytes()
     list.close()
+    people.close()
     at = now()
     await core.stop()
     phases['stop (ms)'] = now() - at
