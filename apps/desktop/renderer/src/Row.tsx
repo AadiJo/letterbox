@@ -2,12 +2,12 @@
 
 import type { Person, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { Flag, Hourglass, Paperclip, Reply } from 'lucide-react'
-import type { CSSProperties } from 'react'
 import { useNow } from './clock.ts'
+import { trackRow, useExit } from './motion.ts'
 import { useThread } from './threads.ts'
 import { age, isLate, listTime } from './time.ts'
 
-/** Every row's height in px. The windowed list places rows by it. */
+/** Every row's height in px. The windowed list sizes its scroll area by it. */
 export const ROW_HEIGHT = 73
 
 /**
@@ -32,31 +32,33 @@ type Props = {
   /** Draws the hairline above the row. Off for a section's first row and next to the selection. */
   divider: boolean
   onSelect: (id: ThreadId) => void
-  /** Absolute placement, for a windowed list. */
-  style?: CSSProperties
+  /** Shown only while it leaves: the list no longer has it (motion.ts `useHeld`). */
+  held: boolean
 }
 
-export function Row({ id, slot, selected, divider, onSelect, style }: Props) {
+export function Row({ id, slot, selected, divider, onSelect, held }: Props) {
   const thread = useThread(id)
   const now = useNow()
-  const base = 'relative mx-1.5 flex h-[73px] gap-2 rounded-lg pt-2 pr-3 pb-[9px] pl-2'
+  useExit(id, held)
+  // Clipped, so the row can fold closed when it leaves (motion.ts).
+  const base = 'relative mx-1.5 flex h-[73px] gap-2 overflow-hidden rounded-lg pt-2 pr-3 pb-[9px] pl-2'
   const line = divider
     ? "before:absolute before:top-0 before:right-1.5 before:left-7 before:h-px before:bg-hair before:content-['']"
     : ''
-  if (!thread) return <div role="option" aria-selected={selected} data-row={id} className={base} style={style} />
+  if (!thread) return <div ref={trackRow(id)} role="option" aria-selected={selected} data-row={id} className={base} />
 
   // The open conversation counts as read. Read rows step down in brightness, never in the sender's weight.
   const unread = thread.unread && !selected
   const late = slot === 'turn' && isLate(thread.lastMessageAt, now)
   return (
     <div
+      ref={trackRow(id)}
       role="option"
       aria-selected={selected}
       data-row={id}
       data-unread={unread}
       onClick={() => onSelect(id)}
       className={`${base} ${line} cursor-default ${selected ? 'bg-sel' : ''}`}
-      style={style}
     >
       <div className="flex w-3.5 flex-none justify-center pt-[5px]">
         {unread && <span className="size-2 rounded-full bg-blue" data-field="unread" />}

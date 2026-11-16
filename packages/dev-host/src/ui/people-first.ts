@@ -5,7 +5,7 @@ import type { SeedMessage } from '@letterbox/sim-provider/contract'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import type { Browser, Page } from 'playwright'
 import { join } from 'node:path'
-import { ARTIFACTS, capture, equal, openPage, SIZES } from './record.ts'
+import { appErrors, ARTIFACTS, capture, equal, openPage, SIZES } from './record.ts'
 
 const seed = devSeeds['people-first']
 const DAY = 86_400_000
@@ -244,6 +244,8 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await page.locator(`[data-row="${first}"]`).click()
   await page.keyboard.press('e')
   await waitForSubtitle(page, `${inbox - 1} conversations`)
+  // The row slides out and folds before it goes, and the next one opens as it folds.
+  await page.locator(`[data-row="${first}"]`).waitFor({ state: 'detached' })
   equal(await page.locator(`[data-row="${first}"]`).count(), 0, 'archiving with e takes the row out of Inbox')
   equal(
     await page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row'),
@@ -263,7 +265,7 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await page.waitForFunction(
     (top) =>
       [...document.querySelectorAll<HTMLElement>('[data-list="mail"] [role="option"]')].some(
-        (row) => Number.parseFloat(row.style.top) >= top,
+        (row) => row.offsetTop >= top,
       ),
     away,
   )
@@ -374,12 +376,6 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   const compiled = await (await fetch(new URL('src/Row.tsx', url))).text()
   equal(compiled.includes('compiler-runtime'), true, 'React Compiler compiles the renderer')
   equal(await page.getByRole('alert').count(), 0, 'the page never lost the core')
-  // The body frame's blocked script, loads and link log errors. They are the sandbox and the policy working.
-  const refusal = /Content Security Policy|in a sandboxed frame|sandboxed and the 'allow-scripts'/
-  equal(
-    errors.filter((error) => !refusal.test(error)),
-    [],
-    'the page logged no errors',
-  )
+  equal(appErrors(errors), [], 'the page logged no errors')
   await close()
 }

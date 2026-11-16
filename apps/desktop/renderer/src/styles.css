@@ -5,6 +5,7 @@
  * T3 Code's Graphite theme, dark, in a macOS Tahoe window. Dark mode only.
  * Text uses four neutral steps: fg (245), fg2 (210), muted (165), faint (140).
  * Blue is only for unread and progress. Amber is only for turns that waited past 7 days.
+ * Green is only for finished: the undo toast and an empty Your turn.
  * The default palette is cleared, so every color in the renderer is one of these.
  */
 @theme {
@@ -25,6 +26,7 @@
   --color-body: #e2e2e2;
   --color-blue: #4d9cff;
   --color-amber: #ff905e;
+  --color-green: #3fb871;
   --color-sel: #2c2c31;
   --color-pill: #2c2c2e;
   --color-pill-sel: #3e3e44;
@@ -35,6 +37,47 @@
 
   /* Below this width the sidebar collapses behind a toggle and search shrinks to an icon. */
   --breakpoint-wide: 1100px;
+
+  /*
+   * Motion, with motion.ts. Tailwind's own animations are cleared: they loop (spin, ping, pulse).
+   * Each one here runs once, takes 250 ms or less, and moves only transform and opacity.
+   */
+  --animate-*: initial;
+  /* The undo toast rises. */
+  --animate-rise: rise 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  /* A count that changed drops into place. */
+  --animate-tick: tick 140ms ease-out;
+  /* The empty Your turn fades in once the last row has folded. */
+  --animate-appear: appear 200ms ease-out;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  @keyframes tick {
+    from {
+      opacity: 0;
+      transform: translateY(-5px);
+    }
+  }
+  @keyframes appear {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+}
+
+/* Reduced motion makes every step instant. motion.ts checks the same setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 /* Inter's alternate digits and a single-storey a, as the design sets them. Classes cannot set these on the root. */
