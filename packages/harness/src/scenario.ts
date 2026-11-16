@@ -32,7 +32,7 @@ export type Scenario = {
   /** Creates a mailbox at the provider. What the scenario does to it is written to the transcript. */
   mailbox(seed: Seed): SimMailbox
   /** Starts the core. Call `stop` on it and call this again to restart over the same store. */
-  startCore(): CoreClient
+  startCore(options?: CoreOptions): CoreClient
   /** The account ids core-sim's stand-in keychain holds a session for, in order. */
   keychain(): string[]
   /** Locks or unlocks core-sim's stand-in keychain. While locked, every call to it fails, and what it held is kept for the unlock. */
@@ -43,6 +43,20 @@ export type Scenario = {
   equal<Value>(actual: Value, expected: Value, what: string): void
   note(text: string): void
 }
+
+/** How a core starts, beyond the provider it reaches. */
+export type CoreOptions = {
+  /** Where its fixed clock starts. A restart starts it at the same time again unless this moves it. */
+  now?: string
+  /**
+   * Its undo window in seconds. A window takes no real time and ends at once, unless it is
+   * an hour or more: then it holds for as long as this core runs (see crates/sim-client/src/main.rs).
+   */
+  undoWindow?: number
+}
+
+/** An undo window that holds while the core runs, so a scenario can act inside it. */
+export const HELD_WINDOW = 3600
 
 type Definition = { name: string; dialects: Run[]; run: (t: Scenario) => Promise<void> }
 
@@ -76,7 +90,7 @@ export type Result = { name: string; dialect: Run; passed: boolean; failure: str
 export const ARTIFACTS = process.env['LETTERBOX_ARTIFACTS'] ?? join(process.cwd(), 'artifacts', 'scenarios')
 
 /** Methods that only read, and so stay out of the transcript. */
-const READS = new Set<string | symbol>(['truth', 'calls', 'refreshes', 'refusals', 'handedOut', 'url'])
+const READS = new Set<string | symbol>(['truth', 'calls', 'sent', 'refreshes', 'refusals', 'handedOut', 'url'])
 
 /** Wraps a mailbox or the fake Gmail so every call a scenario makes on it lands in the transcript under `who`. */
 const recorded = <Target extends object>(
@@ -173,9 +187,16 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
       passwords.push(seed.password)
       return recorded(backend.createMailbox(seed), seed.address, record)
     },
-    startCore: () => {
-      record({ from: 'scenario', note: 'core starts' })
-      const core = startCore(data, backend.args, record, newId)
+    startCore: (options = {}) => {
+      record({
+        from: 'scenario',
+        note: `core starts${Object.keys(options).length > 0 ? ` ${JSON.stringify(options)}` : ''}`,
+      })
+      const flags = [
+        ...(options.now === undefined ? [] : ['--now', options.now]),
+        ...(options.undoWindow === undefined ? [] : ['--undo-window', String(options.undoWindow)]),
+      ]
+      const core = startCore(data, [...backend.args, ...flags], record, newId)
       cores.push(core)
       return core
     },

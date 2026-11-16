@@ -11,6 +11,7 @@ use regex::Regex;
 
 use crate::adapter::{BodyResult, RemoteAddress};
 use crate::changes::Pending;
+use crate::outbox::delivery;
 use crate::rows::Rows;
 use crate::world::{AccountRecord, MessageRecord, World, blob_id_of, messages_of, scoped};
 
@@ -110,6 +111,7 @@ fn message<'a>(world: &World, record: &'a MessageRecord, pending: &Pending<'a>, 
                 inline: attachment.inline,
             })
             .collect(),
+        delivery: delivery(world, record),
     }
 }
 

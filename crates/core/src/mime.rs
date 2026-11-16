@@ -1,0 +1,173 @@
+//! Writes the messages the core sends, as RFC 5322 text with MIME (RFC 2045 to 2047). This
+//! is the one place the core writes MIME, so every rule about the format lives here:
+//!   - Every line ends in CRLF. Header lines fold before 78 characters where they can.
+//!   - A header value that is not printable ASCII travels as RFC 2047 encoded words.
+//!   - Text parts are UTF-8 in base64, so no body line is too long and none can look like
+//!     the boundary, which holds "=_", two characters base64 never writes.
+//!   - Addresses are bare ASCII (`is_plain_address`), so they need no quoting or encoding.
+
+use chrono::{DateTime, Utc};
+
+/// Everything one message says. The outbox fills it from a draft.
+pub struct Letter<'a> {
+    pub from: &'a str,
+    pub to: &'a [String],
+    pub cc: &'a [String],
+    pub subject: &'a str,
+    pub date: DateTime<Utc>,
+    /// Without angle brackets.
+    pub message_id: &'a str,
+    /// The Message-IDs it answers, oldest first, without angle brackets. The last is its In-Reply-To.
+    pub references: &'a [String],
+    pub text: &'a str,
+    pub html: Option<&'a str>,
+}
+
+const BOUNDARY: &str = "=_letterbox_alternative";
+/// The longest header line this writer aims for. RFC 5322 section 2.1.1 asks for 78.
+const LINE: usize = 78;
+/// The most UTF-8 bytes in one encoded word, so the word stays well inside 75 characters.
+const WORD_BYTES: usize = 39;
+
+/// True for an address the core can write as it is: printable ASCII with no spaces, one
+/// `@` with text on both sides, and none of the characters that would need quoting.
+pub fn is_plain_address(address: &str) -> bool {
+    let Some((local, domain)) = address.split_once('@') else {
+        return false;
+    };
+    let allowed = |c: char| c.is_ascii_graphic() && !"<>()[]\\,;:\"@".contains(c);
+    !local.is_empty() && !domain.is_empty() && local.chars().all(allowed) && domain.chars().all(allowed)
+}
+
+/// The whole message: its headers, then its body.
+pub fn write(letter: &Letter<'_>) -> String {
+    let mut out = String::new();
+    push(&mut out, "From", letter.from);
+    push_list(&mut out, "To", letter.to.iter().map(String::as_str));
+    push_list(&mut out, "Cc", letter.cc.iter().map(String::as_str));
+    push_unstructured(&mut out, "Subject", letter.subject);
+    push(&mut out, "Date", &letter.date.to_rfc2822());
+    push(&mut out, "Message-ID", &format!("<{}>", letter.message_id));
+    if let Some(last) = letter.references.last() {
+        push(&mut out, "In-Reply-To", &format!("<{last}>"));
+        let ids: Vec<String> = letter.references.iter().map(|id| format!("<{id}>")).collect();
+        out.push_str("References: ");
+        out.push_str(&ids.join("\r\n "));
+        out.push_str("\r\n");
+    }
+    push(&mut out, "MIME-Version", "1.0");
+    match letter.html {
+        None => push_part(&mut out, "text/plain", letter.text),
+        Some(html) => {
+            push(
+                &mut out,
+                "Content-Type",
+                &format!("multipart/alternative; boundary=\"{BOUNDARY}\""),
+            );
+            out.push_str("\r\n");
+            for (mime, content) in [("text/plain", letter.text), ("text/html", html)] {
+                out.push_str(&format!("--{BOUNDARY}\r\n"));
+                push_part(&mut out, mime, content);
+            }
+            out.push_str(&format!("--{BOUNDARY}--\r\n"));
+        }
+    }
+    out
+}
+
+/// `raw` with a Bcc header in front, or `raw` alone when `bcc` is empty.
+pub fn with_bcc(raw: &str, bcc: &[String]) -> String {
+    let mut out = String::new();
+    push_list(&mut out, "Bcc", bcc.iter().map(String::as_str));
+    out.push_str(raw);
+    out
+}
+
+fn push(out: &mut String, name: &str, value: &str) {
+    out.push_str(name);
+    out.push_str(": ");
+    out.push_str(value);
+    out.push_str("\r\n");
+}
+
+/// An address list, one address per line. Nothing when the list is empty.
+fn push_list<'a>(out: &mut String, name: &str, addresses: impl Iterator<Item = &'a str>) {
+    let joined = addresses.collect::<Vec<_>>().join(",\r\n ");
+    if !joined.is_empty() {
+        push(out, name, &joined);
+    }
+}
+
+/// A free-text header such as Subject. Printable ASCII folds at its spaces, which unfolding
+/// gives back. Anything else becomes encoded words, one per line. Text that holds "=?" is
+/// encoded too, so a reader cannot mistake it for an encoded word.
+fn push_unstructured(out: &mut String, name: &str, value: &str) {
+    let plain = value.chars().all(|c| matches!(c, ' '..='~')) && !value.contains("=?");
+    if !plain {
+        let words = utf8_chunks(value, WORD_BYTES).map(|chunk| format!("=?UTF-8?B?{}?=", base64(chunk.as_bytes())));
+        return push(out, name, &words.collect::<Vec<_>>().join("\r\n "));
+    }
+    let mut line = format!("{name}:");
+    for (index, word) in value.split(' ').enumerate() {
+        if index > 0 && line.len() + 1 + word.len() > LINE && line.trim_end().len() > name.len() + 1 {
+            out.push_str(&line);
+            out.push_str("\r\n");
+            line.clear();
+        }
+        line.push(' ');
+        line.push_str(word);
+    }
+    out.push_str(&line);
+    out.push_str("\r\n");
+}
+
+/// One text part: its headers, a blank line, then its content in base64 with CRLF line ends.
+fn push_part(out: &mut String, mime: &str, content: &str) {
+    push(out, "Content-Type", &format!("{mime}; charset=UTF-8"));
+    push(out, "Content-Transfer-Encoding", "base64");
+    out.push_str("\r\n");
+    let canonical = content.replace("\r\n", "\n").replace('\r', "\n").replace('\n', "\r\n");
+    let encoded = base64(canonical.as_bytes());
+    for line in encoded.as_bytes().chunks(76) {
+        out.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
+        out.push_str("\r\n");
+    }
+}
+
+/// Splits text into pieces of at most `limit` bytes, never inside a character.
+fn utf8_chunks(text: &str, limit: usize) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let mut end = rest.len().min(limit);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        let (chunk, tail) = rest.split_at(end);
+        rest = tail;
+        Some(chunk)
+    })
+}
+
+/// Standard base64 with padding (RFC 4648 section 4).
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let n = group
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (index, byte)| n | u32::from(*byte) << (16 - 8 * index));
+        for index in 0..4 {
+            if index <= group.len() {
+                let sextet = (n >> (18 - 6 * index)) & 63;
+                out.push(char::from(ALPHABET[sextet as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}

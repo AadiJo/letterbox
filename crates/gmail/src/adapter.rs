@@ -5,7 +5,8 @@
 use indexmap::IndexMap;
 use letterbox_core::adapter::{
     Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, BodyResult, ChangeSet, ChangesResult, Cursor,
-    LocalFuture, MessageRef, Mutation, Outcome, PageToken, ProviderRefusal, RemoteMailbox, RemoteMessage, SnapshotPage,
+    LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RemoteMailbox, RemoteMessage,
+    SendResult, SnapshotPage,
 };
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ impl GmailAdapter {
     }
 
     /// One message, by `format`. None if Gmail no longer has it.
-    async fn message(&self, id: &str, query: &[(&str, &str)]) -> Result<Option<Message>, CallError> {
+    pub(crate) async fn message(&self, id: &str, query: &[(&str, &str)]) -> Result<Option<Message>, CallError> {
         match self.api.get(&format!("messages/{id}"), query).await {
             Ok(message) => Ok(Some(message)),
             Err(error) if error.is_not_found() => Ok(None),
@@ -297,7 +298,8 @@ impl Adapter for GmailAdapter {
     fn capabilities(&self) -> AdapterCapabilities {
         AdapterCapabilities {
             modify: self.modify,
-            send: false,
+            // The gmail.modify scope covers users.messages.send. Read-only access covers neither.
+            send: self.modify,
             multiple_mailboxes: true,
         }
     }
@@ -316,6 +318,10 @@ impl Adapter for GmailAdapter {
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {
         Box::pin(self.apply_mutation(mutation))
+    }
+
+    fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>> {
+        Box::pin(self.send_message(message))
     }
 
     fn stop_waiting(&self) {

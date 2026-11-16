@@ -82,6 +82,10 @@ const body = type({ state: "'ready'", text: 'string', html: 'string | null', has
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })
 
+const delivery = type({ state: "'held'", change: 'string', until: 'string' })
+  .or({ state: "'sending'", change: 'string' })
+  .or({ state: "'failed'", change: 'string', reason: refusal })
+
 const message = type({
   id: 'string',
   from: person,
@@ -91,6 +95,7 @@ const message = type({
   unread: 'boolean',
   body,
   attachments: type({ blobId: 'string', name: 'string', mime: 'string', size: 'number', inline: 'boolean' }).array(),
+  delivery: delivery.or('null'),
 })
 
 const update = type({ view: "'accounts'", data: account.array() })

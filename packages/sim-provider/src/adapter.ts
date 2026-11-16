@@ -29,6 +29,11 @@
 //      while it backfills the rest. Gmail's messages.list already does: "The returned
 //      `messages` objects are listed in reverse chronological order (newest first)."
 //      https://developers.google.com/workspace/gmail/api/guides/list-messages
+//  10. `send` delivers the message as the core wrote it, to its To and Cc addresses and to
+//      `bcc`, keeps a copy where the provider keeps sent mail, and answers with that copy's
+//      ref. Later `changes` and snapshots report the copy under that ref. When `maybeSent`
+//      is true, an earlier call may have delivered it already: `send` first looks for a
+//      message with the same Message-ID and answers with its ref instead of sending again.
 
 import type { Mailbox, Time } from '@letterbox/protocol'
 
@@ -47,8 +52,9 @@ export type PageToken = Ref<'Page'>
 
 /** The core turns these into the `can` field the UI reads. */
 export type AdapterCapabilities = {
-  /** False for read-only access. The core then never calls `apply`. */
+  /** False for read-only access. The core then never calls `apply` or `send`. */
   modify: boolean
+  /** False when the provider cannot send. The core then never calls `send`. */
   send: boolean
   /** True where one message can sit in several mailboxes at once. */
   multipleMailboxes: boolean
@@ -158,6 +164,24 @@ export type ApplyResult =
       reason: 'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider'
     }
 
+/** One message for the provider to deliver, written whole by the core. */
+export type Outgoing = {
+  /** The RFC 5322 message every recipient gets, with CRLF line ends and no Bcc header. */
+  raw: string
+  /** Addresses that get the message without being named in it. */
+  bcc: string[]
+  /** Its Message-ID header, without angle brackets. */
+  messageId: string
+  /** The message it answers, for a provider that keeps threads of its own. */
+  replyTo: MessageRef | null
+  /** True when an earlier call to send it may have reached the provider. See rule 10. */
+  maybeSent: boolean
+}
+
+export type SendResult =
+  /** The provider holds its copy under `ref`. See rule 10. */
+  { kind: 'sent'; ref: MessageRef } | { kind: 'refused'; reason: Extract<ApplyResult, { kind: 'refused' }>['reason'] }
+
 /** One signed-in mailbox at one provider. */
 export interface Adapter {
   readonly capabilities: AdapterCapabilities
@@ -169,6 +193,8 @@ export interface Adapter {
   body(ref: MessageRef): Promise<Outcome<BodyResult>>
   /** Pushes one change. The core calls this one at a time, in the order the user acted. */
   apply(mutation: Mutation): Promise<Outcome<ApplyResult>>
+  /** Delivers one message (rule 10). The core calls it in the account's order, like `apply`. */
+  send(message: Outgoing): Promise<Outcome<SendResult>>
   /**
    * Ends every wait the adapter adds between tries of a call, such as a rate-limit backoff,
    * now and from now on. A call that was waiting answers `offline`. Calls in flight still

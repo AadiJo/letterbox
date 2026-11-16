@@ -33,6 +33,8 @@ export type CoreClient = KeepingClient & {
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
   stop(): Promise<void>
+  /** Ends the process at once, as a crash or a power cut would, and waits for it to be gone. */
+  kill(): Promise<void>
   /** Every message the core sent that broke the protocol's shapes. A scenario fails if there is one. */
   violations(): string[]
 }
@@ -193,7 +195,13 @@ export function startCore(
       await untilStderr(() => waitsBegun().length >= count, `${count} gmail rate-limit waits`)
       return waitsBegun().slice(0, count)
     },
+    kill: async () => {
+      record({ from: 'scenario', note: 'the core is killed' })
+      child.kill('SIGKILL')
+      await exited
+    },
     stop: async () => {
+      if (child.exitCode !== null || child.signalCode !== null) return
       child.stdin.end()
       // A core that never exits would hang the whole run. It gets as long as any answer does.
       let killed = false

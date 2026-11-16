@@ -100,7 +100,11 @@ export type ThreadDetail = { messages: Array<Message>, id: ThreadId, accountId: 
  */
 pending: boolean, };
 
-export type Message = { id: MessageId, from: Person, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, attachments: Array<Attachment>, };
+export type Message = { id: MessageId, from: Person, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, attachments: Array<Attachment>, 
+/**
+ * Set only on a message the user sent that the provider does not hold yet, or refused.
+ */
+delivery: Delivery | null, };
 
 /**
  * Bodies download on demand, so one can be missing while offline.
@@ -146,15 +150,24 @@ export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: Tu
  */
 export type TurnChoice = "mine" | "theirs" | "none" | "auto";
 
+/**
+ * A message for the core to send. `to`, `cc` and `bcc` hold bare addresses, for example
+ * "ana@example.com". The core writes From, Date, Message-ID, In-Reply-To and References.
+ */
 export type Draft = { accountId: AccountId, to: Array<string>, cc: Array<string>, bcc: Array<string>, subject: string, text: string, 
 /**
  * Required, but may be null. `Option::deserialize` stops serde from reading a missing field as null.
  */
 html: string | null, 
 /**
- * The core writes Message-ID, In-Reply-To and References from this. Required, but may be null.
+ * The message this answers. Required, but may be null for a new conversation.
  */
 inReplyTo: MessageId | null, };
+
+/**
+ * How far a message the user sent has got. Messages the provider holds have none.
+ */
+export type Delivery = { "state": "held", change: ChangeId, until: string, } | { "state": "sending", change: ChangeId, } | { "state": "failed", change: ChangeId, reason: Refusal, };
 
 /**
  * Why the core or the provider said no.

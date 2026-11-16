@@ -206,6 +206,12 @@ impl Api {
         Self::read(self.send(|http| http.get(&url).query(query)).await?).await
     }
 
+    /// POST `users/me/<path>` with a JSON body, and read the answer.
+    pub async fn post_for<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T, CallError> {
+        let url = self.url(path);
+        Self::read(self.send(|http| http.post(&url).json(body)).await?).await
+    }
+
     /// POST `users/me/<path>` with a JSON body. The response body, if any, is ignored.
     pub async fn post(&self, path: &str, body: &impl Serialize) -> Result<(), CallError> {
         let url = self.url(path);

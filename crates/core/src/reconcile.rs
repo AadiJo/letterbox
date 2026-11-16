@@ -17,8 +17,8 @@ use crate::adapter::{MessageRef, RemoteFacts, RemoteMailbox, RemoteMessage, Remo
 use crate::maps::{HashMap, HashSet, IndexMap, IndexSet};
 use crate::store::Transaction;
 use crate::world::{
-    MailboxRecord, MessageRecord, MessageState, ThreadRecord, World, messages_of, put_mailbox, put_message, put_thread,
-    remove_mailbox, remove_message, remove_thread, scoped,
+    MailboxRecord, MessageRecord, MessageState, Origin, ThreadRecord, World, messages_of, put_mailbox, put_message,
+    put_thread, remove_mailbox, remove_message, remove_thread, scoped,
 };
 
 pub struct Incoming {
@@ -63,7 +63,7 @@ fn oldest_in(world: &World, id: &ThreadId) -> String {
 /// Picks the thread a new message belongs to, merging threads it connects.
 /// Two messages share a thread when one names the other in its reply chain, or
 /// they are copies with the same Message-ID, and their subjects match.
-fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, facts: &RemoteFacts) -> ThreadId {
+pub fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, facts: &RemoteFacts) -> ThreadId {
     let subject = normalize_subject(&facts.subject);
     let mut related: IndexSet<MessageId> = IndexSet::default();
     let mut gather = |index: &HashMap<String, IndexSet<MessageId>>, key: &str| {
@@ -233,7 +233,9 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
                 world,
                 tx,
                 MessageRecord {
-                    r#ref: remote.state.r#ref,
+                    origin: Origin::Provider {
+                        r#ref: remote.state.r#ref,
+                    },
                     server,
                     round: incoming.page_of.unwrap_or(moved.round),
                     ..moved
@@ -251,7 +253,9 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
             MessageRecord {
                 id,
                 account_id: account_id.clone(),
-                r#ref: remote.state.r#ref,
+                origin: Origin::Provider {
+                    r#ref: remote.state.r#ref,
+                },
                 thread_id,
                 facts: remote.facts,
                 server,
@@ -294,7 +298,8 @@ fn unlisted_by_print(
     let candidates = world
         .messages
         .values()
-        .filter(|record| &record.account_id == account_id && record.round != round && !listed.contains(&record.r#ref));
+        .filter(|record| &record.account_id == account_id && record.round != round)
+        .filter(|record| record.provider_ref().is_some_and(|r#ref| !listed.contains(r#ref)));
     // Reversed, so `pop` hands out the oldest record first.
     for record in candidates.rev() {
         found
@@ -306,11 +311,13 @@ fn unlisted_by_print(
 }
 
 /// Ends snapshot `round`: removes every message of the account it did not list. The
-/// provider no longer has them, or has them only under refs the snapshot listed.
+/// provider no longer has them, or has them only under refs the snapshot listed. Messages
+/// in the outbox stay: no snapshot lists them.
 pub fn remove_unlisted(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId, round: u64) {
     let gone: Vec<MessageId> = world
         .messages
         .values()
+        .filter(|record| record.provider_ref().is_some())
         .filter(|record| &record.account_id == account_id && record.round != round)
         .map(|record| record.id.clone())
         .collect();
@@ -320,7 +327,7 @@ pub fn remove_unlisted(world: &mut World, tx: &Transaction<'_>, account_id: &Acc
 }
 
 /// Removes a message, and its thread if it was the last message in it.
-fn remove_with_thread(world: &mut World, tx: &Transaction<'_>, id: &MessageId) {
+pub fn remove_with_thread(world: &mut World, tx: &Transaction<'_>, id: &MessageId) {
     let Some(removed) = remove_message(world, tx, id) else {
         return;
     };

@@ -32,6 +32,8 @@ pub mod clock;
 mod dispatch;
 mod live_view;
 mod maps;
+mod mime;
+mod outbox;
 mod queue;
 mod reconcile;
 mod rows;
@@ -52,6 +54,7 @@ mod budget;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use letterbox_protocol::{AccountId, CoreMessage, MessageId, Query, SignInOption, SignInOptionId, SubscriptionId};
 use tokio::sync::mpsc;
@@ -79,6 +82,8 @@ pub struct CoreOptions {
     pub secrets: Box<dyn Secrets>,
     /// One per way to add an account.
     pub factories: Vec<Rc<dyn AdapterFactory>>,
+    /// How long a send waits before it goes to the provider. `undo` can cancel it until then.
+    pub undo_window: Duration,
     /// Takes every message for the client. It must not call `Core::receive`: the core
     /// sends updates while it holds its state, and a call back in would panic.
     pub send: Box<dyn Fn(CoreMessage)>,
@@ -160,7 +165,7 @@ impl Core {
             })
             .collect();
 
-        Ok(Core {
+        let core = Core {
             inner: Rc::new(Inner {
                 store,
                 env: options.env,
@@ -168,6 +173,7 @@ impl Core {
                 factories,
                 options: options_list,
                 send: options.send,
+                undo_window: options.undo_window,
                 state: RefCell::new(State {
                     world,
                     rows: Rows::default(),
@@ -184,7 +190,9 @@ impl Core {
                 work: TaskTracker::new(),
                 meter: Meter::default(),
             }),
-        })
+        };
+        core.inner.resume_outbox();
+        Ok(core)
     }
 
     /// Takes one decoded message from the client. Anything that is not a valid
@@ -217,7 +225,7 @@ impl Core {
 
 /// What the core holds while it runs. Its methods sit in one module per job: dispatch.rs
 /// takes client messages, subscriptions.rs commits and sends updates, queue.rs runs each
-/// account's jobs, sync.rs syncs, and accounts.rs signs accounts in and out.
+/// account's jobs, sync.rs syncs, outbox.rs sends mail, and accounts.rs signs accounts in and out.
 struct Inner {
     store: Store,
     env: Box<dyn Environment>,
@@ -225,6 +233,7 @@ struct Inner {
     factories: IndexMap<String, Rc<dyn AdapterFactory>>,
     options: Vec<SignInOption>,
     send: Box<dyn Fn(CoreMessage)>,
+    undo_window: Duration,
     state: RefCell<State>,
     /// One queue per account. Each has a task that runs its jobs one at a time.
     queues: RefCell<HashMap<AccountId, mpsc::UnboundedSender<Job>>>,

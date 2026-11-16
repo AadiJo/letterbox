@@ -25,6 +25,11 @@
 //!      while it backfills the rest. Gmail's messages.list already does: "The returned
 //!      `messages` objects are listed in reverse chronological order (newest first)."
 //!      <https://developers.google.com/workspace/gmail/api/guides/list-messages>
+//!  10. `send` delivers the message as the core wrote it, to its To and Cc addresses and to
+//!      `bcc`, keeps a copy where the provider keeps sent mail, and answers with that copy's
+//!      ref. Later `changes` and snapshots report the copy under that ref. When `maybe_sent`
+//!      is true, an earlier call may have delivered it already: `send` first looks for a
+//!      message with the same Message-ID and answers with its ref instead of sending again.
 //!
 //! The core runs on one thread, so adapters and their futures need not be `Send`.
 
@@ -74,8 +79,9 @@ refs!(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterCapabilities {
-    /// False for read-only access. The core then never calls `apply`.
+    /// False for read-only access. The core then never calls `apply` or `send`.
     pub modify: bool,
+    /// False when the provider cannot send. The core then never calls `send`.
     pub send: bool,
     /// True where one message can sit in several mailboxes at once.
     pub multiple_mailboxes: bool,
@@ -262,7 +268,7 @@ pub struct Moved {
     pub to: MessageRef,
 }
 
-/// Why a provider turned down a mutation. Every Refusal except `invalid`, which only the core decides.
+/// Why a provider turned down a mutation or a send. Every Refusal except `invalid`, which only the core decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderRefusal {
@@ -285,6 +291,43 @@ impl From<ProviderRefusal> for Refusal {
     }
 }
 
+/// One message for the provider to deliver. The core writes it whole (see mime.rs), so
+/// the adapter only hands it over.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Outgoing {
+    /// The RFC 5322 message every recipient gets, with CRLF line ends and no Bcc header.
+    pub raw: String,
+    /// Addresses that get the message without being named in it.
+    pub bcc: Vec<String>,
+    /// Its Message-ID header, without angle brackets.
+    pub message_id: String,
+    /// The message it answers, for a provider that keeps threads of its own.
+    pub reply_to: Option<MessageRef>,
+    /// True when an earlier call to send it may have reached the provider. See rule 10.
+    pub maybe_sent: bool,
+}
+
+impl Outgoing {
+    /// `raw` with a Bcc header naming `bcc`, for a provider that reads the recipients from the
+    /// headers and leaves Bcc out of what it delivers. The same as `raw` when `bcc` is empty.
+    pub fn raw_with_bcc(&self) -> String {
+        crate::mime::with_bcc(&self.raw, &self.bcc)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SendResult {
+    /// The provider holds its copy under `ref`. See rule 10.
+    Sent {
+        r#ref: MessageRef,
+    },
+    Refused {
+        reason: ProviderRefusal,
+    },
+}
+
 /// One signed-in mailbox at one provider.
 pub trait Adapter {
     fn capabilities(&self) -> AdapterCapabilities;
@@ -296,6 +339,8 @@ pub trait Adapter {
     fn body(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<BodyResult>>;
     /// Pushes one change. The core calls this one at a time, in the order the user acted.
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>>;
+    /// Delivers one message (rule 10). The core calls it in the account's order, like `apply`.
+    fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>>;
     /// Ends every wait the adapter adds between tries of a call, such as a rate-limit backoff,
     /// now and from now on. A call that was waiting answers `offline`. Calls in flight still
     /// finish and later calls still reach the provider, so a closing core's work ends soon.

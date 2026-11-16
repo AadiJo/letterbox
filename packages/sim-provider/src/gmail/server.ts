@@ -11,7 +11,8 @@
 // messages.list page, one changes per history.list, one body per format=full get,
 // and one apply per modify or batchModify that changes labels. `setQuota` adds Gmail's
 // usage limits (quota.ts). The mailbox's `expirePageTokens` makes messages.list refuse
-// every page token it handed out.
+// every page token it handed out. messages.send goes through the mailbox's `send` (send.ts),
+// and a sent reply joins the thread its `threadId` names. Every other message is its own thread.
 //
 // Where Gmail's behaviour is not documented, the fake picks the strict reading:
 //   - messages.list answers a page token it does not accept with the 400 a live call
@@ -26,13 +27,14 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
-import type { PageToken } from '../adapter.ts'
+import type { MessageRef, PageToken } from '../adapter.ts'
 import type { Seed, SimMailbox } from '../contract.ts'
 import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { ask, modify, parse, strings } from './modify.ts'
 import { MODIFY_SCOPE, READONLY_SCOPE, createOauth } from './oauth.ts'
 import { type Quota, createQuotas, unitsOf } from './quota.ts'
+import { searchMessageId, send as sendMessage } from './send.ts'
 import {
   cursorOf,
   fullOf,
@@ -120,6 +122,10 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   const oauth = createOauth(redirects, remember)
   const sockets = new Set<Socket>()
   const quotas = createQuotas()
+  // The thread of each sent reply, by account and ref.
+  const threads = new Map<string, string>()
+  const threadOf = (entry: MailboxEntry, ref: MessageRef): string =>
+    threads.get(`${entry.control.address}\n${ref}`) ?? gmailIdOf(ref)
 
   /** Answers one API call for the account `address`. */
   const api = async (
@@ -148,6 +154,24 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       const labels = labelsOf(store)
       for (const label of labels) remember(label.id)
       return send(response, 200, { labels })
+    }
+    const q = query.get('q')
+    if (method === 'GET' && path === 'messages' && q !== null) {
+      const found = searchMessageId(entry, q)
+      if (found === null) return fail(response, 400, `The fake searches by rfc822msgid: only, not ${q}`)
+      const messages = found.map(
+        (ref) => (remember(gmailIdOf(ref)), { id: gmailIdOf(ref), threadId: threadOf(entry, ref) }),
+      )
+      return send(response, 200, { ...(messages.length > 0 ? { messages } : {}), resultSizeEstimate: messages.length })
+    }
+    if (method === 'POST' && path === 'messages/send') {
+      const hasThread = (id: string) =>
+        [...store.messages.values()].some((stored) => threadOf(entry, stored.ref) === id)
+      const sent = await sendMessage(entry, parse(body), hasThread)
+      if ('status' in sent) return fail(response, sent.status, sent.message)
+      if (sent.threadId !== null) threads.set(`${entry.control.address}\n${sent.ref}`, sent.threadId)
+      const id = remember(gmailIdOf(sent.ref))
+      return send(response, 200, { id, threadId: threadOf(entry, sent.ref), labelIds: ['SENT'] })
     }
     if (method === 'GET' && path === 'messages') {
       const result = await ask(entry, { method: 'snapshot', arg: query.get('pageToken') as PageToken | null })
@@ -179,12 +203,15 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
         if (result.method !== 'body' || !result.outcome.ok) return fail(response, 503, 'Backend error')
         const stored = messageOfId(store, message)
         if (result.outcome.kind === 'gone' || !stored) return fail(response, 404, 'Requested entity was not found.')
-        return send(response, 200, fullOf(store, stored, history(), result.outcome.body))
+        const full = fullOf(store, stored, history(), result.outcome.body)
+        return send(response, 200, { ...full, threadId: threadOf(entry, stored.ref) })
       }
       const stored = messageOfId(store, message)
       if (!stored) return fail(response, 404, 'Requested entity was not found.')
-      if (format === 'minimal') return send(response, 200, minimalOf(store, stored, history()))
-      return send(response, 200, metadataOf(store, stored, history(), query.getAll('metadataHeaders')))
+      const threadId = threadOf(entry, stored.ref)
+      if (format === 'minimal') return send(response, 200, { ...minimalOf(store, stored, history()), threadId })
+      const metadata = metadataOf(store, stored, history(), query.getAll('metadataHeaders'))
+      return send(response, 200, { ...metadata, threadId })
     }
     if (method === 'GET' && path === 'history') {
       const cursor = cursorOf(query.get('startHistoryId') ?? '')

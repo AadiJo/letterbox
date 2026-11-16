@@ -1,7 +1,7 @@
 // Ways a user's action can be lost, doubled, applied out of order, or shown
 // wrongly while it is on its way to the provider. Each scenario is one of them.
 
-import type { BlobId, ChangeId, ThreadFilter, ThreadSummary } from '@letterbox/protocol'
+import type { BlobId, ChangeId, MessageId, ThreadFilter, ThreadSummary } from '@letterbox/protocol'
 import {
   ME,
   PASSWORD,
@@ -238,7 +238,7 @@ scenario('sending the same change twice has one effect', async (t) => {
 })
 
 scenario('a read-only account refuses changes but still takes turn corrections', async (t) => {
-  const { core, box } = await start(t, standardSeed(t.dialect, { canModify: false }))
+  const { core, box, accountId } = await start(t, standardSeed(t.dialect, { canModify: false }))
   const target = await thread(core, SUBJECT)
   t.equal((await core.query({ view: 'accounts' }))[0]?.can.modify, false, 'the account says it cannot modify')
   const refused = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
@@ -247,6 +247,20 @@ scenario('a read-only account refuses changes but still takes turn corrections',
     ['rejected', 'not-permitted'],
     'marking read is rejected',
   )
+  const send = await core.command({
+    kind: 'send',
+    draft: {
+      accountId,
+      to: ['ben@example.com'],
+      cc: [],
+      bcc: [],
+      subject: 'Re: Can you review the draft?',
+      text: 'Yes.',
+      html: null,
+      inReplyTo: null,
+    },
+  })
+  t.equal(send.kind === 'rejected' && send.reason, 'not-permitted', 'sending is rejected')
   const correction = await core.command({ kind: 'set-turn', threadIds: [target.id], turn: 'theirs' })
   t.equal((await core.settled(correction.change)).result, 'done', 'a turn correction settles as done')
   t.equal(box.calls().apply, 0, 'the provider was never asked to change anything')
@@ -269,7 +283,7 @@ scenario(
   ['folders'],
 )
 
-scenario('commands with nothing to act on, or not built yet, are rejected', async (t) => {
+scenario('commands with nothing to act on, that cannot be written, or not built yet, are rejected', async (t) => {
   const { core, accountId } = await start(t)
   const missing = await core.command({ kind: 'set-flags', threadIds: [], unread: false })
   t.equal(
@@ -277,22 +291,22 @@ scenario('commands with nothing to act on, or not built yet, are rejected', asyn
     'unknown-target',
     'a command naming no known conversation is rejected',
   )
-  const send = await core.command({
+  const draft = { accountId, to: ['ana@example.com'], cc: [], bcc: [], subject: 'Hi', text: 'Hi', html: null }
+  const nobody = await core.command({ kind: 'send', draft: { ...draft, to: [], inReplyTo: null } })
+  t.equal(nobody.kind === 'rejected' && nobody.reason, 'invalid', 'a send to nobody is rejected')
+  const injected = await core.command({
     kind: 'send',
-    draft: {
-      accountId,
-      to: ['ana@example.com'],
-      cc: [],
-      bcc: [],
-      subject: 'Hi',
-      text: 'Hi',
-      html: null,
-      inReplyTo: null,
-    },
+    draft: { ...draft, to: ['ana@example.com\r\nBcc: eve@example.com'], inReplyTo: null },
   })
-  t.equal(send.kind === 'rejected' && send.reason, 'not-supported', 'send is not built yet and says so')
+  t.equal(injected.kind === 'rejected' && injected.reason, 'invalid', 'an address that would add a header is rejected')
+  const orphan = await core.command({ kind: 'send', draft: { ...draft, inReplyTo: 'message_none' as MessageId } })
+  t.equal(orphan.kind === 'rejected' && orphan.reason, 'unknown-target', 'a reply to no known message is rejected')
   const undo = await core.command({ kind: 'undo', change: 'change_none' as ChangeId })
-  t.equal(undo.kind === 'rejected' && undo.reason, 'not-supported', 'undo is not built yet and says so')
+  t.equal(undo.kind === 'rejected' && undo.reason, 'unknown-target', 'an undo naming no change is rejected')
+  const flag = await core.command({ kind: 'set-flags', threadIds: [(await thread(core, SUBJECT)).id], flagged: true })
+  await core.settled(flag.change)
+  const unflag = await core.command({ kind: 'undo', change: flag.change })
+  t.equal(unflag.kind === 'rejected' && unflag.reason, 'not-supported', 'only a send can be undone yet')
   const blob = await core.request({ method: 'blob', blobId: 'blob_message_1_1' as BlobId })
   t.equal(blob.ok === false && blob.error, 'not-supported', 'attachment bytes are not built yet and say so')
 })

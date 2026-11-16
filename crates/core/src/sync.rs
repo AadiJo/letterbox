@@ -17,7 +17,7 @@ use crate::changes::{overlay, plan};
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
 use crate::world::{
-    AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, put_account, put_change, put_message,
+    AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, Op, Origin, put_account, put_change, put_message,
 };
 use crate::{Inner, Linked, State};
 
@@ -34,7 +34,7 @@ impl Inner {
             let state = self.state.borrow();
             state.world.messages.get(&id).and_then(|record| {
                 let linked = state.adapters.get(&record.account_id)?;
-                Some((Rc::clone(&linked.adapter), record.r#ref.clone()))
+                Some((Rc::clone(&linked.adapter), record.provider_ref()?.clone()))
             })
         };
         let Some((adapter, r#ref)) = found else {
@@ -68,7 +68,7 @@ impl Inner {
         }
     }
 
-    fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
+    pub(crate) fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
         let id = change.id.clone();
         let rev = self.commit(|world, tx, at| {
             put_change(
@@ -99,7 +99,8 @@ impl Inner {
             .is_some_and(|current| current.link == linked.link)
     }
 
-    /// Carries every pending change for one account to the provider, oldest first. Stops when the provider is unreachable.
+    /// Carries every pending change for one account to the provider, oldest first. A send
+    /// still in its undo window is passed by (see outbox.rs). Stops when the provider is unreachable.
     async fn push(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
         let adapter = &linked.adapter;
         let waiting: Vec<ChangeRecord> = self
@@ -116,6 +117,10 @@ impl Inner {
                 return Ok(());
             }
             let Some(op) = change.op.clone() else { continue };
+            if let Op::Send(outbound) = op {
+                self.deliver(account_id, linked, change, outbound).await?;
+                continue;
+            }
             let planned = plan(&self.state.borrow().world, &op);
             let Some(steps) = planned else {
                 self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));
@@ -139,16 +144,19 @@ impl Inner {
                                 let Some(record) = world.messages.get(id).cloned() else {
                                     continue;
                                 };
+                                let Some(old) = record.provider_ref().cloned() else {
+                                    continue;
+                                };
                                 let r#ref = moved
                                     .iter()
-                                    .find(|pair| pair.from == record.r#ref)
-                                    .map_or_else(|| record.r#ref.clone(), |pair| pair.to.clone());
+                                    .find(|pair| pair.from == old)
+                                    .map_or(old, |pair| pair.to.clone());
                                 let server = overlay(&record.server, &step.part, id);
                                 put_message(
                                     world,
                                     tx,
                                     MessageRecord {
-                                        r#ref,
+                                        origin: Origin::Provider { r#ref },
                                         server,
                                         ..record
                                     },

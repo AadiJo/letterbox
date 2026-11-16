@@ -6,6 +6,20 @@ const gmail = (file: string) => `crates/gmail/src/${file}`
 
 export const GMAIL_MUTATIONS: Mutation[] = [
   {
+    name: 'gmail: a send after a crash does not search first, so Gmail gets it twice',
+    file: gmail('send.rs'),
+    find: '        if outgoing.maybe_sent\n',
+    replace: '        if outgoing.maybe_sent && false\n',
+    scenarios: 'killed in the middle of a delivery',
+  },
+  {
+    name: 'gmail: bcc recipients never get the message',
+    file: gmail('send.rs'),
+    find: 'URL_SAFE.encode(outgoing.raw_with_bcc())',
+    replace: 'URL_SAFE.encode(&outgoing.raw)',
+    scenarios: 'a new message starts',
+  },
+  {
     name: 'gmail: STARRED shows up as a mailbox',
     file: gmail('labels.rs'),
     find: 'None if label.kind.as_deref() == Some("system") || !is_mailbox_id(&label.id) => return None,',

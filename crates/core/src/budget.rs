@@ -157,6 +157,7 @@ fn start(folder: &std::path::Path) -> (Core, Rc<RefCell<Vec<CoreMessage>>>) {
         env: Box::new(FixedEnvironment::new("2026-01-01T00:00:00.000Z").expect("a valid start time")),
         secrets: Box::new(NoSecrets),
         factories: vec![],
+        undo_window: std::time::Duration::from_secs(10),
         send: Box::new(move |message| sink.borrow_mut().push(message)),
     })
     .expect("the store opens");
@@ -209,7 +210,7 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                     signed_in: false,
                     capabilities: AdapterCapabilities {
                         modify: true,
-                        send: false,
+                        send: true,
                         multiple_mailboxes: true,
                     },
                     cursor: None,
@@ -296,6 +297,30 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                 put_change(world, tx, crate::world::ChangeRecord { outcome, ..change });
             });
         });
+        let answered = inner
+            .state
+            .borrow()
+            .world
+            .messages_by_thread
+            .get(&newest)
+            .and_then(|ids| ids.first().cloned());
+        measure("send a reply", 1, &|| {
+            receive(json!({
+                "kind": "command",
+                "change": "change_2",
+                "command": { "kind": "send", "draft": {
+                    "accountId": account_id, "to": ["person1@example.com"], "cc": [], "bcc": [],
+                    "subject": "Re: a topic", "text": "Yes.", "html": null, "inReplyTo": answered,
+                } },
+            }));
+        });
+        let accepted = inner
+            .state
+            .borrow()
+            .world
+            .changes
+            .contains_key(&ChangeId::new("change_2"));
+        assert!(accepted, "the reply was accepted, so its step measured a real send");
         let delivered = (0..DELIVERED)
             .map(|index| message(MESSAGES + index, conversations + index, 0))
             .collect::<Vec<_>>();

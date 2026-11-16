@@ -18,8 +18,8 @@ use std::rc::{Rc, Weak};
 
 use letterbox_core::adapter::{
     Adapter, AdapterCapabilities, AdapterFactory, AdapterFailure, ApplyResult, BodyResult, ChangesResult, Connection,
-    Cursor, FactoryOption, LocalFuture, MessageRef, Mutation, Outcome, PageToken, SignInFailure, SignInInput,
-    SnapshotPage,
+    Cursor, FactoryOption, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult, SignInFailure,
+    SignInInput, SnapshotPage,
 };
 use letterbox_protocol::SignInMethod;
 use serde::de::DeserializeOwned;
@@ -228,7 +228,7 @@ impl Adapter for SimAdapter {
     fn capabilities(&self) -> AdapterCapabilities {
         AdapterCapabilities {
             modify: self.session.modify,
-            send: false,
+            send: self.session.modify,
             multiple_mailboxes: self.session.dialect == Dialect::Labels,
         }
     }
@@ -247,6 +247,10 @@ impl Adapter for SimAdapter {
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {
         Box::pin(self.call(Call::Apply(mutation)))
+    }
+
+    fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>> {
+        Box::pin(self.call(Call::Send(message)))
     }
 
     // Each call goes to the server once, so there is no wait between tries to end.

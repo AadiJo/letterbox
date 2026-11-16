@@ -6,7 +6,9 @@
 //! `signed-in` reply. An oauth sign-in gets `open-url`, then `signed-in` once the
 //! scenario approves or denies it. Closing the socket cancels a pending oauth attempt.
 
-use letterbox_core::adapter::{AdapterFailure, Cursor, MessageRef, Mutation, Outcome, PageToken, SignInFailure};
+use letterbox_core::adapter::{
+    AdapterFailure, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken, SignInFailure,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +21,7 @@ pub enum Call {
     Changes(Cursor),
     Body(MessageRef),
     Apply(Mutation),
+    Send(Outgoing),
 }
 
 impl Call {
@@ -29,6 +32,7 @@ impl Call {
             Call::Changes(_) => "changes",
             Call::Body(_) => "body",
             Call::Apply(_) => "apply",
+            Call::Send(_) => "send",
         }
     }
 }

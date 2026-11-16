@@ -116,7 +116,7 @@ const createAdapter = (socketPath: string, session: Session, first: Link | null)
   }
 
   return {
-    capabilities: { modify: session.modify, send: false, multipleMailboxes: session.dialect === 'labels' },
+    capabilities: { modify: session.modify, send: session.modify, multipleMailboxes: session.dialect === 'labels' },
     snapshot: async (page) => {
       const result = await forward({ method: 'snapshot', arg: page })
       return result?.method === 'snapshot' ? result.outcome : offline
@@ -132,6 +132,10 @@ const createAdapter = (socketPath: string, session: Session, first: Link | null)
     apply: async (mutation) => {
       const result = await forward({ method: 'apply', arg: mutation })
       return result?.method === 'apply' ? result.outcome : offline
+    },
+    send: async (message) => {
+      const result = await forward({ method: 'send', arg: message })
+      return result?.method === 'send' ? result.outcome : offline
     },
     // Each call goes to the server once, so there is no wait between tries to end.
     stopWaiting: () => {},
