@@ -97,7 +97,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   const engine = dialect === 'labels' ? labelsEngine(store) : foldersEngine(store)
   // The Message-ID of every key ever delivered. It outlives an expunge, so replies can still name it.
   const messageIds = new Map<string, string>()
-  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0 }
+  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0, find: 0 }
   const sentCopies: SentCopy[] = []
   const pageSize = seed.pageSize ?? 50
   const canModify = seed.canModify ?? true
@@ -333,8 +333,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       return { kind: 'refused', reason }
     }
     if (!canModify) return { kind: 'refused', reason: 'not-permitted' }
-    const earlier = [...store.messages.values()].find((message) => message.facts.messageId === outgoing.messageId)
-    if (outgoing.maybeSent && earlier) return { kind: 'sent', ref: earlier.ref }
+    // RFC 5322 section 2.1.1: "Each line of characters MUST be no more than 998 characters".
+    if (outgoing.raw.split('\r\n').some((line) => line.length > 998))
+      return { kind: 'refused', reason: 'refused-by-provider' }
     const sentBox = [...store.boxes.values()].find((box) => box.role === 'sent')
     if (!sentBox) return { kind: 'refused', reason: 'not-supported' }
     const copy = readSent(outgoing.raw, dialect === 'labels' ? false : null)
@@ -360,6 +361,10 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         return { method: 'apply', outcome: { ok: true, ...apply(call.arg) } }
       case 'send':
         return { method: 'send', outcome: { ok: true, ...send(call.arg) } }
+      case 'find': {
+        const found = [...store.messages.values()].find((message) => message.facts.messageId === call.arg)
+        return { method: 'find', outcome: { ok: true, ref: found?.ref ?? null } }
+      }
     }
   }
 
@@ -374,7 +379,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     session: { address: seed.address, dialect, modify: canModify },
     isOffline: () => offline,
     respond: (call, reply) => {
-      const hold = call.method === 'changes' || offline ? null : holds[call.method]
+      const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
       if (!hold?.keep(() => reply(answer(call)))) reply(answer(call))
     },
   }

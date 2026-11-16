@@ -31,9 +31,12 @@
 //      https://developers.google.com/workspace/gmail/api/guides/list-messages
 //  10. `send` delivers the message as the core wrote it, to its To and Cc addresses and to
 //      `bcc`, keeps a copy where the provider keeps sent mail, and answers with that copy's
-//      ref. Later `changes` and snapshots report the copy under that ref. When `maybeSent`
-//      is true, an earlier call may have delivered it already: `send` first looks for a
-//      message with the same Message-ID and answers with its ref instead of sending again.
+//      ref. Later `changes` and snapshots report the copy under that ref. It answers
+//      `offline` (or another failure) only when the message surely did not reach the
+//      provider, such as when no connection was made, and `unconfirmed` when it may have.
+//      A provider offers no way to send a message only once, so after `unconfirmed`, or a
+//      core that stopped during the call, the core never calls `send` for it again. It calls
+//      `find` with its Message-ID instead.
 
 import type { Mailbox, Time } from '@letterbox/protocol'
 
@@ -174,13 +177,17 @@ export type Outgoing = {
   messageId: string
   /** The message it answers, for a provider that keeps threads of its own. */
   replyTo: MessageRef | null
-  /** True when an earlier call to send it may have reached the provider. See rule 10. */
-  maybeSent: boolean
 }
 
 export type SendResult =
   /** The provider holds its copy under `ref`. See rule 10. */
-  { kind: 'sent'; ref: MessageRef } | { kind: 'refused'; reason: Extract<ApplyResult, { kind: 'refused' }>['reason'] }
+  | { kind: 'sent'; ref: MessageRef }
+  | { kind: 'refused'; reason: Extract<ApplyResult, { kind: 'refused' }>['reason'] }
+  /** The call may have reached the provider, but no answer came back. See rule 10. */
+  | { kind: 'unconfirmed' }
+
+/** What `find` found: the ref of the message with that Message-ID, or null. */
+export type Found = { ref: MessageRef | null }
 
 /** One signed-in mailbox at one provider. */
 export interface Adapter {
@@ -195,6 +202,8 @@ export interface Adapter {
   apply(mutation: Mutation): Promise<Outcome<ApplyResult>>
   /** Delivers one message (rule 10). The core calls it in the account's order, like `apply`. */
   send(message: Outgoing): Promise<Outcome<SendResult>>
+  /** The message the provider holds with this Message-ID (without angle brackets), if any. */
+  find(messageId: string): Promise<Outcome<Found>>
   /**
    * Ends every wait the adapter adds between tries of a call, such as a rate-limit backoff,
    * now and from now on. A call that was waiting answers `offline`. Calls in flight still

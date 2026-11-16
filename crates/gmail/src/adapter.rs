@@ -4,7 +4,7 @@
 
 use indexmap::IndexMap;
 use letterbox_core::adapter::{
-    Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, BodyResult, ChangeSet, ChangesResult, Cursor,
+    Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, BodyResult, ChangeSet, ChangesResult, Cursor, Found,
     LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RemoteMailbox, RemoteMessage,
     SendResult, SnapshotPage,
 };
@@ -280,7 +280,8 @@ impl GmailAdapter {
         match found {
             Ok(0) => refused(ProviderRefusal::UnknownTarget),
             Ok(_) => Ok(ApplyResult::Applied { moved: Vec::new() }),
-            Err(CallError::Failure(failure)) => Err(failure),
+            // Setting labels again does no harm, so a lost answer is offline here.
+            Err(error @ (CallError::Failure(_) | CallError::Lost)) => Err(error.failure()),
             // Over a usage limit, not refused: the core keeps the change and tries it again later.
             Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),
             Err(CallError::Status { status, .. }) => match status {
@@ -322,6 +323,15 @@ impl Adapter for GmailAdapter {
 
     fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>> {
         Box::pin(self.send_message(message))
+    }
+
+    fn find(&self, message_id: String) -> LocalFuture<'_, Outcome<Found>> {
+        Box::pin(async move {
+            let found = self.find_sent(&message_id).await.map_err(|error| error.failure())?;
+            Ok(Found {
+                r#ref: found.map(MessageRef::new),
+            })
+        })
     }
 
     fn stop_waiting(&self) {

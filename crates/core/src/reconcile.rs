@@ -217,6 +217,23 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
             );
             continue;
         }
+        // A send of the user's that the provider holds after all: its copy takes its place.
+        if let Some(sent) = outbox_copy(world, account_id, &remote.facts) {
+            let server = state_of(world, account_id, &remote.state);
+            put_message(
+                world,
+                tx,
+                MessageRecord {
+                    origin: Origin::Provider {
+                        r#ref: remote.state.r#ref,
+                    },
+                    server,
+                    round: incoming.page_of.unwrap_or(sent.round),
+                    ..sent
+                },
+            );
+            continue;
+        }
         let print = fingerprint(&remote.facts);
         let moved = vanished
             .values()
@@ -276,6 +293,17 @@ pub fn reconcile(world: &mut World, tx: &Transaction<'_>, account_id: &AccountId
     for id in vanished.keys() {
         remove_with_thread(world, tx, id);
     }
+}
+
+/// The outbox message a newly reported message is the provider's copy of: the one with its
+/// Message-ID. The core minted that Message-ID itself (see draft.rs), so only its own send can
+/// match. That happens when the core gave up confirming a send that did arrive (see outbox.rs).
+fn outbox_copy(world: &World, account_id: &AccountId, facts: &RemoteFacts) -> Option<MessageRecord> {
+    let ids = world
+        .messages_by_message_id
+        .get(&scoped(account_id, facts.message_id.as_deref()?))?;
+    let mut records = ids.iter().filter_map(|id| world.messages.get(id));
+    records.find(|record| record.provider_ref().is_none()).cloned()
 }
 
 /// The account's messages that snapshot `round` has not listed, and that this page does not

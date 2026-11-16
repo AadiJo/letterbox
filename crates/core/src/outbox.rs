@@ -1,36 +1,37 @@
 //! The outbox: every message the user sends, from the moment the core accepts it until the
 //! provider holds it. This module owns each step of a send, so its rules hold in one place:
 //!
-//!   - Accepting writes the message (see mime.rs) and stores it in the same commit as its
+//!   - Accepting writes the message (see draft.rs) and stores it in the same commit as its
 //!     change. The message shows in its conversation at once, in an outbox origin that
 //!     names its change (`Origin::Outbox`), and the turn rule reads it like any other.
-//!   - It is held for the core's undo window. `undo` inside the window removes it and
-//!     settles it `undone`. The end of the window is saved, so a restart keeps it.
-//!   - Once the window ends the send is due, and the account's next pass delivers it in
-//!     the order changes reach the provider. Before each delivery the core saves that it
-//!     tried, so a later try after a crash or a lost answer asks the provider first
-//!     (adapter rule 10). That is how a send reaches the provider exactly once.
+//!   - It is `Held` for the core's undo window. `undo` removes it and settles it `undone`
+//!     while the clock reads before the saved deadline, whether or not its timer has run.
+//!   - Then it is `Due`, and the account's next pass sends it in the order changes reach the
+//!     provider. The core saves `Sending` before the call. An answer that it surely did not
+//!     arrive puts it back to `Due`.
+//!   - A provider offers no way to send a message only once. So a send that may have arrived
+//!     without the core hearing so, because the answer was lost or the core stopped during
+//!     the call, is `Unconfirmed` and is never sent again (adapter rule 10). The core looks
+//!     its Message-ID up at once and a few times more across the confirm window. Found, it is
+//!     delivered. Not found by the end, it fails `unconfirmed`, and sending again is the
+//!     user's choice. A copy that turns up later still takes its place (see reconcile.rs).
 //!   - Delivered, the same record takes the provider's ref in the commit that settles the
 //!     change, so the conversation never shows it twice or drops it for a moment.
-//!   - Refused, it stays in its conversation, marked failed with the provider's reason.
+//!   - Refused, it stays in its conversation, marked failed with the reason.
 
 use std::rc::Rc;
 
-use chrono::{SubsecRound, TimeDelta};
-use letterbox_protocol::{
-    AccountId, ChangeId, ChangeResult, CoreMessage, Delivery, Draft, MessageId, Refusal, Role, Time,
-};
+use chrono::TimeDelta;
+use letterbox_protocol::{AccountId, ChangeId, ChangeResult, CoreMessage, Delivery, Draft, MessageId, Refusal, Time};
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
-use crate::adapter::{BodyResult, Outgoing, RemoteAddress, RemoteBody, RemoteFacts, RemoteHeaders, SendResult};
+use crate::adapter::{BodyResult, MessageRef, Outgoing, SendResult};
 use crate::clock::{iso, parse};
-use crate::mime::{Letter, is_plain_address, write};
+use crate::draft::prepare;
 use crate::reconcile::{remove_with_thread, thread_for};
 use crate::sync::PassResult;
-use crate::world::{
-    ChangeOutcome, ChangeRecord, MessageRecord, MessageState, Op, Origin, World, put_change, put_message,
-};
+use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Op, Origin, World, put_change, put_message};
 use crate::{Inner, Linked};
 
 /// A send on its way out, as its change carries it. Its message is `message_id`, an outbox
@@ -54,9 +55,18 @@ pub struct Outbound {
 pub enum Stage {
     /// In its undo window until `until`. A pass leaves it alone. `undo` cancels it.
     Held { until: Time },
-    /// Out of its window. `tried` turns true, in the store, before the first call to send it.
-    Due { tried: bool },
+    /// Out of its window, and no call to send it has started. A pass sends it.
+    Due,
+    /// A call to send it has started. Saved before the call, so a core that stops during it
+    /// finds it here, and treats it as `Unconfirmed`.
+    Sending,
+    /// It may have reached the provider without the core hearing so. It is never sent again:
+    /// passes look up its Message-ID until `until`, then it fails `unconfirmed`.
+    Unconfirmed { until: Time },
 }
+
+/// How many more times an unconfirmed send is looked up after the first, spread across the window.
+const MORE_LOOKUPS: u32 = 4;
 
 /// What a send shows of itself on its message, or None once the provider holds it.
 pub fn delivery(world: &World, record: &MessageRecord) -> Option<Delivery> {
@@ -75,136 +85,8 @@ pub fn delivery(world: &World, record: &MessageRecord) -> Option<Delivery> {
             change: id,
             until: until.clone(),
         }),
-        (None, Stage::Due { .. }) => Some(Delivery::Sending { change: id }),
+        (None, Stage::Due | Stage::Sending | Stage::Unconfirmed { .. }) => Some(Delivery::Sending { change: id }),
     }
-}
-
-/// A send that passed every check, ready to store.
-struct Prepared {
-    account_id: AccountId,
-    facts: RemoteFacts,
-    body: RemoteBody,
-    server: MessageState,
-    raw: String,
-    bcc: Vec<String>,
-    header_id: String,
-}
-
-/// The start of the text as a list row shows it: no quoted lines, single spaces, at most
-/// 200 characters. The sim provider's `previewOf` gives the same for the copy it keeps.
-fn preview_of(text: &str) -> String {
-    let kept: Vec<&str> = text.lines().filter(|line| !line.starts_with('>')).collect();
-    kept.join(" ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(200)
-        .collect()
-}
-
-/// Checks a draft and writes its message, or says why it cannot be sent.
-fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<Prepared, Refusal> {
-    let account = world.accounts.get(&draft.account_id).ok_or(Refusal::UnknownTarget)?;
-    if !account.capabilities.modify {
-        return Err(Refusal::NotPermitted);
-    }
-    if !account.capabilities.send {
-        return Err(Refusal::NotSupported);
-    }
-    let everyone = draft.to.iter().chain(&draft.cc).chain(&draft.bcc);
-    if draft.to.is_empty() && draft.cc.is_empty() && draft.bcc.is_empty() {
-        return Err(Refusal::Invalid);
-    }
-    if !everyone.clone().all(|address| is_plain_address(address)) || draft.subject.contains(['\r', '\n']) {
-        return Err(Refusal::Invalid);
-    }
-    let parent = match &draft.in_reply_to {
-        None => None,
-        Some(id) => {
-            let parent = world.messages.get(id).filter(|parent| parent.account_id == account.id);
-            Some(parent.ok_or(Refusal::UnknownTarget)?)
-        }
-    };
-    let references: Vec<String> = parent
-        .map(|parent| {
-            parent
-                .facts
-                .references
-                .iter()
-                .chain(&parent.facts.message_id)
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    // A Date header holds whole seconds, so the facts keep the same time the header says.
-    let date = parse(now).trunc_subsecs(0);
-    let domain = account
-        .address
-        .rsplit_once('@')
-        .map_or("letterbox.invalid", |(_, domain)| domain);
-    let header_id = format!("{}.{random:016x}@{domain}", date.timestamp_millis());
-    let text = draft.text.replace("\r\n", "\n");
-    let raw = write(&Letter {
-        from: &account.address,
-        to: &draft.to,
-        cc: &draft.cc,
-        subject: &draft.subject,
-        date,
-        message_id: &header_id,
-        references: &references,
-        text: &text,
-        html: draft.html.as_deref(),
-    });
-    let addresses = |list: &[String]| -> Vec<RemoteAddress> {
-        let bare = |address: &String| RemoteAddress {
-            name: None,
-            address: address.clone(),
-        };
-        list.iter().map(bare).collect()
-    };
-    let sent = world
-        .mailboxes
-        .values()
-        .find(|mailbox| mailbox.account_id == account.id && mailbox.role == Some(Role::Sent));
-    Ok(Prepared {
-        account_id: account.id.clone(),
-        facts: RemoteFacts {
-            message_id: Some(header_id.clone()),
-            references,
-            subject: draft.subject.clone(),
-            from: RemoteAddress {
-                name: None,
-                address: account.address.clone(),
-            },
-            to: addresses(&draft.to),
-            cc: addresses(&draft.cc),
-            sent_at: iso(date),
-            preview: preview_of(&text),
-            size: raw.len() as u64,
-            has_attachments: false,
-            headers: RemoteHeaders {
-                list_unsubscribe: false,
-                list_id: false,
-                precedence: String::new(),
-                auto_submitted: String::new(),
-            },
-            bulk: None,
-        },
-        body: RemoteBody {
-            text,
-            html: draft.html.clone(),
-            attachments: Vec::new(),
-        },
-        server: MessageState {
-            mailboxes: sent.map(|mailbox| mailbox.id.clone()).into_iter().collect(),
-            unread: false,
-            flagged: false,
-        },
-        raw,
-        bcc: draft.bcc.clone(),
-        header_id,
-    })
 }
 
 impl Inner {
@@ -270,24 +152,22 @@ impl Inner {
             let reason = Refusal::UnknownTarget;
             return self.send(CoreMessage::Rejected { change, reason });
         };
-        let message_id = match &record.op {
-            Some(Op::Send(outbound)) if matches!(outbound.stage, Stage::Held { .. }) && record.outcome.is_none() => {
-                outbound.message_id.clone()
-            }
-            // Mail cannot be unsent once its window ends, and it can be undone only once.
-            Some(Op::Send(_)) => {
-                return self.send(CoreMessage::Rejected {
-                    change,
-                    reason: Refusal::Conflict,
-                });
-            }
-            _ => {
-                return self.send(CoreMessage::Rejected {
-                    change,
-                    reason: Refusal::NotSupported,
-                });
-            }
+        let Some(Op::Send(outbound)) = &record.op else {
+            let reason = Refusal::NotSupported;
+            return self.send(CoreMessage::Rejected { change, reason });
         };
+        // The saved deadline decides, not whether its timer has run yet: the clock can pass
+        // it first, and a restart starts the timers again only after it opens the store.
+        let open = match (&outbound.stage, record.outcome) {
+            (Stage::Held { until }, None) => parse(&self.env.now()) < parse(until),
+            _ => false,
+        };
+        // Mail cannot be unsent once its window ends, and it can be undone only once.
+        if !open {
+            let reason = Refusal::Conflict;
+            return self.send(CoreMessage::Rejected { change, reason });
+        }
+        let message_id = outbound.message_id.clone();
         let done = |at| {
             Some(ChangeOutcome {
                 rev: at,
@@ -380,16 +260,23 @@ impl Inner {
             return;
         };
         let account_id = record.account_id.clone();
-        self.commit(|world, tx, _| {
-            let stage = Stage::Due { tried: false };
-            let op = Some(Op::Send(Outbound { stage, ..outbound }));
-            put_change(world, tx, ChangeRecord { op, ..record });
-        });
+        self.restage(record, &outbound, Stage::Due);
         self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
     }
 
-    /// Carries one send to the provider if its window has ended. Returns how the provider
-    /// answered, or why it was not reached, in which case the send stays due.
+    /// Moves a send to `stage` in one commit, and returns its record as stored.
+    fn restage(self: &Rc<Self>, record: ChangeRecord, outbound: &Outbound, stage: Stage) -> ChangeRecord {
+        let op = Some(Op::Send(Outbound {
+            stage,
+            ..outbound.clone()
+        }));
+        let staged = ChangeRecord { op, ..record };
+        self.commit(|world, tx, _| put_change(world, tx, staged.clone()));
+        staged
+    }
+
+    /// Carries one send as far as its stage allows. Returns why the provider was not
+    /// reached, if it was not. The send then stays where it was.
     pub(crate) async fn deliver(
         self: &Rc<Self>,
         account_id: &AccountId,
@@ -397,45 +284,124 @@ impl Inner {
         record: ChangeRecord,
         outbound: Outbound,
     ) -> PassResult {
-        let Stage::Due { tried } = outbound.stage else {
-            return Ok(());
-        };
-        let record = if tried {
-            record
-        } else {
-            let stage = Stage::Due { tried: true };
-            let op = Some(Op::Send(Outbound {
-                stage,
-                ..outbound.clone()
-            }));
-            let marked = ChangeRecord { op, ..record };
-            self.commit(|world, tx, _| put_change(world, tx, marked.clone()));
-            marked
-        };
+        match outbound.stage.clone() {
+            Stage::Held { .. } => Ok(()),
+            Stage::Due => self.post(account_id, linked, record, outbound).await,
+            // A call started and the core stopped before its answer, so the provider may hold it.
+            Stage::Sending => self.unconfirmed(account_id, linked, record, outbound).await,
+            Stage::Unconfirmed { until } => self.confirm(account_id, linked, record, outbound, &until).await,
+        }
+    }
+
+    /// Sends a due message, the one call to `send` it ever gets unless the provider surely did not get it.
+    async fn post(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        linked: &Linked,
+        record: ChangeRecord,
+        outbound: Outbound,
+    ) -> PassResult {
+        let record = self.restage(record, &outbound, Stage::Sending);
         let reply_to = {
             let state = self.state.borrow();
             let parent = outbound.reply_to.as_ref().and_then(|id| state.world.messages.get(id));
             parent.and_then(|parent| parent.provider_ref().cloned())
         };
         let outgoing = Outgoing {
-            raw: outbound.raw,
-            bcc: outbound.bcc,
-            message_id: outbound.header_id,
+            raw: outbound.raw.clone(),
+            bcc: outbound.bcc.clone(),
+            message_id: outbound.header_id.clone(),
             reply_to,
-            maybe_sent: tried,
         };
-        let answer = linked.adapter.send(outgoing).await?;
+        let answer = linked.adapter.send(outgoing).await;
         if !self.still_current(account_id, linked) {
             return Ok(());
         }
-        let r#ref = match answer {
-            SendResult::Refused { reason } => {
+        match answer {
+            // It surely did not reach the provider (rule 10), so a later pass sends it again.
+            Err(failure) => {
+                self.restage(record, &outbound, Stage::Due);
+                Err(failure)
+            }
+            Ok(SendResult::Sent { r#ref }) => {
+                self.delivered(account_id, record, &outbound, r#ref);
+                Ok(())
+            }
+            Ok(SendResult::Refused { reason }) => {
                 // The message stays, so the user sees the send failed (see `delivery`).
                 self.settle(record, ChangeResult::Failed(reason.into()));
-                return Ok(());
+                Ok(())
             }
-            SendResult::Sent { r#ref } => r#ref,
-        };
+            Ok(SendResult::Unconfirmed) => self.unconfirmed(account_id, linked, record, outbound).await,
+        }
+    }
+
+    /// Marks a send that may have reached the provider, with the end of its confirm window, and looks it up.
+    async fn unconfirmed(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        linked: &Linked,
+        record: ChangeRecord,
+        outbound: Outbound,
+    ) -> PassResult {
+        let window = TimeDelta::from_std(self.confirm_window).unwrap_or(TimeDelta::MAX);
+        let now = parse(&self.env.now());
+        let until = iso(now.checked_add_signed(window).unwrap_or(now));
+        let stage = Stage::Unconfirmed { until: until.clone() };
+        let record = self.restage(record, &outbound, stage);
+        self.confirm(account_id, linked, record, outbound, &until).await
+    }
+
+    /// Looks for an unconfirmed send at the provider. Found, it is delivered. Not found, it is
+    /// looked for again later, and once the window has ended it fails. It is never sent again.
+    async fn confirm(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        linked: &Linked,
+        record: ChangeRecord,
+        outbound: Outbound,
+        until: &Time,
+    ) -> PassResult {
+        let found = linked.adapter.find(outbound.header_id.clone()).await?;
+        if !self.still_current(account_id, linked) {
+            return Ok(());
+        }
+        match found.r#ref {
+            Some(r#ref) => self.delivered(account_id, record, &outbound, r#ref),
+            None if parse(&self.env.now()) >= parse(until) => {
+                self.settle(record, ChangeResult::Failed(Refusal::Unconfirmed));
+            }
+            None => self.look_again(account_id, until),
+        }
+        Ok(())
+    }
+
+    /// Queues the next lookup of an unconfirmed send, a step into its window or at its end.
+    /// Like the undo window, the wait is not work a closing core finishes.
+    fn look_again(self: &Rc<Self>, account_id: &AccountId, until: &Time) {
+        let step = TimeDelta::from_std(self.confirm_window / MORE_LOOKUPS).unwrap_or(TimeDelta::MAX);
+        let now = parse(&self.env.now());
+        let next = now.checked_add_signed(step).unwrap_or(now).min(parse(until));
+        let wait = self.env.until(&iso(next));
+        let core = Rc::clone(self);
+        let account_id = account_id.clone();
+        spawn_local(async move {
+            wait.await;
+            if !core.work.is_closed() {
+                core.background(&account_id, Rc::clone(&core).pass(account_id.clone(), false));
+            }
+        });
+    }
+
+    /// Settles a send the provider holds under `ref`. Its outbox message becomes that copy in
+    /// the same commit, so it keeps its id.
+    fn delivered(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        record: ChangeRecord,
+        outbound: &Outbound,
+        r#ref: MessageRef,
+    ) {
         let id = record.id.clone();
         let rev = self.commit(|world, tx, at| {
             let message = world.messages.get(&outbound.message_id).cloned();
@@ -464,6 +430,5 @@ impl Inner {
             rev,
             result,
         });
-        Ok(())
     }
 }

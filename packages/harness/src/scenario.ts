@@ -53,6 +53,13 @@ export type CoreOptions = {
    * an hour or more: then it holds for as long as this core runs (see crates/sim-client/src/main.rs).
    */
   undoWindow?: number
+  /** How long, in seconds, it looks for a send whose answer was lost. Waits as `undoWindow` does. */
+  confirmWindow?: number
+  /**
+   * True holds every wait for as long as this core runs, short or past. The clock still moves,
+   * so a scenario can act after a deadline passes and before the timer for it runs.
+   */
+  holdWaits?: boolean
 }
 
 /** An undo window that holds while the core runs, so a scenario can act inside it. */
@@ -116,6 +123,8 @@ type Backend = {
   createMailbox(seed: Seed): SimMailbox
   /** The core-sim flags that point it at this backend. */
   args: string[]
+  /** Resolves once the backend takes connections. Lines to the core wait for it (see `startCore`). */
+  reachable?: () => Promise<void>
   handedOut(): ReadonlySet<string>
   /** The secrets the core must keep out of its store: sessions, or Gmail's tokens. */
   secrets(): ReadonlySet<string>
@@ -135,6 +144,7 @@ async function startBackend(run: Run, folder: string, record: (entry: Transcript
       // The scenario's own wrapper records what it does to the mailbox. The seed stays out.
       createMailbox: (seed) => fake.createMailbox(seed),
       args: ['--gmail', fake.url, '--gmail-redirects', redirects],
+      reachable: () => fake.reachable(),
       handedOut: () => fake.handedOut(),
       secrets: () => fake.secrets(),
       close: () => fake.close(),
@@ -195,8 +205,10 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
       const flags = [
         ...(options.now === undefined ? [] : ['--now', options.now]),
         ...(options.undoWindow === undefined ? [] : ['--undo-window', String(options.undoWindow)]),
+        ...(options.confirmWindow === undefined ? [] : ['--confirm-window', String(options.confirmWindow)]),
+        ...(options.holdWaits ? ['--hold-waits'] : []),
       ]
-      const core = startCore(data, [...backend.args, ...flags], record, newId)
+      const core = startCore(data, [...backend.args, ...flags], record, newId, backend.reachable)
       cores.push(core)
       return core
     },

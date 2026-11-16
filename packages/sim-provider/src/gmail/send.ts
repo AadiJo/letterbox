@@ -22,23 +22,28 @@ const REFUSAL_STATUS = {
 /**
  * Sends the base64url message in a messages.send body. Gmail reads the recipients from its
  * headers and delivers Bcc without the header. `threadId` must name a thread the account has.
+ * 'dropped' when the account went offline while the send was held: the connection then
+ * drops with no answer, as a send's does when the network fails after the request went out.
  */
 export const send = async (
   entry: MailboxEntry,
   body: unknown,
   hasThread: (threadId: string) => boolean,
-): Promise<{ ref: MessageRef; threadId: string | null } | Failure> => {
+): Promise<{ ref: MessageRef; threadId: string | null } | Failure | 'dropped'> => {
   const raw = isRecord(body) && typeof body.raw === 'string' ? body.raw : null
   if (raw === null) return { status: 400, message: "'raw' RFC822 payload message string required" }
   const threadId = isRecord(body) && typeof body.threadId === 'string' ? body.threadId : null
   if (threadId !== null && !hasThread(threadId)) return { status: 404, message: 'Requested entity was not found.' }
   const message = withoutBcc(Buffer.from(raw, 'base64url').toString('utf8'))
   const messageId = /^Message-ID:\s*<([^>]+)>/im.exec(message.raw)?.[1] ?? ''
-  const arg = { raw: message.raw, bcc: message.bcc, messageId, replyTo: null, maybeSent: false }
+  const arg = { raw: message.raw, bcc: message.bcc, messageId, replyTo: null }
   const result = await ask(entry, { method: 'send', arg })
-  if (result.method !== 'send' || !result.outcome.ok) return { status: 503, message: 'Backend error' }
+  if (result.method !== 'send') return { status: 503, message: 'Backend error' }
+  if (!result.outcome.ok) return 'dropped'
   if (result.outcome.kind === 'refused')
     return { status: REFUSAL_STATUS[result.outcome.reason], message: result.outcome.reason }
+  // The mailbox answers in the same process, so its answer is never lost.
+  if (result.outcome.kind === 'unconfirmed') return { status: 503, message: 'Backend error' }
   return { ref: result.outcome.ref, threadId }
 }
 

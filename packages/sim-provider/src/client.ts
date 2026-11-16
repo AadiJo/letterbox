@@ -15,6 +15,7 @@ type SignInAnswer = Awaited<ReturnType<AdapterFactory['connect']>>
 
 const offline: { ok: false; failure: 'offline' } = { ok: false, failure: 'offline' }
 const cancelled: { ok: false; failure: 'cancelled' } = { ok: false, failure: 'cancelled' }
+const unconfirmed: { ok: true; kind: 'unconfirmed' } = { ok: true, kind: 'unconfirmed' }
 
 /** One open socket to the server. */
 type Link = {
@@ -133,9 +134,17 @@ const createAdapter = (socketPath: string, session: Session, first: Link | null)
       const result = await forward({ method: 'apply', arg: mutation })
       return result?.method === 'apply' ? result.outcome : offline
     },
+    // No socket means the server surely did not get it. A socket that drops after the request
+    // went out means it may have (adapter rule 10).
     send: async (message) => {
-      const result = await forward({ method: 'send', arg: message })
-      return result?.method === 'send' ? result.outcome : offline
+      const link = await reach()
+      if (link === null) return offline
+      const reply = await ask(link, { op: 'call', address: session.address, call: { method: 'send', arg: message } })
+      return reply?.kind === 'result' && reply.result.method === 'send' ? reply.result.outcome : unconfirmed
+    },
+    find: async (messageId) => {
+      const result = await forward({ method: 'find', arg: messageId })
+      return result?.method === 'find' ? result.outcome : offline
     },
     // Each call goes to the server once, so there is no wait between tries to end.
     stopWaiting: () => {},

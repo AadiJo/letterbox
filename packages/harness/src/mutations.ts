@@ -13,6 +13,7 @@
 
 import { type Mutation, runBreaks } from './breaks.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
+import { SEND_MUTATIONS } from './mutations-send.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
 
@@ -389,94 +390,10 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'the core sends a message outside the protocol',
-    file: 'crates/protocol/src/lib.rs',
+    file: 'crates/protocol/src/outcome.rs',
     find: 'pub enum ChangeResult {\n    Done,',
     replace: 'pub enum ChangeResult {\n    #[serde(rename = "finished")]\n    Done,',
     scenarios: 'marking read',
-  },
-  {
-    name: 'a send goes out without waiting for its undo window',
-    file: core('outbox.rs'),
-    find: '        let window = self.env.until(until);',
-    replace: '        let window = self.env.until(&self.env.now());',
-    scenarios: 'undo inside the window',
-  },
-  {
-    name: 'an undone reply stays in its conversation',
-    file: core('outbox.rs'),
-    find: '                remove_with_thread(world, tx, &message_id);\n',
-    replace: '',
-    scenarios: 'undo inside the window',
-  },
-  {
-    name: 'a send can be undone after it went out',
-    file: core('outbox.rs'),
-    find: 'Some(Op::Send(outbound)) if matches!(outbound.stage, Stage::Held { .. }) && record.outcome.is_none() =>',
-    replace: 'Some(Op::Send(outbound)) =>',
-    scenarios: 'undo after the window',
-  },
-  {
-    name: 'a send waits for the next sync instead of going out when its window ends',
-    file: core('outbox.rs'),
-    find: '        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));\n',
-    replace: '        drop(account_id);\n',
-    scenarios: 'a reply shows at once',
-  },
-  {
-    name: 'a delivered reply stays an outbox message, so a resync shows it twice',
-    file: core('outbox.rs'),
-    find: '            if let Some(message) = message {',
-    replace: '            if let Some(message) = message.filter(|_| false) {',
-    scenarios: 'a reply shows at once',
-  },
-  {
-    name: 'a full resync drops a reply the provider refused',
-    file: core('reconcile.rs'),
-    find: '        .filter(|record| record.provider_ref().is_some())\n        .filter(|record| &record.account_id == account_id && record.round != round)',
-    replace: '        .filter(|record| &record.account_id == account_id && record.round != round)',
-    scenarios: 'marked failed',
-  },
-  {
-    name: 'a restart forgets a send still in its undo window',
-    file: core('outbox.rs'),
-    find: '        for (change, until) in held {\n            self.hold(change, &until);\n        }\n',
-    replace: '        drop(held);\n',
-    scenarios: 'restart inside the undo window',
-  },
-  {
-    name: 'a send after a crash does not ask the provider first, so the provider gets it twice',
-    file: core('outbox.rs'),
-    find: '            maybe_sent: tried,',
-    replace: '            maybe_sent: false,',
-    scenarios: 'killed in the middle of a delivery',
-  },
-  {
-    name: 'the core does not save that it tried a send, so after a crash it sends again blind',
-    file: core('outbox.rs'),
-    find: '        let record = if tried {',
-    replace: '        let record = if true {',
-    scenarios: 'killed in the middle of a delivery',
-  },
-  {
-    name: 'bcc recipients never get the message',
-    file: core('outbox.rs'),
-    find: '            bcc: outbound.bcc,',
-    replace: '            bcc: Vec::new(),',
-    scenarios: 'a new message starts',
-  },
-  {
-    name: 'the same send sent twice reaches the provider twice',
-    file: core('dispatch.rs'),
-    find: '        if let Some(earlier) = earlier {',
-    replace: '        if let Some(earlier) = earlier.filter(|_| false) {',
-    scenarios: 'same send twice',
-  },
-  {
-    name: 'the sim provider reads encoded subjects as they travel, so its copy differs from the one sent',
-    file: 'packages/sim-provider/src/sent.ts',
-    find: "      subject: decodeWords(headers.get('subject') ?? ''),",
-    replace: "      subject: headers.get('subject') ?? '',",
-    scenarios: 'a new message starts',
   },
   {
     name: 'the client hands a wait for one change the settled of another',
@@ -487,4 +404,4 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([...MUTATIONS, ...GMAIL_MUTATIONS])
+runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...GMAIL_MUTATIONS])

@@ -1,6 +1,8 @@
 //! Writes the messages the core sends, as RFC 5322 text with MIME (RFC 2045 to 2047). This
 //! is the one place the core writes MIME, so every rule about the format lives here:
-//!   - Every line ends in CRLF. Header lines fold before 78 characters where they can.
+//!   - Every line ends in CRLF and stays within RFC 5322's 998 characters. Free text and
+//!     lists fold to stay within 78. An address or Message-ID that is longer on its own is
+//!     bounded instead (`is_plain_address`, `MAX_ID`).
 //!   - A header value that is not printable ASCII travels as RFC 2047 encoded words.
 //!   - Text parts are UTF-8 in base64, so no body line is too long and none can look like
 //!     the boundary, which holds "=_", two characters base64 never writes.
@@ -29,9 +31,16 @@ const LINE: usize = 78;
 /// The most UTF-8 bytes in one encoded word, so the word stays well inside 75 characters.
 const WORD_BYTES: usize = 39;
 
+/// The longest Message-ID the core writes in a header. One line holds a whole id.
+pub const MAX_ID: usize = 900;
+
 /// True for an address the core can write as it is: printable ASCII with no spaces, one
-/// `@` with text on both sides, and none of the characters that would need quoting.
+/// `@` with text on both sides, none of the characters that would need quoting, and at most
+/// the 254 characters RFC 5321 allows a path.
 pub fn is_plain_address(address: &str) -> bool {
+    if address.len() > 254 {
+        return false;
+    }
     let Some((local, domain)) = address.split_once('@') else {
         return false;
     };
@@ -99,10 +108,12 @@ fn push_list<'a>(out: &mut String, name: &str, addresses: impl Iterator<Item = &
 }
 
 /// A free-text header such as Subject. Printable ASCII folds at its spaces, which unfolding
-/// gives back. Anything else becomes encoded words, one per line. Text that holds "=?" is
-/// encoded too, so a reader cannot mistake it for an encoded word.
+/// gives back. Anything else becomes encoded words, one per line: text that is not ASCII,
+/// text that holds "=?", so a reader cannot mistake it for an encoded word, and text with a
+/// word too long to fit on a line, which folding at spaces cannot break.
 fn push_unstructured(out: &mut String, name: &str, value: &str) {
-    let plain = value.chars().all(|c| matches!(c, ' '..='~')) && !value.contains("=?");
+    let fits = value.split(' ').all(|word| name.len() + 2 + word.len() <= LINE);
+    let plain = value.chars().all(|c| matches!(c, ' '..='~')) && !value.contains("=?") && fits;
     if !plain {
         let words = utf8_chunks(value, WORD_BYTES).map(|chunk| format!("=?UTF-8?B?{}?=", base64(chunk.as_bytes())));
         return push(out, name, &words.collect::<Vec<_>>().join("\r\n "));

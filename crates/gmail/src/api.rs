@@ -43,6 +43,10 @@ const RATE_LIMIT_TRIES: u32 = 8;
 pub enum CallError {
     /// The provider was not reached, or not with valid credentials.
     Failure(AdapterFailure),
+    /// The request went out, then the connection failed before an answer came back, so the
+    /// provider may have acted on it. Only a send needs to tell this apart (see send.rs).
+    /// Every other caller reads it as offline.
+    Lost,
     /// The provider answered with an error status. Each caller decides what that means.
     Status { status: StatusCode, reason: String },
 }
@@ -55,7 +59,7 @@ impl CallError {
                 *status == StatusCode::TOO_MANY_REQUESTS
                     || (*status == StatusCode::FORBIDDEN && RATE_LIMITS.contains(&reason.as_str()))
             }
-            CallError::Failure(_) => false,
+            CallError::Failure(_) | CallError::Lost => false,
         }
     }
 
@@ -76,6 +80,7 @@ impl CallError {
     pub fn failure(&self) -> AdapterFailure {
         match self {
             CallError::Failure(failure) => *failure,
+            CallError::Lost => AdapterFailure::Offline,
             CallError::Status { .. } => AdapterFailure::ProviderError,
         }
     }
@@ -163,7 +168,14 @@ impl Api {
             Some(token) => token,
             None => self.fresh_token().await.map_err(CallError::Failure)?,
         };
-        let offline = |_| CallError::Failure(AdapterFailure::Offline);
+        // A connection that was never made surely carried nothing. Any later failure may have.
+        let offline = |error: reqwest::Error| {
+            if error.is_connect() {
+                CallError::Failure(AdapterFailure::Offline)
+            } else {
+                CallError::Lost
+            }
+        };
         let response = build(&self.http).bearer_auth(&token).send().await.map_err(offline)?;
         let response = if response.status() == StatusCode::UNAUTHORIZED {
             let token = self.fresh_token().await.map_err(CallError::Failure)?;

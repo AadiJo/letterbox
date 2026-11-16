@@ -22,6 +22,8 @@ pub enum Call {
     Body(MessageRef),
     Apply(Mutation),
     Send(Outgoing),
+    /// A Message-ID, without angle brackets.
+    Find(String),
 }
 
 impl Call {
@@ -33,6 +35,7 @@ impl Call {
             Call::Body(_) => "body",
             Call::Apply(_) => "apply",
             Call::Send(_) => "send",
+            Call::Find(_) => "find",
         }
     }
 }

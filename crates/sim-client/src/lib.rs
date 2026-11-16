@@ -18,8 +18,8 @@ use std::rc::{Rc, Weak};
 
 use letterbox_core::adapter::{
     Adapter, AdapterCapabilities, AdapterFactory, AdapterFailure, ApplyResult, BodyResult, ChangesResult, Connection,
-    Cursor, FactoryOption, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult, SignInFailure,
-    SignInInput, SnapshotPage,
+    Cursor, FactoryOption, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult,
+    SignInFailure, SignInInput, SnapshotPage,
 };
 use letterbox_protocol::SignInMethod;
 use serde::de::DeserializeOwned;
@@ -249,8 +249,25 @@ impl Adapter for SimAdapter {
         Box::pin(self.call(Call::Apply(mutation)))
     }
 
+    /// No socket means the server surely did not get it. A socket that drops after the
+    /// request went out means it may have (adapter rule 10).
     fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>> {
-        Box::pin(self.call(Call::Send(message)))
+        Box::pin(async move {
+            let _in_flight = self.calls.token();
+            let link = self.reach().await.ok_or(AdapterFailure::Offline)?;
+            let body = RequestBody::Call {
+                address: self.session.address.clone(),
+                call: Call::Send(message),
+            };
+            match link.ask(&body).await {
+                Some(Reply::Result { result, .. }) if result.method == "send" => outcome(result.outcome),
+                _ => Ok(SendResult::Unconfirmed),
+            }
+        })
+    }
+
+    fn find(&self, message_id: String) -> LocalFuture<'_, Outcome<Found>> {
+        Box::pin(self.call(Call::Find(message_id)))
     }
 
     // Each call goes to the server once, so there is no wait between tries to end.

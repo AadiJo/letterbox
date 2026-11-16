@@ -14,6 +14,11 @@
 // every page token it handed out. messages.send goes through the mailbox's `send` (send.ts),
 // and a sent reply joins the thread its `threadId` names. Every other message is its own thread.
 //
+// Offline: while every account at the fake is offline, the fake stops listening, so a new
+// connection is refused as it is when the network is down. A client can then tell that its
+// request never arrived, which a send needs (adapter rule 10). With other accounts still
+// online, a request for an offline one is dropped after it arrives instead.
+//
 // Where Gmail's behaviour is not documented, the fake picks the strict reading:
 //   - messages.list answers a page token it does not accept with the 400 a live call
 //     with a made-up token got (https://github.com/brekkylab/backlot/issues/390). Google
@@ -71,6 +76,8 @@ export interface GmailFake {
   refusals(address: string): number
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
+  /** Resolves once the fake takes connections: at once, unless it is listening again after every account was offline. */
+  reachable(): Promise<void>
   /** Every refresh and access token this fake issued. None may reach the core's store. */
   secrets(): ReadonlySet<string>
   close(): Promise<void>
@@ -168,6 +175,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       const hasThread = (id: string) =>
         [...store.messages.values()].some((stored) => threadOf(entry, stored.ref) === id)
       const sent = await sendMessage(entry, parse(body), hasThread)
+      if (sent === 'dropped') return void response.socket?.destroy()
       if ('status' in sent) return fail(response, sent.status, sent.message)
       if (sent.threadId !== null) threads.set(`${entry.control.address}\n${sent.ref}`, sent.threadId)
       const id = remember(gmailIdOf(sent.ref))
@@ -264,7 +272,26 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     return fail(response, 404, `No such endpoint: ${method} ${path}`)
   }
 
+  // Sockets with a request in flight. Going offline drops only the idle ones.
+  const busy = new WeakSet<Socket>()
+  let port: number | null = null
+  // Listening again resolves the host first, so it finishes on a later tick.
+  let listening: Promise<void> = Promise.resolve()
+  /** Stops listening while every account is offline, and listens again on the same port once one is back. */
+  const listenWhileReachable = () => {
+    const down = mailboxes.size > 0 && [...mailboxes.values()].every((entry) => entry.isOffline())
+    if (down && server.listening) {
+      server.close()
+      for (const socket of sockets) if (!busy.has(socket)) socket.destroy()
+    } else if (!down && !server.listening && port !== null && closing === null) {
+      const again = port
+      listening = new Promise((resolve) => server.listen(again, '127.0.0.1', resolve))
+    }
+  }
+
   const server = createServer((request, response) => {
+    busy.add(request.socket)
+    response.on('close', () => busy.delete(request.socket))
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     void readBody(request).then(async (body) => {
       if (request.method === 'POST' && url.pathname === '/token') {
@@ -303,7 +330,11 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       if (mailboxes.has(seed.address)) throw new Error(`fake gmail: ${seed.address} already has a mailbox`)
       const entry = createMailboxEntry('labels', seed)
       mailboxes.set(seed.address, entry)
-      return entry.control
+      const setOffline = (offline: boolean) => {
+        entry.control.setOffline(offline)
+        listenWhileReachable()
+      }
+      return { ...entry.control, setOffline }
     },
     approveSignIn: (consent, address) => {
       const entry = mailboxes.get(address)
@@ -317,6 +348,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     setQuota: (address, quota) => quotas.set(address, quota),
     refusals: (address) => quotas.refusals(address),
     handedOut: () => handedOut,
+    reachable: () => listening,
     secrets: () => oauth.secrets(),
     close: () => {
       closing ??= new Promise<void>((resolve) => {
@@ -333,6 +365,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       server.off('error', reject)
       const address = server.address()
       if (address === null || typeof address === 'string') return reject(new Error('fake gmail: no TCP address'))
+      port = address.port
       resolve(fake(`http://127.0.0.1:${address.port}`))
     })
   })

@@ -2,59 +2,10 @@
 // provider exactly once, and settles into the copy the provider keeps. Each scenario is one
 // way a send could be lost, doubled, shown wrongly or sent when the user took it back.
 
-import type { AccountId, ChangeId, Draft, Message, MessageId, ThreadDetail, ThreadId } from '@letterbox/protocol'
-import type { CoreClient } from '../src/client.ts'
-import {
-  ME,
-  PASSWORD,
-  mailbox,
-  openThread,
-  readThread,
-  signIn,
-  standardSeed,
-  start,
-  sync,
-  thread,
-  threads,
-  untilAccounts,
-} from '../src/fixtures.ts'
-import { type CoreOptions, HELD_WINDOW, type Scenario, scenario } from '../src/scenario.ts'
-
-const ASKED = 'Can you review the draft?'
-
-/** A reply from me to Ben's question, or a new message when `inReplyTo` is null. */
-const draft = (accountId: AccountId, inReplyTo: MessageId | null, more: Partial<Draft> = {}): Draft => ({
-  accountId,
-  to: ['ben@example.com'],
-  cc: [],
-  bcc: [],
-  subject: `Re: ${ASKED}`,
-  text: 'Yes, I will look at it tomorrow.\n> Can you review the draft before Thursday?',
-  html: null,
-  inReplyTo,
-  ...more,
-})
-
-/** The usual start, with the core's options. */
-async function startWith(t: Scenario, options: CoreOptions) {
-  const box = t.mailbox(standardSeed(t.dialect))
-  const core = t.startCore(options)
-  await core.hello()
-  const accountId = await signIn(t, core, ME, PASSWORD)
-  await sync(core)
-  return { core, box, accountId }
-}
-
-/** The question Ben asked, and its conversation. */
-async function asked(core: CoreClient): Promise<{ threadId: ThreadId; question: Message }> {
-  const row = await thread(core, ASKED)
-  const question = (await readThread(core, row.id))?.messages[0]
-  if (!question) throw new Error('the question has no message')
-  return { threadId: row.id, question }
-}
-
-/** The ids of a conversation's messages, oldest first. */
-const idsOf = (detail: ThreadDetail | null | undefined) => detail?.messages.map((message) => message.id)
+import type { ChangeId, ThreadDetail } from '@letterbox/protocol'
+import { ME, mailbox, openThread, readThread, start, sync, thread, threads, untilAccounts } from '../src/fixtures.ts'
+import { HELD_WINDOW, scenario } from '../src/scenario.ts'
+import { ASKED, asked, draft, idsOf, startWith } from '../src/sending.ts'
 
 scenario('a reply shows at once, hands the turn over, and settles into one copy', async (t) => {
   const { core, box, accountId } = await start(t)
@@ -100,6 +51,15 @@ scenario('a reply shows at once, hands the turn over, and settles into one copy'
     'it answers the question by In-Reply-To and References',
   )
   t.equal(copies[0]?.recipients, ['ben@example.com'], 'it went to Ben')
+
+  // Settled, the reply is the provider's copy, so a change to its conversation reaches that copy.
+  const flag = await core.command({ kind: 'set-flags', threadIds: [threadId], flagged: true })
+  t.equal((await core.settled(flag.change)).result, 'done', 'flagging the conversation settles')
+  t.equal(
+    box.truth().find((message) => message.key === 'sent-1')?.flagged,
+    true,
+    'the flag reached the provider copy of the reply, before any sync',
+  )
 
   // A full resync lists the mailbox again. The provider's copy must match the reply the core holds.
   box.expireCursors()

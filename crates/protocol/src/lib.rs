@@ -23,10 +23,12 @@
 //!   8. Updates caused by a command or request are sent before its `settled` or
 //!      `response`. A client that has the answer has already seen the effects.
 
+mod outcome;
 mod send;
 
 use std::num::NonZeroU64;
 
+pub use outcome::{ChangeResult, Refusal};
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
@@ -432,27 +434,6 @@ impl TurnChoice {
             TurnChoice::Auto => None,
         }
     }
-}
-
-/// Why the core or the provider said no.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum Refusal {
-    NotPermitted,
-    NotSupported,
-    UnknownTarget,
-    Conflict,
-    RefusedByProvider,
-    Invalid,
-}
-
-/// The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChangeResult {
-    Done,
-    Undone,
-    Failed(Refusal),
 }
 
 // ---------------------------------------------------------------- request

@@ -6,10 +6,17 @@ const gmail = (file: string) => `crates/gmail/src/${file}`
 
 export const GMAIL_MUTATIONS: Mutation[] = [
   {
-    name: 'gmail: a send after a crash does not search first, so Gmail gets it twice',
+    name: 'gmail: a lost answer reads as offline, so the core sends the message again',
     file: gmail('send.rs'),
-    find: '        if outgoing.maybe_sent\n',
-    replace: '        if outgoing.maybe_sent && false\n',
+    find: '            Err(CallError::Lost) => Ok(SendResult::Unconfirmed),',
+    replace: '            Err(CallError::Lost) => Err(AdapterFailure::Offline),',
+    scenarios: 'lost in transit',
+  },
+  {
+    name: 'gmail: find never finds a sent message, so a send cut off by a crash fails though it went',
+    file: gmail('adapter.rs'),
+    find: '                r#ref: found.map(MessageRef::new),',
+    replace: '                r#ref: found.map(MessageRef::new).filter(|_| false),',
     scenarios: 'killed in the middle of a delivery',
   },
   {

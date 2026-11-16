@@ -6,13 +6,16 @@
 //
 //   X01 a sent copy is not filed read in Sent, or its facts or body differ from the message's headers and parts
 //   X02 the next changes misses the copy, reports it under another ref, or reports it twice
-//   X03 a send that may have gone through before files a second copy of a Message-ID it has
+//   X03 find misses a copy with that Message-ID, or names one it does not hold
 //   X04 refuseNextSend does not refuse, files a copy, or refuses more than once
 //   X05 read-only: send is offered, or files a copy
 //   X06 offline: send answers something else, is counted, or files a copy
 //   X07 a held send is answered or files a copy before release
 //   X08 sent() misses a Cc or Bcc recipient, or keeps another raw message than the one sent
 //   X09 a mailbox with no Sent mailbox files the copy somewhere else
+//   X10 a message with a line over RFC 5322's 998 characters is filed
+//   X11 a send whose socket drops after the request went out answers offline, which lets the
+//       core send it again, or one that never reached a socket answers anything but offline
 //   M01 folded headers, Q and B encoded words, quoted names or a quoted-printable part read wrong
 //   M02 withoutBcc keeps the Bcc header, loses its addresses, or touches the body
 
@@ -85,7 +88,6 @@ const outgoing = (extra: Partial<Outgoing> = {}): Outgoing => ({
   bcc: ['eve@sim.test'],
   messageId: 'reply-1@sim.test',
   replyTo: null,
-  maybeSent: false,
   ...extra,
 })
 
@@ -128,7 +130,7 @@ const open = async (dialect: Dialect, extra: Partial<Seed> = {}) => {
   cleanups.push(() => adapter.close())
   const page = await adapter.snapshot(null)
   assert(page.ok && page.cursor !== null, 'the first snapshot did not answer with a cursor')
-  return { box, adapter, cursor: page.cursor, mailboxes: page.mailboxes }
+  return { provider, box, adapter, cursor: page.cursor, mailboxes: page.mailboxes }
 }
 
 /** Sends and insists the provider took it. */
@@ -182,12 +184,12 @@ await check('X02 the next changes reports the copy once, under the ref send answ
   assert.deepEqual(again.added, [], 'the copy was reported again')
 })
 
-await check('X03 a send that may have gone through answers the copy it has', BOTH, async (dialect) => {
+await check('X03 find answers the copy with that Message-ID, or null', BOTH, async (dialect) => {
   const { box, adapter } = await open(dialect)
+  assert.deepEqual(await adapter.find('reply-1@sim.test'), { ok: true, ref: null })
   const ref = await sent(adapter)
-  assert.equal(await sent(adapter, outgoing({ maybeSent: true })), ref)
-  assert.equal(box.sent().length, 1, 'a second copy was filed')
-  assert.equal(box.calls().send, 2)
+  assert.deepEqual(await adapter.find('reply-1@sim.test'), { ok: true, ref })
+  assert.deepEqual([box.sent().length, box.calls().find], [1, 2])
 })
 
 await check('X04 refuseNextSend refuses once and files nothing', BOTH, async (dialect) => {
@@ -271,6 +273,23 @@ await check('M02 withoutBcc takes out the header and keeps its addresses', ['lab
     raw: 'From: me@sim.test\r\nSubject: x\r\n\r\nBcc: not a header\r\n',
     bcc: ['eve@sim.test', 'fay@sim.test'],
   })
+})
+
+await check('X10 a message with a line over 998 characters is refused', BOTH, async (dialect) => {
+  const { box, adapter } = await open(dialect)
+  const raw = REPLY.replace('Subject: ', `Subject: ${'x'.repeat(1000)} `)
+  assert.deepEqual(await adapter.send(outgoing({ raw })), { ok: true, kind: 'refused', reason: 'refused-by-provider' })
+  assert.deepEqual(box.sent(), [])
+})
+
+await check('X11 a dropped answer is unconfirmed, and no socket at all is offline', BOTH, async (dialect) => {
+  const { box, adapter, provider } = await open(dialect)
+  box.holdSends()
+  const answer = adapter.send(outgoing())
+  await box.sendHeld()
+  await provider.close()
+  assert.deepEqual(await answer, { ok: true, kind: 'unconfirmed' })
+  assert.deepEqual(await adapter.send(outgoing()), { ok: false, failure: 'offline' })
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

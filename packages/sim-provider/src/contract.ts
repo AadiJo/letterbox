@@ -83,7 +83,14 @@ export type Seed = {
 export type TruthMessage = { key: string; mailboxes: string[]; unread: boolean; flagged: boolean }
 
 /** How many times the core called each adapter method on this mailbox. */
-export type CallCounts = { snapshot: number; changes: number; body: number; apply: number; send: number }
+export type CallCounts = {
+  snapshot: number
+  changes: number
+  body: number
+  apply: number
+  send: number
+  find: number
+}
 
 /** One message the core sent through this mailbox, as the provider delivered it. */
 export type SentCopy = {

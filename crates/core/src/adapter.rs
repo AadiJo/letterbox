@@ -27,9 +27,12 @@
 //!      <https://developers.google.com/workspace/gmail/api/guides/list-messages>
 //!  10. `send` delivers the message as the core wrote it, to its To and Cc addresses and to
 //!      `bcc`, keeps a copy where the provider keeps sent mail, and answers with that copy's
-//!      ref. Later `changes` and snapshots report the copy under that ref. When `maybe_sent`
-//!      is true, an earlier call may have delivered it already: `send` first looks for a
-//!      message with the same Message-ID and answers with its ref instead of sending again.
+//!      ref. Later `changes` and snapshots report the copy under that ref. It answers
+//!      `offline` (or another failure) only when the message surely did not reach the
+//!      provider, such as when no connection was made, and `unconfirmed` when it may have.
+//!      A provider offers no way to send a message only once, so after `unconfirmed`, or a
+//!      core that stopped during the call, the core never calls `send` for it again. It calls
+//!      `find` with its Message-ID instead (see outbox.rs).
 //!
 //! The core runs on one thread, so adapters and their futures need not be `Send`.
 
@@ -304,8 +307,6 @@ pub struct Outgoing {
     pub message_id: String,
     /// The message it answers, for a provider that keeps threads of its own.
     pub reply_to: Option<MessageRef>,
-    /// True when an earlier call to send it may have reached the provider. See rule 10.
-    pub maybe_sent: bool,
 }
 
 impl Outgoing {
@@ -326,6 +327,14 @@ pub enum SendResult {
     Refused {
         reason: ProviderRefusal,
     },
+    /// The call may have reached the provider, but no answer came back. See rule 10.
+    Unconfirmed,
+}
+
+/// What `find` found: the ref of the message with that Message-ID, or None.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Found {
+    pub r#ref: Option<MessageRef>,
 }
 
 /// One signed-in mailbox at one provider.
@@ -341,6 +350,9 @@ pub trait Adapter {
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>>;
     /// Delivers one message (rule 10). The core calls it in the account's order, like `apply`.
     fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>>;
+    /// The message the provider holds with this Message-ID (without angle brackets), if any.
+    /// The core asks it when a `send` may have reached the provider without saying so.
+    fn find(&self, message_id: String) -> LocalFuture<'_, Outcome<Found>>;
     /// Ends every wait the adapter adds between tries of a call, such as a rate-limit backoff,
     /// now and from now on. A call that was waiting answers `offline`. Calls in flight still
     /// finish and later calls still reach the provider, so a closing core's work ends soon.
