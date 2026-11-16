@@ -3,3 +3,8 @@ packages:
   - apps/*
   - apps/*/*
   - lint
+
+# Electron 45 has no install script to run. It downloads its binary the first time
+# something asks for its path (apps/desktop/shell/src/build.ts).
+allowBuilds:
+  electron: false

@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@letterbox/client": "workspace:*",
+    "@letterbox/desktop-shell": "workspace:*",
     "@letterbox/protocol": "workspace:*",
     "@letterbox/sim-provider": "workspace:*",
     "vite": "^8.3.8",

@@ -58,6 +58,14 @@
       "rules": { "letterbox/renderer-thread-lists": "error" }
     },
     {
+      "files": ["apps/desktop/shell/**", "lint/fixtures/no-ui-in-shell/**"],
+      "rules": { "letterbox/no-ui-in-shell": "error" }
+    },
+    {
+      "files": ["apps/desktop/shell/**", "lint/fixtures/shell-process-boundary/**"],
+      "rules": { "letterbox/shell-process-boundary": "error" }
+    },
+    {
       // React Compiler memoizes the renderer's components and hooks. Hand-written memos only add noise.
       "files": ["apps/desktop/renderer/**"],
       "rules": {

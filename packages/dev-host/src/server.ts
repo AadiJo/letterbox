@@ -2,7 +2,8 @@
 // to a core-sim of its own, and `/dev/deliver` adds new mail at the sim provider.
 //
 // Each WebSocket gets a fresh core over the shared dev store. The store allows one core at a
-// time, so a new tab, or a reload, stops the core of the tab before it.
+// time, so a new tab, or a reload, stops the core of the tab before it. In the desktop loop
+// the shell's main process owns the core, so `/core` is off and a stray tab cannot start one.
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -11,15 +12,24 @@ import { type WebSocket, WebSocketServer } from 'ws'
 import { type CoreProcess, type Paths, startCore } from './core.ts'
 import { listen } from './port.ts'
 
-export type ServerOptions = {
-  paths: Paths
-  /** The port to try first. The next free one is used if it is taken. 0 lets the system pick. */
-  port: number
+/** The sim the page shows. */
+export type Sim = {
   /** The seed's fixed time: core-sim's --now, and the time the renderer measures ages from. */
   now: string
   /** Adds `count` new automated messages at the sim provider. */
   deliver(count: number): void
 }
+
+/**
+ * With `relay: true`, as in `pnpm dev`, each tab's core is a core-sim behind `/core`. With
+ * `relay: false`, as in `pnpm dev:desktop`, the shell starts the core, and a real core has no
+ * sim: it runs on the clock and nothing can deliver to it.
+ */
+export type ServerOptions = {
+  paths: Paths
+  /** The port to try first. The next free one is used if it is taken. 0 lets the system pick. */
+  port: number
+} & ({ relay: true; sim: Sim } | { relay: false; sim: Sim | undefined })
 
 export type DevServer = {
   /** The page, for example http://127.0.0.1:24349/. */
@@ -105,9 +115,9 @@ const deliverRoute =
  */
 export async function startServer(options: ServerOptions): Promise<DevServer> {
   const http = createHttpServer()
-  const relay = coreRelay(options.paths, options.now)
+  const relay = options.relay ? coreRelay(options.paths, options.sim.now) : undefined
   const sockets = new WebSocketServer({ noServer: true })
-  sockets.on('connection', relay.connect)
+  if (relay) sockets.on('connection', relay.connect)
 
   const renderer = join(options.paths.root, 'apps/desktop/renderer')
   const vite = await createViteServer({
@@ -116,18 +126,22 @@ export async function startServer(options: ServerOptions): Promise<DevServer> {
     appType: 'spa',
     clearScreen: false,
     logLevel: 'warn',
-    define: { 'import.meta.env.VITE_LETTERBOX_NOW': JSON.stringify(options.now) },
+    define: options.sim ? { 'import.meta.env.VITE_LETTERBOX_NOW': JSON.stringify(options.sim.now) } : {},
     server: { middlewareMode: true, hmr: { server: http } },
   })
 
-  const deliver = deliverRoute(options.deliver)
+  const deliver = options.sim && deliverRoute(options.sim.deliver)
   http.on('request', (request, response) => {
-    if (new URL(request.url ?? '/', 'http://host').pathname === '/dev/deliver') return void deliver(request, response)
-    vite.middlewares(request, response)
+    if (new URL(request.url ?? '/', 'http://host').pathname !== '/dev/deliver')
+      return vite.middlewares(request, response)
+    if (deliver) return void deliver(request, response)
+    response.statusCode = 404
+    response.end('This dev host runs no sim provider, so it cannot deliver mail.')
   })
   // Vite answers its own HMR upgrades and leaves every other path alone.
   http.on('upgrade', (request, socket, head) => {
     if (new URL(request.url ?? '/', 'http://host').pathname !== '/core') return
+    if (!relay) return void socket.destroy()
     sockets.handleUpgrade(request, socket, head, (client) => sockets.emit('connection', client, request))
   })
 
@@ -135,7 +149,7 @@ export async function startServer(options: ServerOptions): Promise<DevServer> {
   return {
     url: `http://127.0.0.1:${port}/`,
     close: async () => {
-      await relay.close()
+      await relay?.close()
       sockets.close()
       await vite.close()
       http.closeAllConnections()

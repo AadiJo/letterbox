@@ -35,7 +35,7 @@ export async function checkFirstSync(browser: Browser) {
   const provider = await startSimProvider(paths.socket)
   const mailbox = provider.createMailbox(seed.dialect, { ...seed.seed, pageSize: PAGE_SIZE })
   mailbox.holdSnapshots()
-  const server = await startServer({ paths, port: 0, now: seed.now, deliver: () => {} })
+  const server = await startServer({ paths, port: 0, relay: true, sim: { now: seed.now, deliver: () => {} } })
   const opened = await openPage(browser, server.url, 'trace-first-sync.zip')
   const { page } = opened
   try {
