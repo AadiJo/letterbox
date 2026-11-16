@@ -166,39 +166,15 @@ export function openReply(thread: ThreadDetail, all: boolean) {
   set(thread.id, { ...current, state: 'open', reply: { ...reply, cc }, extra: current.extra || cc.length > 0 })
 }
 
-/** Replies waiting to come back to a conversation whose draft waits on the core. They join it once it settles. */
-const waiting = new Map<ThreadId, Reply[]>()
-
-/** Everyone in `first`, then anyone in `then` who is not already there. */
-const union = (first: readonly Recipient[], then: readonly Recipient[]) => [
-  ...first,
-  ...then.filter((person) => !first.some((had) => sameAddress(had, person))),
-]
-
 /**
- * Puts a reply back in the editor, as after an undo or for "Edit and send again". No text is
- * ever lost: over a newer draft, the reply's text comes first and the newer draft's after
- * it, below a blank line, and the newer draft gains the reply's people it lacks. While the
- * newer draft waits on the core, the reply waits too (`settle`).
+ * Puts one reply back in the editor, exactly as it was: its people, its text and the message
+ * it answers, as after an undo or for "Edit and send again". A conversation holds at most one
+ * reply on its way (sending.ts), so nothing else is there to merge with or lose.
  */
 export function restore(id: ThreadId, reply: Reply) {
-  const current = drafts.get(id)
-  if (isBusy(current)) {
-    waiting.set(id, [...(waiting.get(id) ?? []), reply])
-    return
-  }
+  if (isBusy(drafts.get(id))) return
   opening = id
-  const joined = current
-    ? {
-        ...current.reply,
-        to: union(reply.to, current.reply.to),
-        cc: union(reply.cc, current.reply.cc),
-        bcc: union(reply.bcc, current.reply.bcc),
-        text: [reply.text, current.reply.text].filter((text) => text.trim() !== '').join('\n\n'),
-      }
-    : reply
-  const extra = (current?.extra ?? false) || joined.cc.length > 0 || joined.bcc.length > 0
-  set(id, { state: 'open', reply: joined, extra, problem: null })
+  set(id, { state: 'open', reply, extra: reply.cc.length > 0 || reply.bcc.length > 0, problem: null })
 }
 
 /** Changes the open draft. Any problem shown goes, since the user is fixing it. */
@@ -249,9 +225,6 @@ export function settle(id: ThreadId, problem: Problem | null) {
   const current = drafts.get(id)
   if (!isBusy(current)) return
   set(id, problem ? { state: 'open', reply: current.reply, extra: current.extra, problem } : null)
-  const queued = waiting.get(id) ?? []
-  waiting.delete(id)
-  for (const reply of queued) restore(id, reply)
 }
 
 /**

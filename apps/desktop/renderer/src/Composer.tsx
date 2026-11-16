@@ -3,10 +3,11 @@
 // first words. The editor docks below the conversation as an inset field that grows with its
 // text up to 40% of the reader. Past that its lines and text scroll, and Send stays in view.
 // Esc folds it back to the bar and keeps the draft; Discard throws the draft away. drafts.ts
-// holds the draft, DraftText.tsx edits its text and sending.ts sends it.
+// holds the draft, DraftText.tsx edits its text and sending.ts sends it. While a reply is on
+// its way, the dock shows that reply read only, with Undo, instead of a second draft.
 
 import type { ThreadDetail, ThreadId } from '@letterbox/protocol'
-import { ChevronDown, CircleAlert, Reply as ReplyIcon, ReplyAll, Trash2, X } from 'lucide-react'
+import { ChevronDown, CircleAlert, Clock, Reply as ReplyIcon, ReplyAll, Trash2, X } from 'lucide-react'
 import { type KeyboardEvent, type ReactNode } from 'react'
 import { REPLY_KEY } from './actions.ts'
 import { Avatar } from './Avatar.tsx'
@@ -19,7 +20,6 @@ import {
   type Field,
   isPlainAddress,
   newReply,
-  openReply,
   parseRecipients,
   type Problem,
   type Recipient,
@@ -29,7 +29,8 @@ import {
 import { DraftText } from './DraftText.tsx'
 import { chord, Key } from './Key.tsx'
 import { slideUp } from './motion.ts'
-import { sendReply } from './sending.ts'
+import { useSecondsUntil } from './clock.ts'
+import { hidePending, type Pending, sendReply, startReply, undoSend } from './sending.ts'
 import { UNDO_KEY } from './undo.ts'
 
 const SEND_KEY = chord('↵')
@@ -55,7 +56,7 @@ export function ReplyBar({ thread, composer }: { thread: ThreadDetail; composer:
         type="button"
         data-field="reply-bar"
         aria-keyshortcuts={REPLY_KEY}
-        onClick={() => openReply(thread, false)}
+        onClick={() => startReply(thread, false)}
         className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-l-[10px] pr-2 pl-3.5 text-left hover:text-fg"
       >
         <ReplyIcon className="size-[15px] flex-none" strokeWidth={1.75} aria-hidden />
@@ -67,7 +68,7 @@ export function ReplyBar({ thread, composer }: { thread: ThreadDetail; composer:
         <button
           type="button"
           aria-keyshortcuts={`Shift+${REPLY_KEY}`}
-          onClick={() => openReply(thread, true)}
+          onClick={() => startReply(thread, true)}
           className="flex h-full flex-none items-center gap-1.5 rounded-r-[10px] pr-3.5 pl-3 hover:text-fg"
         >
           <ReplyAll className="size-[15px]" strokeWidth={1.75} aria-hidden />
@@ -112,85 +113,188 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
   }
 
   return (
+    <DockFrame
+      onMount={(element) => arrive(element, id, reply.to.length > 0 ? '[data-field="draft"]' : 'input[data-line="to"]')}
+      onKeyDown={onKeyDown}
+      footer={
+        <>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void sendReply(id)}
+            className="inline-flex h-8 flex-none items-center gap-2.5 rounded-[9px] bg-blue pr-1.5 pl-3.5 text-row font-semibold text-paper enabled:hover:brightness-110 disabled:opacity-60"
+          >
+            Send
+            <Key tone="send">{SEND_KEY}</Key>
+          </button>
+          {composer.state === 'checking' ? (
+            <p role="status" data-field="send-checking" className="truncate text-row text-fg2">
+              Checking whether this was sent…
+            </p>
+          ) : problem?.at === 'send' ? (
+            <p role="alert" data-field="send-problem" className="flex min-w-0 items-center gap-1.5 text-row text-red">
+              <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
+              <span className="truncate">{problem.text}</span>
+            </p>
+          ) : (
+            <p className="truncate text-row text-muted">Sends after 10 s. Undo with {UNDO_KEY.toUpperCase()}.</p>
+          )}
+          <span className="flex-1" />
+          <Minimize onClick={() => collapse(id)} />
+          <button
+            type="button"
+            aria-label="Discard"
+            title="Discard"
+            disabled={busy}
+            onClick={() => discard(id)}
+            className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-60"
+          >
+            <Trash2 className="size-4" strokeWidth={1.75} aria-hidden />
+          </button>
+        </>
+      }
+    >
+      <AddressLine id={id} field="to" label="To" reply={reply} problem={problem}>
+        {!composer.extra && (
+          <button
+            type="button"
+            onClick={() => showExtra(id)}
+            className="flex-none rounded-md px-1.5 py-0.5 text-row whitespace-pre text-muted hover:bg-hover hover:text-fg"
+          >
+            Cc{'  '}Bcc
+          </button>
+        )}
+      </AddressLine>
+      {composer.extra && (
+        <>
+          <AddressLine id={id} field="cc" label="Cc" reply={reply} problem={problem} />
+          <AddressLine id={id} field="bcc" label="Bcc" reply={reply} problem={problem} />
+        </>
+      )}
+      <DraftText id={id} text={reply.text} readOnly={busy} placeholder={`Reply to ${firstName(reply.to[0])}`} />
+    </DockFrame>
+  )
+}
+
+type FrameProps = {
+  /** Runs each time the dock renders, for the editor's entrance and focus. */
+  onMount?: (element: HTMLElement) => void
+  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void
+  footer: ReactNode
+  /** The address lines and the text. */
+  children: ReactNode
+}
+
+/**
+ * The dock: an inset field in the reading column that grows with what it holds, up to 40% of
+ * the reader. Past that its lines and text scroll, and the footer stays in view.
+ */
+function DockFrame({ onMount, onKeyDown, footer, children }: FrameProps) {
+  return (
     <section
       aria-label="Reply"
-      ref={(element) => arrive(element, id, reply.to.length > 0 ? '[data-field="draft"]' : 'input[data-line="to"]')}
+      ref={(element) => {
+        if (element) onMount?.(element)
+      }}
       onKeyDown={onKeyDown}
-      className="relative z-10 flex max-h-[40%] flex-none flex-col px-6 pb-4 wide:px-10"
+      // The toast anchors above it (Toast.tsx).
+      className="relative z-10 flex max-h-[40%] flex-none flex-col px-6 pb-4 [anchor-name:--dock] wide:px-10"
     >
       {/* The field reaches 16 or 24 px past the column each side, so its text lines up with the body's. */}
       <div className="reading-column flex min-h-0 flex-1 flex-col">
         <div className="-mx-4 flex min-h-0 flex-1 flex-col rounded-xl bg-well shadow-well wide:-mx-6">
-          {/* Lines and text, as tall as they need until the dock reaches 40% of the reader. Then they scroll, and the footer stays. */}
           <div
             data-field="draft-scroll"
             className="min-h-0 flex-[0_1_auto] overflow-y-auto [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin]"
           >
-            <AddressLine id={id} field="to" label="To" reply={reply} problem={problem}>
-              {!composer.extra && (
-                <button
-                  type="button"
-                  onClick={() => showExtra(id)}
-                  className="flex-none rounded-md px-1.5 py-0.5 text-row whitespace-pre text-muted hover:bg-hover hover:text-fg"
-                >
-                  Cc{'  '}Bcc
-                </button>
-              )}
-            </AddressLine>
-            {composer.extra && (
-              <>
-                <AddressLine id={id} field="cc" label="Cc" reply={reply} problem={problem} />
-                <AddressLine id={id} field="bcc" label="Bcc" reply={reply} problem={problem} />
-              </>
-            )}
-            <DraftText id={id} text={reply.text} readOnly={busy} placeholder={`Reply to ${firstName(reply.to[0])}`} />
+            {children}
           </div>
-          <footer className="flex h-[50px] flex-none items-center gap-3 pr-2 pl-4 wide:pl-6">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void sendReply(id)}
-              className="inline-flex h-8 flex-none items-center gap-2.5 rounded-[9px] bg-blue pr-1.5 pl-3.5 text-row font-semibold text-paper enabled:hover:brightness-110 disabled:opacity-60"
-            >
-              Send
-              <Key tone="send">{SEND_KEY}</Key>
-            </button>
-            {composer.state === 'checking' ? (
-              <p role="status" data-field="send-checking" className="truncate text-row text-fg2">
-                Checking whether this was sent…
-              </p>
-            ) : problem?.at === 'send' ? (
-              <p role="alert" data-field="send-problem" className="flex min-w-0 items-center gap-1.5 text-row text-red">
-                <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
-                <span className="truncate">{problem.text}</span>
-              </p>
-            ) : (
-              <p className="truncate text-row text-muted">Sends after 10 s. Undo with {UNDO_KEY.toUpperCase()}.</p>
-            )}
-            <span className="flex-1" />
-            <button
-              type="button"
-              aria-label="Minimize"
-              title="Minimize (Esc)"
-              onClick={() => collapse(id)}
-              className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg"
-            >
-              <ChevronDown className="size-4" strokeWidth={1.75} aria-hidden />
-            </button>
-            <button
-              type="button"
-              aria-label="Discard"
-              title="Discard"
-              disabled={busy}
-              onClick={() => discard(id)}
-              className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-60"
-            >
-              <Trash2 className="size-4" strokeWidth={1.75} aria-hidden />
-            </button>
-          </footer>
+          <footer className="flex h-[50px] flex-none items-center gap-3 pr-2 pl-4 wide:pl-6">{footer}</footer>
         </div>
       </div>
     </section>
+  )
+}
+
+function Minimize({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Minimize"
+      title="Minimize (Esc)"
+      onClick={onClick}
+      className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg"
+    >
+      <ChevronDown className="size-4" strokeWidth={1.75} aria-hidden />
+    </button>
+  )
+}
+
+/**
+ * The reply on its way in this conversation, read only: who it goes to and what it says. Undo
+ * takes it back into the editor while the core holds it. No second draft starts meanwhile.
+ */
+export function PendingReply({ pending }: { pending: Pending }) {
+  const { reply } = pending
+  const lines = [
+    { label: 'To', people: reply?.to ?? [] },
+    { label: 'Cc', people: reply?.cc ?? [] },
+    { label: 'Bcc', people: reply?.bcc ?? [] },
+  ].filter((line) => line.label === 'To' || line.people.length > 0)
+  return (
+    <DockFrame
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return
+        event.preventDefault()
+        hidePending(pending.threadId)
+      }}
+      footer={
+        <>
+          <Clock className="size-4 flex-none text-fg2" strokeWidth={1.75} aria-hidden />
+          <p role="status" data-field="reply-pending" className="min-w-0 truncate text-row text-fg2">
+            {pending.until === null ? 'Your reply is on its way' : <SendsIn until={pending.until} />}
+          </p>
+          <span className="flex-1" />
+          {pending.until !== null && (
+            <button
+              type="button"
+              onClick={() => void undoSend(pending.change)}
+              className="inline-flex h-8 flex-none items-center gap-2 rounded-lg pr-1.5 pl-3 text-row font-medium text-fg shadow-outline hover:bg-hover"
+            >
+              Undo
+              <Key>{UNDO_KEY.toUpperCase()}</Key>
+            </button>
+          )}
+          <Minimize onClick={() => hidePending(pending.threadId)} />
+        </>
+      }
+    >
+      {lines.map((line) => (
+        <div
+          key={line.label}
+          data-address-line={line.label.toLowerCase()}
+          className="mx-4 border-b border-line wide:mx-6"
+        >
+          <div className="flex min-h-11 items-center gap-2.5 py-[9px]">
+            <span className="w-7 flex-none text-row text-muted">{line.label}</span>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              {line.people.map((person, index) => (
+                <Chip key={`${person.address} ${index}`} person={person} onRemove={null} />
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+      <DraftText id={pending.threadId} text={reply?.text ?? ''} readOnly placeholder="" />
+    </DockFrame>
+  )
+}
+
+/** How long the core will hold the reply, by its deadline. Display only: the core's update ends it. */
+function SendsIn({ until }: { until: string }) {
+  const seconds = useSecondsUntil(until)
+  return (
+    <>{seconds > 0 ? `Your reply sends in ${seconds} s · Undo to edit it` : 'Your reply sends now · Undo to edit it'}</>
   )
 }
 
@@ -269,8 +373,11 @@ function AddressLine({ id, field, label, reply, problem, children }: LineProps) 
   )
 }
 
-/** One person: their avatar, then their name, or the address alone. An address the core cannot send to shows in red. */
-function Chip({ person, onRemove }: { person: Recipient; onRemove: () => void }) {
+/**
+ * One person: their avatar, then their name, or the address alone. An address the core cannot
+ * send to shows in red. With no `onRemove`, as on a reply on its way, it cannot be removed.
+ */
+function Chip({ person, onRemove }: { person: Recipient; onRemove: (() => void) | null }) {
   const valid = isPlainAddress(person.address)
   return (
     <span
@@ -284,14 +391,18 @@ function Chip({ person, onRemove }: { person: Recipient; onRemove: () => void })
         <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
       )}
       <span className="truncate">{person.name ?? person.address}</span>
-      <button
-        type="button"
-        aria-label={`Remove ${person.name ?? person.address}`}
-        onClick={onRemove}
-        className="inline-flex size-5 flex-none items-center justify-center rounded-md text-faint group-hover:text-muted hover:bg-hover hover:text-fg"
-      >
-        <X className="size-[13px]" strokeWidth={2} aria-hidden />
-      </button>
+      {onRemove ? (
+        <button
+          type="button"
+          aria-label={`Remove ${person.name ?? person.address}`}
+          onClick={onRemove}
+          className="inline-flex size-5 flex-none items-center justify-center rounded-md text-faint group-hover:text-muted hover:bg-hover hover:text-fg"
+        >
+          <X className="size-[13px]" strokeWidth={2} aria-hidden />
+        </button>
+      ) : (
+        <span className="w-1" />
+      )}
     </span>
   )
 }

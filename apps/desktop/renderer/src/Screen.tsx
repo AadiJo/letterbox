@@ -5,13 +5,12 @@ import type { Account, Command, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Action, actionForKey, canReply, type Mail, markRead, REPLY_KEY, run } from './actions.ts'
-import { openReply } from './drafts.ts'
 import { leave, release, shake } from './motion.ts'
 import { Reader } from './Reader.tsx'
 import { threadDetail, threadRecord, useThread } from './threads.ts'
 import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
-import { undoSend } from './sending.ts'
+import { startReply, undoSend } from './sending.ts'
 import { hasNotice, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
 
 /** What App hands every screen. */
@@ -87,7 +86,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   const reply = (all: boolean) => {
     const thread = selected ? threadRecord(selected) : undefined
     const detail = selected ? threadDetail(selected) : undefined
-    if (thread && detail && canReply(thread, mail)) openReply(detail, all)
+    if (thread && detail && canReply(thread, mail)) startReply(detail, all)
   }
 
   /**

@@ -11,11 +11,12 @@ import { canReply, type Mail } from './actions.ts'
 import { Attachments } from './Attachments.tsx'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
-import { Editor, isComposing, ReplyBar } from './Composer.tsx'
+import { Editor, isComposing, PendingReply, ReplyBar } from './Composer.tsx'
 import { DeliveryMark, NotSent } from './Delivery.tsx'
 import { useNow } from './clock.ts'
 import { useComposer } from './drafts.ts'
 import { LabelChip, useLabels } from './Label.tsx'
+import { useShownPending } from './sending.ts'
 import { otherPerson, personName } from './Row.tsx'
 import { useThreadDetail } from './threads.ts'
 import { isLate, messageTime } from './time.ts'
@@ -29,11 +30,14 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
   const thread = useThreadDetail(id)
   const now = useNow()
   const composer = useComposer(id)
+  const pending = useShownPending(id)
+  // The dock is up: the editor, or the user's reply on its way, read only.
+  const docked = pending !== null || isComposing(composer)
   const labels = useLabels(thread?.mailboxIds ?? [])
   const [opened, setOpened] = useState<ReadonlySet<MessageId>>(new Set())
   const [scrolled, setScrolled] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
-  useStickToEnd(scroller, isComposing(composer))
+  useStickToEnd(scroller, docked)
   if (thread === undefined) return null
   if (thread === null) return <p className="m-auto text-row text-faint">This conversation is gone</p>
 
@@ -45,7 +49,7 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
     )
   return (
     <article aria-label="Conversation" className="flex min-h-0 flex-1 flex-col">
-      {isComposing(composer) && (
+      {docked && (
         // The subject, pinned while the conversation scrolls under the editor.
         <div data-field="subject-band" className="flex h-9 flex-none items-center bg-reader px-6 wide:px-10">
           <div className="reading-column flex min-w-0 items-baseline gap-2">
@@ -96,13 +100,15 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
                 ),
               )}
             </div>
-            {!isComposing(composer) && (composer || canReply(thread, mail)) && (
-              <ReplyBar thread={thread} composer={composer} />
-            )}
+            {!docked && (composer || canReply(thread, mail)) && <ReplyBar thread={thread} composer={composer} />}
           </div>
         </div>
       </div>
-      {composer && composer.state !== 'collapsed' && <Editor id={thread.id} composer={composer} />}
+      {pending ? (
+        <PendingReply pending={pending} />
+      ) : (
+        composer && composer.state !== 'collapsed' && <Editor id={thread.id} composer={composer} />
+      )}
     </article>
   )
 }
@@ -244,7 +250,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
           <div className="flex items-baseline gap-3">
             <span className="min-w-0 truncate text-subject font-semibold">{who(from)}</span>
             {going ? (
-              <DeliveryMark thread={thread} message={message} delivery={delivery} />
+              <DeliveryMark thread={thread} delivery={delivery} />
             ) : (
               <span className="ml-auto text-meta whitespace-nowrap text-muted tabular-nums" data-field="message-time">
                 {messageTime(message.sentAt, now)}

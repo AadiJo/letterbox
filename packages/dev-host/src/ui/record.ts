@@ -86,6 +86,7 @@ async function relayCore(page: Page) {
   let held: string[] | undefined
   let toPage: ((message: string) => void) | undefined
   let close: (() => Promise<void>) | undefined
+  const fromPage: string[] = []
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -126,7 +127,10 @@ async function relayCore(page: Page) {
       void socket.close(closeOptions(code, reason))
       closed()
     })
-    socket.onMessage((message) => core.send(message))
+    socket.onMessage((message) => {
+      fromPage.push(String(message))
+      core.send(message)
+    })
     toPage = (message) => socket.send(message)
     close = async () => {
       await socket.close({ code: 1011, reason: 'the check dropped the connection' })
@@ -148,6 +152,8 @@ async function relayCore(page: Page) {
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
     sees,
+    /** Every message the page sent its cores, in order, as sent. */
+    fromPage: () => [...fromPage],
     /** Ends the connection both ways. What the relay held is never delivered, as when an answer is lost. */
     drop: async () => {
       held = undefined

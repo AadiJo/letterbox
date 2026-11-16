@@ -3,8 +3,9 @@
 // docked editor with To filled in, Shift+R adds Cc without the user, Esc keeps the draft, and
 // each conversation keeps its own. A bad address stops at its line. Send shows the reply at
 // once, hands the turn over and offers Undo for exactly as long as the core holds it: page
-// time, another screen or a reload do not end it, the core's update does. Undo over a newer
-// draft keeps both texts. Past the window the reply goes exactly once. A refused send says why
+// time, another screen or a reload do not end it, the core's update does. Meanwhile R shows
+// that reply read only and starts no second one, and Undo brings back exactly that reply,
+// even after someone else wrote. Past the window the reply goes exactly once. A refused send says why
 // and can be written again, and a send whose answer is lost waits as Checking, then goes once.
 //
 // The dev host's clock is fixed and its waits end at once, so a send's window passes as soon
@@ -16,17 +17,19 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import { startSimProvider } from '@letterbox/sim-provider/server'
+import type { ClientMessage } from '@letterbox/protocol'
 import type { Browser, Page } from 'playwright'
 import { logChildrenTo, stopChildren } from '../children.ts'
 import { buildCore, type Paths } from '../core.ts'
 import { startServer } from '../server.ts'
-import { appErrors, capture, captureC2, equal, openPage, root } from './record.ts'
+import { body, checkDockFits, checkDraftReadsLikeBody, dock, draftText, write } from './dock.ts'
+import { appErrors, capture, captureC2, equal, openPage, type Relay, root } from './record.ts'
 
 const seed = devSeeds['people-first']
 const STATE = join(root, '.letterbox/ui-check-reply')
 const ME = seed.seed.address
-/** A newer draft written while a reply is still in its undo window. */
-const SECOND = 'Second thought: the venue is booked already.'
+/** A reply to GROUP that the check sends and takes back. */
+const BREAD = 'I can bring bread and cheese.'
 
 /** A message to the user and one more person, copying a third, for Reply all. */
 const GROUP = {
@@ -55,10 +58,34 @@ const CC_ONLY = {
   sentAt: new Date(Date.parse(seed.now) - 20 * 60_000).toISOString(),
 }
 
-const dock = (page: Page) => page.locator('section[aria-label="Reply"]')
+/** Tomas answers GROUP, everyone still on it, while a reply to Maya waits in its window. */
+const TOMAS = {
+  key: 'group-2',
+  mailboxes: ['inbox'],
+  from: { name: 'Tomas Okafor', address: 'tomas.okafor@fernmail.test' },
+  to: [
+    { name: 'Maya Lindqvist', address: 'maya@haldenstudio.test' },
+    { name: 'Robin Vale', address: ME },
+  ],
+  cc: GROUP.cc,
+  subject: 'Re: Picnic on Sunday',
+  text: 'I will bring a blanket and lemonade.',
+  sentAt: new Date(Date.parse(seed.now) - 5 * 60_000).toISOString(),
+  replyTo: ['group-1'],
+}
+
+/** The draft of the last send command the page sent its core. */
+const lastSend = (relay: Relay) =>
+  relay
+    .fromPage()
+    .flatMap((text) => {
+      const message: ClientMessage = JSON.parse(text)
+      return message.kind === 'command' && message.command.kind === 'send' ? [message.command.draft] : []
+    })
+    .at(-1)
+
 const bar = (page: Page) => page.locator('[data-field="reply-bar"]')
 const replyAll = (page: Page) => page.getByRole('button', { name: 'Reply all', exact: true })
-const body = (page: Page) => dock(page).getByRole('textbox', { name: 'Message' })
 const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
 const reason = (page: Page) => page.locator('[data-field="reason"]').textContent()
 const row = (page: Page, subject: string) =>
@@ -74,40 +101,6 @@ const chips = (page: Page, line: 'to' | 'cc') =>
   dock(page)
     .locator(`[data-address-line="${line}"] [data-chip]`)
     .evaluateAll((found) => found.map((chip) => chip.getAttribute('title')))
-
-/** The draft's text as the editor shows it: its paragraphs, a blank line between each two. */
-const draftText = (page: Page) =>
-  body(page).evaluate((element) => (element instanceof HTMLElement ? element.innerText : ''))
-
-/** Replaces the draft's text by typing it as a user would: Enter between paragraphs, Shift+Enter between lines. */
-async function write(page: Page, text: string) {
-  await body(page).focus()
-  await page.keyboard.press('ControlOrMeta+a')
-  await page.keyboard.press('Backspace')
-  for (const [index, paragraph] of text.split('\n\n').entries()) {
-    // oxlint-disable-next-line no-await-in-loop -- keys reach the editor one at a time, in order
-    if (index > 0) await page.keyboard.press('Enter')
-    for (const [at, line] of paragraph.split('\n').entries()) {
-      // oxlint-disable-next-line no-await-in-loop -- keys reach the editor one at a time, in order
-      if (at > 0) await page.keyboard.press('Shift+Enter')
-      // oxlint-disable-next-line no-await-in-loop -- keys reach the editor one at a time, in order
-      await page.keyboard.type(line)
-    }
-  }
-}
-
-/** Where `selector`'s first match is, or a failure naming it. */
-async function box(page: Page, selector: string) {
-  const found = await page.locator(selector).first().boundingBox()
-  if (!found) throw new Error(`the page shows no ${selector}`)
-  return {
-    left: found.x,
-    top: found.y,
-    right: found.x + found.width,
-    bottom: found.y + found.height,
-    width: found.width,
-  }
-}
 
 /** Opens the conversation `subject` from the list on screen and waits for its newest message. */
 async function open(page: Page, subject: string) {
@@ -131,16 +124,15 @@ export async function checkReply(browser: Browser) {
   const provider = await startSimProvider(paths.socket)
   const mailbox = provider.createMailbox(seed.dialect, seed.seed)
   let hold = true
+  /** What each `letterboxDev.deliver` call brings, in order. */
+  const toDeliver = [GROUP, CC_ONLY, TOMAS]
   const server = await startServer({
     paths,
     port: 0,
     relay: true,
     sim: {
       now: seed.now,
-      deliver: () => {
-        mailbox.deliver(GROUP)
-        mailbox.deliver(CC_ONLY)
-      },
+      deliver: (count) => toDeliver.splice(0, count).forEach((message) => mailbox.deliver(message)),
     },
     coreFlags: () => (hold ? ['--hold-waits'] : []),
   })
@@ -190,49 +182,7 @@ export async function checkReply(browser: Browser) {
     equal(written.editor > empty.editor, true, `the editor grows with its text (${Math.round(written.editor)} px)`)
     equal(await draftText(page), mayaText, 'the draft holds what was typed, a blank line between paragraphs')
 
-    // The draft reads like the body it answers: 16/26 paragraphs 16 px apart, on the body's left edge and measure.
-    const paragraphs = await body(page).evaluate((element) =>
-      [...element.querySelectorAll(':scope > p')].map((paragraph) => {
-        const { top, bottom, left, width } = paragraph.getBoundingClientRect()
-        const style = getComputedStyle(paragraph)
-        return { top, bottom, left, width, type: `${style.fontSize}/${style.lineHeight}` }
-      }),
-    )
-    const received = await box(page, '[data-message="open"] [data-field="body"] p')
-    equal(
-      {
-        count: paragraphs.length,
-        gaps: paragraphs
-          .slice(1)
-          .map((paragraph, index) => Math.round(paragraph.top - (paragraphs[index]?.bottom ?? 0))),
-        type: [...new Set(paragraphs.map((paragraph) => paragraph.type))],
-        left: paragraphs.every((paragraph) => Math.abs(paragraph.left - received.left) < 0.5),
-        measure: paragraphs.every((paragraph) => paragraph.width <= received.width + 0.5),
-      },
-      { count: 3, gaps: [16, 16], type: ['16px/26px'], left: true, measure: true },
-      "the draft is three 16/26 paragraphs, 16 px apart, on the body's edge and measure",
-    )
-
-    // While writing, the conversation's end stays in view: the divider under the last message, 24 px above the dock.
-    const lastMessage = await box(page, '[data-message="open"]:last-of-type')
-    const dockTop = (await box(page, 'section[aria-label="Reply"]')).top
-    equal(Math.round(dockTop - lastMessage.bottom), 24, 'the divider under the last message sits 24 px above the dock')
-
-    // The pinned subject hides what scrolls under it, and the fade starts where it ends.
-    const band = await box(page, '[data-field="subject-band"]')
-    const fade = await box(page, '[data-field="scroll-fade"]')
-    const under = await page.evaluate(
-      ({ left, right, middle }) =>
-        [left + 1, (left + right) / 2, right - 2].map((x) =>
-          Boolean(document.elementFromPoint(x, middle)?.closest('[data-field="subject-band"]')),
-        ),
-      { left: band.left, right: band.right, middle: (band.top + band.bottom) / 2 },
-    )
-    equal(
-      [under, Math.round(fade.top - band.bottom)],
-      [[true, true, true], 0],
-      'the pinned subject covers what scrolls under it, and the fade starts at its edge',
-    )
+    await checkDraftReadsLikeBody(page)
 
     await write(page, `${mayaText}\n\n${'More to say.\n'.repeat(40).trimEnd()}`)
     const long = await sizes()
@@ -265,7 +215,7 @@ export async function checkReply(browser: Browser) {
     )
 
     // Shift+R copies everyone else on the message, never the user.
-    await page.evaluate(() => window.letterboxDev?.deliver(1))
+    await page.evaluate(() => window.letterboxDev?.deliver(2))
     await nav(page, 'All mail').click()
     await open(page, 'Picnic on Sunday')
     equal(await replyAll(page).count(), 1, 'a message to others too offers Reply all')
@@ -278,25 +228,7 @@ export async function checkReply(browser: Browser) {
       'Reply all copies the others, and not me',
     )
 
-    // In a 1024×700 window, To, Cc and Bcc fill the dock, and Send still shows: the lines scroll instead.
-    await page.setViewportSize({ width: 1024, height: 700 })
-    const send = await box(page, 'section[aria-label="Reply"] footer button:has-text("Send")')
-    const shown = await box(page, 'section[aria-label="Reply"]')
-    equal(
-      send.top >= shown.top && send.bottom <= Math.min(shown.bottom, 700),
-      true,
-      `at 1024×700 with Reply all, Send stays in view (${Math.round(send.top)} to ${Math.round(send.bottom)} px)`,
-    )
-    await page.setViewportSize({ width: 1440, height: 900 })
-    // Every shortcut names the platform's key one way: Ctrl here, on Linux.
-    equal(
-      [
-        await page.locator('form[role="search"] kbd').textContent(),
-        await page.locator('section[aria-label="Reply"] footer kbd').first().textContent(),
-      ],
-      ['Ctrl K', 'Ctrl ↵'],
-      'search and Send name their shortcuts the same way',
-    )
+    await checkDockFits(page)
 
     // An address the core would refuse stops at its line, and nothing is sent.
     await dock(page).locator('input[data-line="to"]').fill('ben@exämple.com')
@@ -361,16 +293,86 @@ export async function checkReply(browser: Browser) {
     equal(await undoOffered(page), true, 'Undo stays offered on another screen')
     await nav(page, 'People').click()
 
-    // A new draft can start in the window. Undo puts the reply back in front of it, and neither is lost.
+    // While the core holds the reply, R starts no second one. The dock shows the held reply,
+    // read only, with Undo.
     await open(page, 'Notes from Thursday')
     await page.keyboard.press('r')
-    await write(page, SECOND)
-    await toast(page).getByRole('button', { name: /^Undo/ }).click()
+    await dock(page).waitFor()
+    const pendingNote = dock(page).locator('[data-field="reply-pending"]')
+    const readOnly = async () => [
+      /^Your reply sends in \d+ s · Undo to edit it$/.test(
+        (await pendingNote.count()) === 1 ? ((await pendingNote.textContent()) ?? '') : '',
+      ),
+      await body(page).isEditable(),
+      await dock(page).getByRole('button', { name: /^Send/ }).count(),
+    ]
+    equal(
+      await readOnly(),
+      [true, false, 0],
+      'R in the window shows the held reply read only, and starts no second draft',
+    )
+    const [toastBox, dockBox] = [await toast(page).boundingBox(), await dock(page).boundingBox()]
+    if (!toastBox || !dockBox) throw new Error('the toast or the dock is not on screen')
+    equal(
+      Math.round(dockBox.y - (toastBox.y + toastBox.height)),
+      12,
+      'the toast sits 12 px above the dock, clear of its Undo',
+    )
+    await capture(page, 'reply-pending')
+
+    // Undo, with its answer held back. R still starts nothing, so one reply is all that can come back.
+    const undoing = relay.pauseAtAccepted()
+    await dock(page).getByRole('button', { name: /^Undo/ }).click()
+    await undoing
+    await page.keyboard.press('r')
+    equal(await readOnly(), [true, false, 0], 'R while the undo is on its way still starts nothing')
+    relay.resume()
     await held.waitFor({ state: 'detached' })
-    equal(await draftText(page), `${mayaText}\n\n${SECOND}`, 'Undo puts the reply back first, then the newer draft')
+    await pendingNote.waitFor({ state: 'detached' })
+    equal(
+      [await draftText(page), await body(page).isEditable()],
+      [mayaText, true],
+      'Undo puts back that reply, ready to edit',
+    )
     equal((await reason(page))?.startsWith('Your turn'), true, 'and the turn is mine again')
     equal([mailbox.calls().send, await toast(page).count()], [0, 0], 'the provider got no send, and the toast went')
 
+    // Someone else writes while a reply waits, and R is pressed. Undo brings back exactly the
+    // reply it cancels: its people, its text, and the message it answers.
+    await open(page, 'Picnic on Sunday')
+    await page.keyboard.press('Shift+R')
+    await write(page, BREAD)
+    await page.keyboard.press('Control+Enter')
+    const heldBread = page.locator('[data-message="open"][data-delivery="held"]', { hasText: BREAD })
+    await heldBread.waitFor()
+    const canceled = lastSend(relay)
+    await page.evaluate(() => window.letterboxDev?.deliver(1))
+    // Older than the held reply, so it shows folded, with its text as the preview.
+    await page.locator('[data-message]', { hasText: TOMAS.text }).waitFor()
+    await page.keyboard.press('r')
+    await dock(page).waitFor()
+    await toast(page).getByRole('button', { name: /^Undo/ }).click()
+    await heldBread.waitFor({ state: 'detached' })
+    await pendingNote.waitFor({ state: 'detached' })
+    equal(
+      [await chips(page, 'to'), await chips(page, 'cc'), await draftText(page)],
+      [
+        ['Maya Lindqvist <maya@haldenstudio.test>'],
+        ['Tomas Okafor <tomas.okafor@fernmail.test>', 'Priya Raman <priya@ramanpress.test>'],
+        BREAD,
+      ],
+      "Undo brings back that reply's people and text, not a reply to Tomas",
+    )
+    await page.keyboard.press('Control+Enter')
+    await heldBread.waitFor()
+    equal(lastSend(relay), canceled, 'sent again, it is the same draft, answering the same message')
+    // Taken back once more and thrown away, so the provider never gets it.
+    await page.keyboard.press('z')
+    await dock(page).getByRole('button', { name: 'Discard' }).click()
+    await heldBread.waitFor({ state: 'detached' })
+
+    await open(page, 'Notes from Thursday')
+    await dock(page).waitFor()
     // Sent again, for the picture.
     await write(page, mayaText)
     await page.keyboard.press('Control+Enter')
@@ -399,6 +401,14 @@ export async function checkReply(browser: Browser) {
     await delivered.waitFor()
     equal(await page.locator('[data-field="delivery"]').count(), 0, 'past its window the reply looks like any other')
     equal([mailbox.calls().send, mailbox.sent().length], [1, 1], 'the provider got it exactly once')
+    await page.keyboard.press('r')
+    await dock(page).waitFor()
+    equal(
+      [await body(page).isEditable(), await pendingNote.count()],
+      [true, 0],
+      'once the core has sent it, R starts a new reply',
+    )
+    await dock(page).getByRole('button', { name: 'Discard' }).click()
 
     // A send the provider refuses says so on the message, and can be written again.
     mailbox.refuseNextSend('refused-by-provider')

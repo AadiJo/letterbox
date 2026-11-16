@@ -1,5 +1,6 @@
 // The toast, raised over the bottom of the reader and never over the list's rows: what the
-// last action did, and Undo (z) when it can be undone. undo.ts decides what it says and for how long. With no notice up, it offers
+// last action did, and Undo (z) when it can be undone. With the reply dock up it sits 12 px
+// above the dock (CSS anchor positioning, the dock is `--dock`), so it never covers Send or Undo. undo.ts decides what it says and for how long. With no notice up, it offers
 // Undo for a reply in its undo window, for exactly as long as the core holds it (sending.ts).
 
 import { CircleCheck, Clock } from 'lucide-react'
@@ -34,7 +35,7 @@ function Frame({ onUndo, children }: { onUndo: (() => Promise<void>) | null; chi
   return (
     <div
       role="status"
-      className={`absolute bottom-6 left-1/2 z-30 flex h-11 -translate-x-1/2 animate-rise items-center gap-2.5 rounded-xl bg-float pl-3.5 ${onUndo ? 'pr-[7px]' : 'pr-4'} text-row font-medium whitespace-nowrap shadow-float`}
+      className={`absolute bottom-[calc(anchor(--dock_top,12px)+12px)] left-1/2 z-30 flex h-11 -translate-x-1/2 animate-rise items-center gap-2.5 rounded-xl bg-float pl-3.5 ${onUndo ? 'pr-[7px]' : 'pr-4'} text-row font-medium whitespace-nowrap shadow-float`}
     >
       {children}
       {onUndo && (
