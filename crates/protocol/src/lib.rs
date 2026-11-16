@@ -23,11 +23,13 @@
 //!   8. Updates caused by a command or request are sent before its `settled` or
 //!      `response`. A client that has the answer has already seen the effects.
 
+mod command;
 mod outcome;
 mod send;
 
 use std::num::NonZeroU64;
 
+pub use command::{Command, TurnChoice};
 pub use outcome::{ChangeResult, Refusal};
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -372,68 +374,6 @@ pub enum Update {
 pub struct ThreadPage {
     pub total: u64,
     pub threads: Vec<ThreadSummary>,
-}
-
-// ---------------------------------------------------------------- command
-
-/// A user intent. Every command acts on whole threads.
-/// Only set-turn works with read-only access, because it never leaves the device.
-#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
-pub enum Command {
-    /// Correct the rule, or hand the thread back to it with `auto`.
-    SetTurn {
-        thread_ids: Vec<ThreadId>,
-        turn: TurnChoice,
-    },
-    SetFlags {
-        thread_ids: Vec<ThreadId>,
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        unread: Option<bool>,
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        flagged: Option<bool>,
-    },
-    /// Archive is `remove: [inbox]`. A move is one add and one remove.
-    SetMailboxes {
-        thread_ids: Vec<ThreadId>,
-        add: Vec<MailboxId>,
-        remove: Vec<MailboxId>,
-    },
-    Trash {
-        thread_ids: Vec<ThreadId>,
-    },
-    Send {
-        draft: Draft,
-    },
-    /// Cancels a send still in its undo window. No other change can be undone yet.
-    Undo {
-        change: ChangeId,
-    },
-}
-
-/// The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum TurnChoice {
-    Mine,
-    Theirs,
-    #[serde(rename = "none")]
-    Nobody,
-    Auto,
-}
-
-impl TurnChoice {
-    /// The turn the user fixed, or None when the rule decides.
-    pub fn fixed(self) -> Option<Turn> {
-        match self {
-            TurnChoice::Mine => Some(Turn::Mine),
-            TurnChoice::Theirs => Some(Turn::Theirs),
-            TurnChoice::Nobody => Some(Turn::Nobody),
-            TurnChoice::Auto => None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------- request

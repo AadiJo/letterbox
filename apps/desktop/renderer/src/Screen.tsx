@@ -28,7 +28,7 @@ const typing = (target: EventTarget | null) =>
 
 /**
  * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
- * actions.ts's keys act on the open conversation, and z undoes the last undoable action.
+ * actions.ts's keys act on the open conversation, and z undoes the action on the toast.
  * `leaves` says whether a command takes a conversation out of this list. When it does, the
  * row slides out and the next one opens in its place.
  */
@@ -71,16 +71,16 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     const index = order.indexOf(thread.id)
     const next = index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null)
     const started = generation.current
-    const command = await run(action, thread, mail)
+    const accepted = await run(action, thread, mail)
     if (!live.current) return
-    if (!command) return shake(thread.id)
-    notify(action, thread)
-    if (!leaves(command)) return
+    if (!accepted) return shake(thread.id)
+    notify(action, thread.id, accepted.change)
+    if (!leaves(accepted.command)) return
     await leave(thread.id)
     if (generation.current === started) select(next)
   }
 
-  /** Undoes the action on the toast, if it can be. Once the core accepts, its conversation is back and opens again. */
+  /** Undoes the action on the toast, if there is one. Once the core accepts, its conversation is back and opens again. */
   const undoLast = async () => {
     const started = generation.current
     const id = await undo()

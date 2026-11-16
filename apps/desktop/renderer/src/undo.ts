@@ -1,26 +1,23 @@
-// What the last action did, in a toast for 5 s: "Marked done" with Undo (or z), or
-// "Archived" and "Moved to Trash" with nothing to undo yet. A new action replaces it.
+// What the last action did, in a toast for 5 s: "Marked done", "Archived" or "Moved to Trash",
+// with Undo (or z). A new action replaces it.
 //
-// Only Done can be undone: setting the turn back to the one the conversation had is exact.
-// Archive and Trash wait for the core's own `undo`, which answers not-supported today.
+// Undo is the core's: `undo` names the change the action made, and the core takes back exactly
+// what that change altered. The renderer never builds an opposite command.
 
-import type { Command, ThreadId, ThreadSummary } from '@letterbox/protocol'
+import type { ChangeId, ThreadId } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import { type Action, send } from './actions.ts'
 
-/** The key that undoes the last undoable action. */
+/** The key that undoes the last action. */
 export const UNDO_KEY = 'z'
 
 /** How long a notice stays. */
 const NOTICE_MS = 5000
 
-type SetTurn = Extract<Command, { kind: 'set-turn' }>
+type Label = 'Marked done' | 'Archived' | 'Moved to Trash'
 
-/** What the toast says, and the command that undoes it if there is one. */
-type Said = { label: 'Marked done'; undo: SetTurn } | { label: 'Archived' | 'Moved to Trash'; undo: null }
-
-/** The toast's content. `serial` rises with each one, so a new toast replays its entrance. */
-export type Notice = { serial: number; threadId: ThreadId } & Said
+/** The toast's content: what was done, and the change Undo takes back. `serial` rises with each one, so a new toast replays its entrance. */
+export type Notice = { serial: number; threadId: ThreadId; label: Label; change: ChangeId }
 
 let notice: Notice | null = null
 let serial = 0
@@ -34,32 +31,27 @@ const setNotice = (next: Notice | null) => {
   watchers.forEach((watcher) => watcher())
 }
 
-/**
- * What the toast says after `action` on `before`, or null for an action that says nothing.
- * Done's undo gives the turn back to the user if they set it, or to the rule if the rule gave it.
- */
-function said(action: Action, before: ThreadSummary): Said | null {
+/** What the toast says after `action`, or null for an action that says nothing. */
+function labelFor(action: Action): Label | null {
   switch (action) {
-    case 'done': {
-      const turn = before.turn.reason === 'set-by-user' ? before.turn.holder : 'auto'
-      return { label: 'Marked done', undo: { kind: 'set-turn', threadIds: [before.id], turn } }
-    }
+    case 'done':
+      return 'Marked done'
     case 'archive':
-      return { label: 'Archived', undo: null }
+      return 'Archived'
     case 'trash':
-      return { label: 'Moved to Trash', undo: null }
+      return 'Moved to Trash'
     case 'flag':
     case 'unread':
       return null
   }
 }
 
-/** Shows what `action`, which the core accepted, did to `before`. */
-export function notify(action: Action, before: ThreadSummary) {
-  const body = said(action, before)
-  if (!body) return
+/** Shows what `action`, which the core accepted as `change`, did to the conversation `threadId`. */
+export function notify(action: Action, threadId: ThreadId, change: ChangeId) {
+  const label = labelFor(action)
+  if (!label) return
   serial += 1
-  setNotice({ serial, threadId: before.id, ...body })
+  setNotice({ serial, threadId, label, change })
 }
 
 /** Takes the toast down. */
@@ -70,12 +62,12 @@ export const withdrawFor = (threadId: ThreadId) => {
   if (notice?.threadId === threadId) withdraw()
 }
 
-/** Undoes the action on the toast, if it can be undone. Resolves with its conversation once the core accepts, or null. */
+/** Undoes the action on the toast. Resolves with its conversation once the core accepts, or null. */
 export async function undo() {
   const taken = notice
-  if (!taken?.undo) return null
+  if (!taken) return null
   withdraw()
-  return (await send(taken.undo)) ? taken.threadId : null
+  return (await send({ kind: 'undo', change: taken.change })) ? taken.threadId : null
 }
 
 /** The toast's content, or null. */

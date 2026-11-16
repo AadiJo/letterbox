@@ -2,5 +2,5 @@
 # arrived, as `<lines> <path>`. Each number must equal its file's length: when a file
 # shrinks, lower its number. Once it is within the limit, delete its line. Never add a
 # line or raise a number: split the file by responsibility instead.
-666 crates/protocol/src/lib.rs
+606 crates/protocol/src/lib.rs
 1202 packages/sim-provider/src/selfcheck.ts

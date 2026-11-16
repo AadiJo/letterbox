@@ -16,8 +16,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'an undone reply stays in its conversation',
     file: core('outbox.rs'),
-    find: '                remove_with_thread(world, tx, &message_id);\n',
-    replace: '',
+    find: 'self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));',
+    replace: 'self.cancel(change, record, |_, _| drop(message_id));',
     scenarios: 'undo inside the window',
   },
   {

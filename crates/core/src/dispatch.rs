@@ -5,13 +5,14 @@
 use std::rc::Rc;
 
 use letterbox_protocol::{
-    Answer, BlobError, ChangeId, ChangeResult, ClientMessage, Command, CoreMessage, PROTOCOL, ProtocolErrorReason,
-    Refusal, Request, RequestId, Response, Rev,
+    AccountId, Answer, BlobError, ChangeId, ChangeResult, ClientMessage, Command, CoreMessage, PROTOCOL,
+    ProtocolErrorReason, Refusal, Request, RequestId, Response, Rev, ThreadId, Turn,
 };
 
 use crate::Inner;
 use crate::changes::{Edit, resolve, targets};
-use crate::world::{ChangeOutcome, ChangeRecord, ThreadRecord, put_change, put_thread};
+use crate::effect::{Effect, MessageEffect, TurnEffect};
+use crate::world::{ChangeOutcome, ChangeRecord, Op, ThreadRecord, put_change, put_thread};
 
 impl Inner {
     pub(crate) fn send(&self, message: CoreMessage) {
@@ -46,56 +47,21 @@ impl Inner {
             return;
         }
         if let Command::SetTurn { thread_ids, turn } = &command {
-            // A turn correction never leaves the device, so it is done as soon as it is stored.
             let target = targets(&self.state.borrow().world, thread_ids);
-            let target = match target {
-                Ok(target) => target,
-                Err(reason) => return self.send(CoreMessage::Rejected { change, reason }),
+            return match target {
+                Ok(target) => {
+                    let sets: Vec<_> = target.thread_ids.into_iter().map(|id| (id, turn.fixed())).collect();
+                    self.set_turns(change, target.account_id, &sets, None)
+                }
+                Err(reason) => self.send(CoreMessage::Rejected { change, reason }),
             };
-            let turn_override = turn.fixed();
-            let rev = self.commit_then(
-                |world, tx, at| {
-                    for id in &target.thread_ids {
-                        if let Some(thread) = world.threads.get(id).cloned() {
-                            put_thread(
-                                world,
-                                tx,
-                                ThreadRecord {
-                                    turn_override,
-                                    ..thread
-                                },
-                            );
-                        }
-                    }
-                    put_change(
-                        world,
-                        tx,
-                        ChangeRecord {
-                            id: change.clone(),
-                            account_id: target.account_id.clone(),
-                            op: None,
-                            accepted_rev: at,
-                            outcome: Some(ChangeOutcome {
-                                rev: at,
-                                result: ChangeResult::Done,
-                            }),
-                        },
-                    );
-                },
-                |rev| self.accepted(&change, rev),
-            );
-            return self.send(CoreMessage::Settled {
-                change,
-                rev,
-                result: ChangeResult::Done,
-            });
         }
 
         let Some((thread_ids, edit)) = Edit::of(&command) else {
-            // Set-turn was answered above. Sends and undos belong to the outbox.
+            // Set-turn was answered above. Sends belong to the outbox, and undos to undo.rs.
             return match &command {
                 Command::Send { draft } => self.send_draft(change, draft),
-                Command::Undo { change: target } => self.undo_send(change, target),
+                Command::Undo { change: target } => self.undo(change, target),
                 _ => self.send(CoreMessage::Rejected {
                     change,
                     reason: Refusal::NotSupported,
@@ -103,26 +69,97 @@ impl Inner {
             };
         };
         let resolved = resolve(&self.state.borrow().world, thread_ids, edit);
-        let (account_id, op) = match resolved {
-            Ok(resolved) => resolved,
-            Err(reason) => return self.send(CoreMessage::Rejected { change, reason }),
-        };
-        self.commit_then(
+        match resolved {
+            Ok((account_id, op)) => self.accept_messages(change, account_id, vec![op], None),
+            Err(reason) => self.send(CoreMessage::Rejected { change, reason }),
+        }
+    }
+
+    /// Accepts a turn correction, which sets each thread's turn to its value, and settles it
+    /// at once: it never leaves the device. `undoes` names the change it reverses, for an undo.
+    pub(crate) fn set_turns(
+        self: &Rc<Self>,
+        change: ChangeId,
+        account_id: AccountId,
+        sets: &[(ThreadId, Option<Turn>)],
+        undoes: Option<ChangeId>,
+    ) {
+        let effect = TurnEffect::new(&self.state.borrow().world, sets, undoes);
+        let rev = self.commit_then(
             |world, tx, at| {
+                for (id, turn_override) in sets {
+                    if let Some(thread) = world.threads.get(id).cloned() {
+                        let turn_override = *turn_override;
+                        put_thread(
+                            world,
+                            tx,
+                            ThreadRecord {
+                                turn_override,
+                                ..thread
+                            },
+                        );
+                    }
+                }
                 put_change(
                     world,
                     tx,
                     ChangeRecord {
                         id: change.clone(),
                         account_id: account_id.clone(),
-                        op: Some(op),
+                        effect: Effect::Turns(effect),
                         accepted_rev: at,
-                        outcome: None,
+                        outcome: Some(ChangeOutcome {
+                            rev: at,
+                            result: ChangeResult::Done,
+                        }),
                     },
                 );
             },
             |rev| self.accepted(&change, rev),
         );
+        self.send(CoreMessage::Settled {
+            change,
+            rev,
+            result: ChangeResult::Done,
+        });
+    }
+
+    /// Accepts a change to flags or mailboxes and queues a pass to carry it to the provider.
+    /// One with no Ops, as an undo of a change that altered nothing, is done at once.
+    /// `undoes` names the change it reverses, for an undo.
+    pub(crate) fn accept_messages(
+        self: &Rc<Self>,
+        change: ChangeId,
+        account_id: AccountId,
+        ops: Vec<Op>,
+        undoes: Option<ChangeId>,
+    ) {
+        let nothing = ops.is_empty();
+        let effect = MessageEffect::new(&self.state.borrow().world, ops, undoes);
+        let rev = self.commit_then(
+            |world, tx, at| {
+                let done = ChangeOutcome {
+                    rev: at,
+                    result: ChangeResult::Done,
+                };
+                put_change(
+                    world,
+                    tx,
+                    ChangeRecord {
+                        id: change.clone(),
+                        account_id: account_id.clone(),
+                        effect: Effect::Messages(effect),
+                        accepted_rev: at,
+                        outcome: nothing.then_some(done),
+                    },
+                );
+            },
+            |rev| self.accepted(&change, rev),
+        );
+        if nothing {
+            let result = ChangeResult::Done;
+            return self.send(CoreMessage::Settled { change, rev, result });
+        }
         self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
     }
 

@@ -299,6 +299,24 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                 put_change(world, tx, crate::world::ChangeRecord { outcome, ..change });
             });
         });
+        measure("undo the settled command", 1, &|| {
+            receive(json!({
+                "kind": "command",
+                "change": "change_undo",
+                "command": { "kind": "undo", "change": "change_1" },
+            }));
+        });
+        let reversed = inner
+            .state
+            .borrow()
+            .world
+            .changes
+            .get(&ChangeId::new("change_undo"))
+            .is_some_and(|change| change.outcome.is_none());
+        assert!(
+            reversed,
+            "the undo was accepted as a reversal, so its step measured a real undo"
+        );
         let answered = inner
             .state
             .borrow()

@@ -5,7 +5,8 @@
 //!     change. The message shows in its conversation at once, in an outbox origin that
 //!     names its change (`Origin::Outbox`), and the turn rule reads it like any other.
 //!   - It is `Held` for the core's undo window. `undo` removes it and settles it `undone`
-//!     while the clock reads before the saved deadline, whether or not its timer has run.
+//!     while the clock reads before the saved deadline, whether or not its timer has run
+//!     (undo.rs passes every undo of a send here).
 //!   - Then it is `Due`, and the account's next pass sends it in the order changes reach the
 //!     provider. The core saves `Sending` before the call. An answer that it surely did not
 //!     arrive puts it back to `Due`.
@@ -31,9 +32,10 @@ use tokio::task::spawn_local;
 use crate::adapter::{BodyResult, MessageRef, Outgoing, SendResult};
 use crate::clock::{iso, parse};
 use crate::draft::prepare;
+use crate::effect::Effect;
 use crate::reconcile::{remove_with_thread, thread_for};
 use crate::sync::PassResult;
-use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Op, Origin, World, put_change, put_message};
+use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Origin, World, put_change, put_message};
 use crate::{Inner, Linked};
 
 /// A send on its way out, as its change carries it. Its message is `message_id`, an outbox
@@ -79,7 +81,7 @@ pub fn delivery(world: &World, record: &MessageRecord) -> Option<Delivery> {
         return None;
     };
     let change = world.changes.get(outbox)?;
-    let Some(Op::Send(outbound)) = &change.op else {
+    let Effect::Send(outbound) = &change.effect else {
         return None;
     };
     let id = change.id.clone();
@@ -138,7 +140,7 @@ impl Inner {
                     ChangeRecord {
                         id: change.clone(),
                         account_id: prepared.account_id.clone(),
-                        op: Some(Op::Send(outbound)),
+                        effect: Effect::Send(outbound),
                         accepted_rev: at,
                         outcome: None,
                     },
@@ -149,15 +151,10 @@ impl Inner {
         self.hold(change, &until);
     }
 
-    /// Answers an undo. Only a send still in its undo window can be undone. Its message goes
-    /// and it settles `undone`, in the commit that stores the undo, which settles `done`.
-    pub(crate) fn undo_send(self: &Rc<Self>, change: ChangeId, target: &ChangeId) {
-        let found = self.state.borrow().world.changes.get(target).cloned();
-        let Some(record) = found else {
-            let reason = Refusal::UnknownTarget;
-            return self.send(CoreMessage::Rejected { change, reason });
-        };
-        let Some(Op::Send(outbound)) = &record.op else {
+    /// Answers an undo of a send (see undo.rs). Only a send still in its undo window can be
+    /// undone. Its message goes, in the commit that cancels it.
+    pub(crate) fn undo_send(self: &Rc<Self>, change: ChangeId, record: ChangeRecord) {
+        let Effect::Send(outbound) = &record.effect else {
             let reason = Refusal::NotSupported;
             return self.send(CoreMessage::Rejected { change, reason });
         };
@@ -173,50 +170,7 @@ impl Inner {
             return self.send(CoreMessage::Rejected { change, reason });
         }
         let message_id = outbound.message_id.clone();
-        let done = |at| {
-            Some(ChangeOutcome {
-                rev: at,
-                result: ChangeResult::Done,
-            })
-        };
-        let rev = self.commit_then(
-            |world, tx, at| {
-                remove_with_thread(world, tx, &message_id);
-                let undone = Some(ChangeOutcome {
-                    rev: at,
-                    result: ChangeResult::Undone,
-                });
-                let account_id = record.account_id.clone();
-                put_change(
-                    world,
-                    tx,
-                    ChangeRecord {
-                        outcome: undone,
-                        ..record
-                    },
-                );
-                let undo = ChangeRecord {
-                    id: change.clone(),
-                    account_id,
-                    op: None,
-                    accepted_rev: at,
-                    outcome: done(at),
-                };
-                put_change(world, tx, undo);
-            },
-            |rev| self.accepted(&change, rev),
-        );
-        let undone = ChangeResult::Undone;
-        self.send(CoreMessage::Settled {
-            change: target.clone(),
-            rev,
-            result: undone,
-        });
-        self.send(CoreMessage::Settled {
-            change,
-            rev,
-            result: ChangeResult::Done,
-        });
+        self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));
     }
 
     /// Sends `settled` for each send a sync's commit at `rev` found the copy of.
@@ -238,8 +192,8 @@ impl Inner {
             .changes
             .values()
             .filter(|change| change.outcome.is_none())
-            .filter_map(|change| match &change.op {
-                Some(Op::Send(outbound)) => Some((change.clone(), outbound.stage.clone())),
+            .filter_map(|change| match &change.effect {
+                Effect::Send(outbound) => Some((change.clone(), outbound.stage.clone())),
                 _ => None,
             })
             .collect();
@@ -271,7 +225,7 @@ impl Inner {
         let Some(record) = found.filter(|record| record.outcome.is_none()) else {
             return;
         };
-        let Some(Op::Send(outbound)) = record.op.clone() else {
+        let Effect::Send(outbound) = record.effect.clone() else {
             return;
         };
         let account_id = record.account_id.clone();
@@ -281,11 +235,11 @@ impl Inner {
 
     /// Moves a send to `stage` in one commit, and returns its record as stored.
     pub(crate) fn restage(self: &Rc<Self>, record: ChangeRecord, outbound: &Outbound, stage: Stage) -> ChangeRecord {
-        let op = Some(Op::Send(Outbound {
+        let effect = Effect::Send(Outbound {
             stage,
             ..outbound.clone()
-        }));
-        let staged = ChangeRecord { op, ..record };
+        });
+        let staged = ChangeRecord { effect, ..record };
         self.commit(|world, tx, _| put_change(world, tx, staged.clone()));
         staged
     }

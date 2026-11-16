@@ -1,6 +1,6 @@
 // The UI check for the reader's layout and the done states, over a `people-first` dev host
 // of its own: the reader fills a 1920 px pane, Done slides the row out with an undo toast and
-// z brings it back, archive and Trash say what they did with nothing to undo, a late answer
+// z brings it back, archive and Trash offer the same undo through the core, a late answer
 // or a scroll moves no row it should not, an empty Your turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
@@ -232,29 +232,44 @@ async function checkLeaveDuringExit(page: Page) {
   )
 }
 
-/** Archive and Trash say what they did, with nothing to undo: Undo waits for the core's own. */
-async function checkNoUndo(page: Page) {
-  await openInbox(page)
+/**
+ * The action under `key` on Inbox's first row offers Undo too. z takes the change back
+ * through the core, and the row comes back where it was, open, with the count it had.
+ */
+async function checkUndoOf(page: Page, key: string, label: string) {
   const total = await conversations(page)
-  const archived = await mailRows(page).first().getAttribute('data-row')
+  const before = await mailRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
+  const [id] = before
+  if (!id) throw new Error('Inbox shows no conversation')
   await mailRows(page).first().click()
-  await page.keyboard.press('e')
-  await toast(page).waitFor()
-  equal(await toast(page).locator('[data-field="toast"]').textContent(), 'Archived', 'archive shows "Archived"')
-  equal(await toast(page).getByRole('button').count(), 0, '"Archived" offers no Undo')
-  await page.locator(`[data-row="${archived}"]`).waitFor({ state: 'detached' })
+  await page.keyboard.press(key)
+  await toast(page).filter({ hasText: label }).waitFor()
+  equal(await toast(page).getByRole('button', { name: /^Undo/ }).count(), 1, `"${label}" offers Undo`)
+  await page.locator(`[data-list="mail"] [data-row="${id}"]`).waitFor({ state: 'detached' })
+  await waitForTotal(page, total - 1)
   await page.keyboard.press('z')
-  await settle(page)
-  equal(await conversations(page), total - 1, 'z does not bring an archived row back')
+  await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
+  await waitForTotal(page, total)
+  // The window may have filled in more rows meanwhile. The rows both readings hold must match.
+  const after = await mailRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
+  const shared = Math.min(before.length, after.length)
+  equal(after.slice(0, shared), before.slice(0, shared), `${label}: z brings the row back where it was, open`)
+  equal(await conversations(page), total, `${label}: z restores the Inbox count`)
+  equal(await toast(page).count(), 0, `${label}: z takes the toast down`)
+}
 
+/** Archive and Trash offer the same undo as Done, and Trash in Trash moves nothing. */
+async function checkArchiveAndTrashUndo(page: Page) {
+  await openInbox(page)
+  await checkUndoOf(page, 'e', 'Archived')
+  await checkUndoOf(page, '#', 'Moved to Trash')
+
+  // Trash on a conversation already in Trash changes nothing there, so its row stays put.
   const trashed = await mailRows(page).first().getAttribute('data-row')
   await mailRows(page).first().click()
   await page.keyboard.press('#')
   await toast(page).filter({ hasText: 'Moved to Trash' }).waitFor()
-  equal(await toast(page).getByRole('button').count(), 0, '"Moved to Trash" offers no Undo')
   await page.locator(`[data-row="${trashed}"]`).waitFor({ state: 'detached' })
-
-  // Trash on a conversation already in Trash changes nothing there, so its row stays put.
   await nav(page, 'Trash').click()
   const inTrash = page.locator(`[data-list="mail"] [data-row="${trashed}"]`)
   await inTrash.locator('[data-field="subject"]').waitFor()
@@ -319,7 +334,7 @@ export async function checkDone(browser: Browser, url: string) {
   await checkDoneAndUndo(page)
   await checkLateArchive(page, relay)
   await checkLeaveDuringExit(page)
-  await checkNoUndo(page)
+  await checkArchiveAndTrashUndo(page)
   await checkScrollDuringExit(page)
 
   // Clearing Your turn leaves the empty state.

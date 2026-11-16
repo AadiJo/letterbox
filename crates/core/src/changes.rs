@@ -12,7 +12,7 @@ use letterbox_protocol::{AccountId, Command, MailboxId, MessageId, Refusal, Role
 
 use crate::adapter::{MailboxRef, Mutation};
 use crate::maps::{HashMap, IndexMap};
-use crate::world::{MailboxMode, MessageRecord, MessageState, Op, World};
+use crate::world::{AccountRecord, MailboxMode, MessageRecord, MessageState, Op, World};
 
 /// Lays one Op over a message's state. Returns the state unchanged if the Op does not name the message.
 pub fn overlay(state: &MessageState, op: &Op, id: &MessageId) -> MessageState {
@@ -20,8 +20,6 @@ pub fn overlay(state: &MessageState, op: &Op, id: &MessageId) -> MessageState {
         return state.clone();
     }
     match op {
-        // A send changes no state. Its message shows from the moment it is accepted.
-        Op::Send(_) => state.clone(),
         Op::Flags { unread, flagged, .. } => MessageState {
             mailboxes: state.mailboxes.clone(),
             unread: unread.unwrap_or(state.unread),
@@ -59,27 +57,29 @@ pub fn overlay(state: &MessageState, op: &Op, id: &MessageId) -> MessageState {
     }
 }
 
-/// Every Op that has been accepted and not settled, indexed by the messages it names.
+/// Every change that has been accepted and not settled, indexed by the messages it names.
 /// Views build one per answer, so a message no change names costs one lookup and no copy.
 pub struct Pending<'a> {
-    /// For each message, the Ops that name it, oldest first.
+    /// For each message, the Ops that name it, oldest first. A send names its message with no
+    /// Op: it changes no state, and its message shows from the moment it is accepted.
     by_message: HashMap<&'a MessageId, Vec<&'a Op>>,
 }
 
 impl<'a> Pending<'a> {
     pub fn of(world: &'a World) -> Self {
         let mut by_message: HashMap<&MessageId, Vec<&Op>> = HashMap::default();
-        let ops = world
-            .changes
-            .values()
-            .filter(|change| change.outcome.is_none())
-            .filter_map(|change| change.op.as_ref());
-        for op in ops {
-            for id in op.message_ids() {
-                let named = by_message.entry(id).or_default();
-                // An Op that names a message twice is laid over it once, as overlay does.
-                if !named.last().is_some_and(|last| std::ptr::eq(*last, op)) {
-                    named.push(op);
+        let waiting = world.changes.values().filter(|change| change.outcome.is_none());
+        for effect in waiting.map(|change| &change.effect) {
+            for id in effect.named() {
+                by_message.entry(id).or_default();
+            }
+            for op in effect.ops() {
+                for id in op.message_ids() {
+                    let named = by_message.entry(id).or_default();
+                    // An Op that names a message twice is laid over it once, as overlay does.
+                    if !named.last().is_some_and(|last| std::ptr::eq(*last, op)) {
+                        named.push(op);
+                    }
                 }
             }
         }
@@ -123,8 +123,8 @@ pub fn targets(world: &World, thread_ids: &[ThreadId]) -> Result<Targets, Refusa
 }
 
 /// What a command that reaches the provider asks for, apart from the threads it names.
-/// Set-turn, which the core answers on its own, and send and undo, which the outbox
-/// answers (see outbox.rs), have no Edit.
+/// Set-turn, which the core answers on its own, send, which the outbox answers (see
+/// outbox.rs), and undo (see undo.rs) have no Edit.
 pub enum Edit<'a> {
     Flags {
         unread: Option<bool>,
@@ -164,6 +164,15 @@ impl<'a> Edit<'a> {
     }
 }
 
+/// How an account's mailboxes change: by sets where a message can be in several, else by moves.
+pub fn mode_of(account: &AccountRecord) -> MailboxMode {
+    if account.capabilities.multiple_mailboxes {
+        MailboxMode::Sets
+    } else {
+        MailboxMode::Move
+    }
+}
+
 /// Turns an Edit of some threads into an Op, or says why it cannot be done on this account.
 pub fn resolve(world: &World, thread_ids: &[ThreadId], edit: Edit<'_>) -> Result<(AccountId, Op), Refusal> {
     let target = targets(world, thread_ids)?;
@@ -187,11 +196,7 @@ pub fn resolve(world: &World, thread_ids: &[ThreadId], edit: Edit<'_>) -> Result
             .find(|mailbox| mailbox.role == Some(role))
             .map(|mailbox| mailbox.id.clone())
     };
-    let mode = if account.capabilities.multiple_mailboxes {
-        MailboxMode::Sets
-    } else {
-        MailboxMode::Move
-    };
+    let mode = mode_of(account);
     let mailboxes = |add: Vec<MailboxId>, remove: Vec<MailboxId>| {
         Ok((
             account.id.clone(),
@@ -257,13 +262,19 @@ pub struct Step {
     pub part: Op,
 }
 
+/// The adapter calls that carry a change's Ops to the provider, in order. None when every
+/// message they name is gone. A send has no Ops: the outbox delivers it whole (see outbox.rs).
+pub fn plan(world: &World, ops: &[Op]) -> Option<Vec<Step>> {
+    let planned: Vec<Vec<Step>> = ops.iter().filter_map(|op| plan_one(world, op)).collect();
+    (!planned.is_empty()).then(|| planned.into_iter().flatten().collect())
+}
+
 /// The adapter calls that carry one Op to the provider, worked out from what
 /// the provider holds now. A message that is already where the Op puts it is
 /// left out, so pushing the same Op again after a restart does no harm. Messages
 /// still in the outbox are left out too: the provider does not hold them.
-/// None when every message the Op names is gone. A send is never planned: the
-/// outbox delivers it whole (see outbox.rs), so it has no steps.
-pub fn plan(world: &World, op: &Op) -> Option<Vec<Step>> {
+/// None when every message the Op names is gone.
+fn plan_one(world: &World, op: &Op) -> Option<Vec<Step>> {
     let records: Vec<&MessageRecord> = op
         .message_ids()
         .iter()
@@ -285,7 +296,6 @@ pub fn plan(world: &World, op: &Op) -> Option<Vec<Step>> {
     };
 
     match op {
-        Op::Send(_) => None,
         Op::Flags { unread, flagged, .. } => Some(vec![Step {
             mutation: Mutation::Flags {
                 refs,
