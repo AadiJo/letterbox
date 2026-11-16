@@ -103,6 +103,27 @@ scenario('a sync-now that resumes a saved snapshot also brings changes made befo
   t.equal((await thread(core, 'Budget numbers')).unread, false, 'and it shows the read made before it was sent')
 })
 
+scenario('a sync-now that resumes only the last snapshot page also brings changes made before it', async (t) => {
+  const box = t.mailbox(standardSeed(t.dialect, { pageSize: 2 }))
+  box.holdSnapshots()
+  const core = t.startCore()
+  await core.hello()
+  const accounts = core.subscribe({ view: 'accounts' })
+  await signIn(t, core, ME, PASSWORD)
+  await box.snapshotHeld()
+  await nextPage(box)
+  await nextPage(box)
+  box.setOffline(true)
+  box.releaseSnapshots()
+  await untilAccounts(accounts, (list) => ['offline', 'error'].includes(list[0]?.status.state ?? ''))
+  // The sync-now's own pass lists the last page, so there is no backfill left to wait for.
+  box.setOffline(false)
+  box.setFlags('fyi', { unread: false })
+  await sync(core)
+  t.equal(subjects(await threads(core)), ALL, 'the sync-now finished the snapshot')
+  t.equal((await thread(core, 'Budget numbers')).unread, false, 'and it shows the read made before it was sent')
+})
+
 scenario('a restart in the middle of the first sync resumes from the saved page', async (t) => {
   const first = await signInHeld(t)
   await nextPage(first.box)

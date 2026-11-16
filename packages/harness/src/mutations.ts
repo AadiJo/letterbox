@@ -259,6 +259,13 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'resumes a saved snapshot',
   },
   {
+    name: 'a sync-now that resumes only the last snapshot page answers without the changes made before it',
+    file: core('sync.rs'),
+    find: '                        (Some(Ok(())), None) if resumed => pass = start(&core, account_id.clone()).1,\n',
+    replace: '',
+    scenarios: 'resumes only the last',
+  },
+  {
     name: 'a sign-out waits behind the work already queued for the account',
     file: core('accounts.rs'),
     find: '    pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {\n',

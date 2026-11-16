@@ -24,8 +24,9 @@ use crate::{Inner, Linked, State};
 pub(crate) type PassResult = Result<(), AdapterFailure>;
 
 /// What a sync-now's pass hands back from the queue: how the pass ended (None when a
-/// backfill held the pull), and the wait for the backfill it left or found running.
-type Joined = (Option<PassResult>, Option<oneshot::Receiver<PassResult>>);
+/// backfill held the pull), the wait for the backfill it left or found running, and
+/// whether it resumed a snapshot saved before the request, whose cursor is then older.
+type Joined = (Option<PassResult>, Option<oneshot::Receiver<PassResult>>, bool);
 
 impl Inner {
     pub(crate) async fn fetch_body(self: Rc<Self>, id: MessageId) {
@@ -286,8 +287,13 @@ impl Inner {
     /// A sync-now's pass. It joins the backfill the pass left or found running while it is
     /// still in the queue, so the backfill cannot end unseen.
     async fn sync_pass(self: Rc<Self>, account_id: AccountId) -> Joined {
+        let resumed = {
+            let state = self.state.borrow();
+            let account = state.world.accounts.get(&account_id);
+            account.is_some_and(|account| account.snapshot.is_some())
+        };
         let ran = Rc::clone(&self).pass(account_id.clone(), true).await;
-        (ran, self.join_backfill(&account_id))
+        (ran, self.join_backfill(&account_id), resumed)
     }
 
     /// Syncs each account in turn and answers once all have finished, a backfill included,
@@ -310,7 +316,7 @@ impl Inner {
             let mut offline = false;
             while let Some((account_id, mut pass)) = next {
                 let result = loop {
-                    let (ran, backfill) = pass
+                    let (ran, backfill, resumed) = pass
                         .await
                         .expect("a queued pass runs to its end, since a panic ends the program");
                     let ended = match backfill {
@@ -318,10 +324,12 @@ impl Inner {
                         None => None,
                     };
                     match (ran, ended) {
-                        // A backfill ended well, but its cursor can be older than this request:
-                        // it was queued earlier, or resumed a snapshot saved before it. Pass once
-                        // more, so the answer covers what the provider held when it was asked.
+                        // A snapshot ended well, but its cursor can be older than this request:
+                        // its backfill was queued earlier, or this pass resumed one saved before
+                        // the request. Pass once more, so the answer covers what the provider
+                        // held when it was asked.
                         (_, Some(Ok(()))) => pass = start(&core, account_id.clone()).1,
+                        (Some(Ok(())), None) if resumed => pass = start(&core, account_id.clone()).1,
                         (Some(result), ended) => break ended.unwrap_or(result),
                         // A backfill held the pull and ended in a failure. Run the pass now.
                         (None, _) => pass = start(&core, account_id.clone()).1,
