@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
+    "dev": "node packages/dev-host/src/main.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --ignore-pattern lint/fixtures",
     "lint:selftest": "node lint/selftest.ts && node lint/commit-title.ts --selftest",
@@ -14,10 +15,11 @@
     "bench": "node packages/harness/src/bench.ts",
     "bench:scale": "node packages/harness/src/bench.ts --sizes 10000,100000 --runs 1 --label scale",
     "check:rust": "cargo xtask provider-names && cargo xtask file-size && cargo xtask protocol-ts --check && cargo fmt --check && cargo clippy --all-targets --quiet -- -D warnings && cargo test --quiet --package xtask --package letterbox-core",
-    "check": "pnpm fmt:check && pnpm typecheck && pnpm lint && pnpm check:rust && pnpm lint:selftest && pnpm selfcheck:sim-provider && pnpm selfcheck:client && pnpm scenarios && pnpm check:app-host && pnpm scenarios:selftest",
+    "check": "pnpm fmt:check && pnpm typecheck && pnpm lint && pnpm check:rust && pnpm lint:selftest && pnpm selfcheck:sim-provider && pnpm selfcheck:client && pnpm scenarios && pnpm check:app-host && pnpm scenarios:selftest && pnpm check:ui",
     "selfcheck:sim-provider": "node packages/sim-provider/src/selfcheck.ts",
     "selfcheck:client": "node packages/client/src/selfcheck.ts",
-    "scenarios:selftest": "node packages/harness/src/mutations.ts"
+    "scenarios:selftest": "node packages/harness/src/mutations.ts",
+    "check:ui": "node packages/dev-host/src/ui-check.ts"
   },
   "devDependencies": {
     "@oxlint/plugins": "^1.93.0",

@@ -46,6 +46,28 @@
       "rules": { "letterbox/scenario-waits-on-events": "error" }
     },
     {
+      "files": ["apps/desktop/renderer/**", "lint/fixtures/no-node-in-renderer/**"],
+      "rules": { "letterbox/no-node-in-renderer": "error" }
+    },
+    {
+      // React Compiler memoizes the renderer's components and hooks. Hand-written memos only add noise.
+      "files": ["apps/desktop/renderer/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "react",
+                "importNames": ["useMemo", "useCallback", "memo"],
+                "message": "React Compiler memoizes the renderer (see apps/desktop/renderer/vite.config.ts). Write the plain value, function or component, and let the compiler cache it."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       // The shared client runs in a browser renderer and in React Native's Hermes, where Node
       // modules and globals do not exist. Code that needs Node goes in the transport that uses it.
       "files": ["packages/client/**"],

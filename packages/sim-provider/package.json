@@ -5,7 +5,8 @@
   "exports": {
     "./contract": "./src/contract.ts",
     "./server": "./src/server.ts",
-    "./gmail": "./src/gmail/server.ts"
+    "./gmail": "./src/gmail/server.ts",
+    "./seeds": "./src/seeds.ts"
   },
   "dependencies": {
     "@letterbox/protocol": "workspace:*"
