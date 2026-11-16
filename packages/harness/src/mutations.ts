@@ -13,6 +13,7 @@
 
 import { type Mutation, runBreaks } from './breaks.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
+import { SEND_MUTATIONS } from './mutations-send.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
 
@@ -176,7 +177,7 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a second change uses the ref the first change replaced',
     file: core('sync.rs'),
-    find: '.find(|pair| pair.from == record.r#ref)',
+    find: '.find(|pair| pair.from == old)',
     replace: '.find(|_| false)',
     scenarios: 'second change follows',
   },
@@ -384,12 +385,12 @@ const MUTATIONS: Mutation[] = [
     name: 'a provider ref reaches the UI',
     file: core('rows.rs'),
     find: 'snippet: last.facts.preview.clone(),',
-    replace: 'snippet: last.r#ref.as_str().to_owned(),',
+    replace: 'snippet: last.provider_ref().map_or_else(String::new, |r#ref| r#ref.as_str().to_owned()),',
     scenarios: 'first sync shows',
   },
   {
     name: 'the core sends a message outside the protocol',
-    file: 'crates/protocol/src/lib.rs',
+    file: 'crates/protocol/src/outcome.rs',
     find: 'pub enum ChangeResult {\n    Done,',
     replace: 'pub enum ChangeResult {\n    #[serde(rename = "finished")]\n    Done,',
     scenarios: 'marking read',
@@ -403,4 +404,4 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([...MUTATIONS, ...GMAIL_MUTATIONS])
+runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...GMAIL_MUTATIONS])

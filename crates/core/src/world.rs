@@ -19,6 +19,7 @@ use crate::adapter::{
     AdapterCapabilities, AdapterFailure, BodyResult, Cursor, MailboxRef, MessageRef, PageToken, RemoteFacts,
 };
 use crate::maps::{HashMap, IndexMap, IndexSet};
+use crate::outbox::Outbound;
 use crate::store::{Record, Store, Transaction};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,12 +102,24 @@ pub struct MessageState {
     pub flagged: bool,
 }
 
+/// Where a message the core holds comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Origin {
+    /// The provider reported it under this ref.
+    Provider { r#ref: MessageRef },
+    /// The user sent it and the provider does not hold it: it waits in the outbox, or the
+    /// provider refused it. The change `outbox` carries it out (see outbox.rs).
+    Outbox { outbox: ChangeId },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRecord {
     pub id: MessageId,
     pub account_id: AccountId,
-    pub r#ref: MessageRef,
+    #[serde(flatten)]
+    pub origin: Origin,
     pub thread_id: ThreadId,
     pub facts: RemoteFacts,
     /// What the provider last reported. Pending changes are laid over this to get what the user sees.
@@ -116,6 +129,16 @@ pub struct MessageRecord {
     /// The latest snapshot that listed it (see `AccountRecord::round`). 0 when only `changes` has.
     #[serde(default)]
     pub round: u64,
+}
+
+impl MessageRecord {
+    /// Its ref at the provider. None while it is in the outbox.
+    pub fn provider_ref(&self) -> Option<&MessageRef> {
+        match &self.origin {
+            Origin::Provider { r#ref } => Some(r#ref),
+            Origin::Outbox { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,6 +168,8 @@ pub enum Op {
         add: Vec<MailboxId>,
         remove: Vec<MailboxId>,
     },
+    /// A message the user sent, on its way out (see outbox.rs).
+    Send(Outbound),
 }
 
 /// `Sets` adds and removes membership. `Move` takes a message that is in one
@@ -160,6 +185,7 @@ impl Op {
     pub fn message_ids(&self) -> &[MessageId] {
         match self {
             Op::Flags { message_ids, .. } | Op::Mailboxes { message_ids, .. } => message_ids,
+            Op::Send(outbound) => std::slice::from_ref(&outbound.message_id),
         }
     }
 }
@@ -280,10 +306,12 @@ fn drop_from<K: std::hash::Hash + Eq>(index: &mut HashMap<K, IndexSet<MessageId>
 
 fn index(world: &mut World, record: &MessageRecord) {
     let account = &record.account_id;
-    world
-        .message_by_ref
-        .0
-        .insert(scoped(account, record.r#ref.as_str()), record.id.clone());
+    if let Some(r#ref) = record.provider_ref() {
+        world
+            .message_by_ref
+            .0
+            .insert(scoped(account, r#ref.as_str()), record.id.clone());
+    }
     add_to(&mut world.messages_by_thread.0, record.thread_id.clone(), &record.id);
     if let Some(message_id) = &record.facts.message_id {
         add_to(
@@ -303,7 +331,9 @@ fn index(world: &mut World, record: &MessageRecord) {
 
 fn unindex(world: &mut World, record: &MessageRecord) {
     let account = &record.account_id;
-    world.message_by_ref.0.remove(&scoped(account, record.r#ref.as_str()));
+    if let Some(r#ref) = record.provider_ref() {
+        world.message_by_ref.0.remove(&scoped(account, r#ref.as_str()));
+    }
     drop_from(&mut world.messages_by_thread.0, &record.thread_id, &record.id);
     if let Some(message_id) = &record.facts.message_id {
         drop_from(

@@ -88,7 +88,8 @@ impl Inner {
         let last = page.next.is_none();
         let listed =
             progress.listed + u64::try_from(page.messages.len()).expect("a page holds fewer than 2^64 messages");
-        self.commit(|world, tx, _| {
+        let mut arrived = None;
+        let rev = self.commit(|world, tx, at| {
             let Some(account) = world.accounts.get(account_id).cloned() else {
                 return;
             };
@@ -99,7 +100,7 @@ impl Inner {
                 updated: Vec::new(),
                 removed: Vec::new(),
             };
-            reconcile(world, tx, account_id, incoming);
+            arrived = Some(reconcile(world, tx, account_id, incoming, at));
             if last {
                 remove_unlisted(world, tx, account_id, round);
             }
@@ -122,6 +123,9 @@ impl Inner {
             };
             put_account(world, tx, progressed);
         });
+        if let Some(arrived) = arrived {
+            self.announce(arrived, rev);
+        }
         if last {
             return Ok(Pulled::Done);
         }

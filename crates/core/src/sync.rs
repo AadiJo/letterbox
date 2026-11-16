@@ -17,7 +17,7 @@ use crate::changes::{overlay, plan};
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
 use crate::world::{
-    AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, put_account, put_change, put_message,
+    AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, Op, Origin, put_account, put_change, put_message,
 };
 use crate::{Inner, Linked, State};
 
@@ -34,7 +34,7 @@ impl Inner {
             let state = self.state.borrow();
             state.world.messages.get(&id).and_then(|record| {
                 let linked = state.adapters.get(&record.account_id)?;
-                Some((Rc::clone(&linked.adapter), record.r#ref.clone()))
+                Some((Rc::clone(&linked.adapter), record.provider_ref()?.clone()))
             })
         };
         let Some((adapter, r#ref)) = found else {
@@ -68,7 +68,7 @@ impl Inner {
         }
     }
 
-    fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
+    pub(crate) fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
         let id = change.id.clone();
         let rev = self.commit(|world, tx, at| {
             put_change(
@@ -99,7 +99,8 @@ impl Inner {
             .is_some_and(|current| current.link == linked.link)
     }
 
-    /// Carries every pending change for one account to the provider, oldest first. Stops when the provider is unreachable.
+    /// Carries every pending change for one account to the provider, oldest first. A send
+    /// still in its undo window is passed by (see outbox.rs). Stops when the provider is unreachable.
     async fn push(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
         let adapter = &linked.adapter;
         let waiting: Vec<ChangeRecord> = self
@@ -116,6 +117,10 @@ impl Inner {
                 return Ok(());
             }
             let Some(op) = change.op.clone() else { continue };
+            if let Op::Send(outbound) = op {
+                self.deliver(account_id, linked, change, outbound).await?;
+                continue;
+            }
             let planned = plan(&self.state.borrow().world, &op);
             let Some(steps) = planned else {
                 self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));
@@ -139,16 +144,19 @@ impl Inner {
                                 let Some(record) = world.messages.get(id).cloned() else {
                                     continue;
                                 };
+                                let Some(old) = record.provider_ref().cloned() else {
+                                    continue;
+                                };
                                 let r#ref = moved
                                     .iter()
-                                    .find(|pair| pair.from == record.r#ref)
-                                    .map_or_else(|| record.r#ref.clone(), |pair| pair.to.clone());
+                                    .find(|pair| pair.from == old)
+                                    .map_or(old, |pair| pair.to.clone());
                                 let server = overlay(&record.server, &step.part, id);
                                 put_message(
                                     world,
                                     tx,
                                     MessageRecord {
-                                        r#ref,
+                                        origin: Origin::Provider { r#ref },
                                         server,
                                         ..record
                                     },
@@ -182,7 +190,8 @@ impl Inner {
             if !self.still_current(account_id, linked) {
                 return Ok(Pulled::Done);
             }
-            self.commit(|world, tx, _| {
+            let mut arrived = None;
+            let rev = self.commit(|world, tx, at| {
                 let Some(account) = world.accounts.get(account_id).cloned() else {
                     return;
                 };
@@ -193,10 +202,13 @@ impl Inner {
                     updated: set.updated,
                     removed: set.removed,
                 };
-                reconcile(world, tx, account_id, incoming);
+                arrived = Some(reconcile(world, tx, account_id, incoming, at));
                 let cursor = Some(set.cursor);
                 put_account(world, tx, AccountRecord { cursor, ..account });
             });
+            if let Some(arrived) = arrived {
+                self.announce(arrived, rev);
+            }
             return Ok(Pulled::Done);
         }
         if !self.still_current(account_id, linked) {
@@ -244,9 +256,23 @@ impl Inner {
             return Some(result);
         }
 
-        let account = self.state.borrow().world.accounts.get(&account_id).cloned();
+        self.record_outcome(&account_id, result, synced, with_pull);
+        Some(result)
+    }
+
+    /// Records how a pass or an outbox check (confirm.rs) that still serves the account ended:
+    /// its health from `result`, and the time it synced when `synced`. Writes only when the
+    /// health changed, unless `pulled` says a sync ran and the status must show it ended.
+    pub(crate) fn record_outcome(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        result: PassResult,
+        synced: bool,
+        pulled: bool,
+    ) {
+        let account = self.state.borrow().world.accounts.get(account_id).cloned();
         let Some(account) = account else {
-            return Some(result);
+            return;
         };
         if synced {
             let mut state = self.state.borrow_mut();
@@ -259,11 +285,11 @@ impl Inner {
                 world
                     .messages
                     .get(id)
-                    .is_none_or(|record| record.account_id != account_id)
+                    .is_none_or(|record| &record.account_id != account_id)
             });
         }
         let health = Health::from(result);
-        if with_pull || health != account.health {
+        if pulled || health != account.health {
             self.commit(|world, tx, _| {
                 let last_synced_at = if synced {
                     Some(self.env.now())
@@ -281,7 +307,6 @@ impl Inner {
                 );
             });
         }
-        Some(result)
     }
 
     /// A sync-now's pass. It joins the backfill the pass left or found running while it is

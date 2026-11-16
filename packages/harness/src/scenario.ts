@@ -32,7 +32,7 @@ export type Scenario = {
   /** Creates a mailbox at the provider. What the scenario does to it is written to the transcript. */
   mailbox(seed: Seed): SimMailbox
   /** Starts the core. Call `stop` on it and call this again to restart over the same store. */
-  startCore(): CoreClient
+  startCore(options?: CoreOptions): CoreClient
   /** The account ids core-sim's stand-in keychain holds a session for, in order. */
   keychain(): string[]
   /** Locks or unlocks core-sim's stand-in keychain. While locked, every call to it fails, and what it held is kept for the unlock. */
@@ -43,6 +43,27 @@ export type Scenario = {
   equal<Value>(actual: Value, expected: Value, what: string): void
   note(text: string): void
 }
+
+/** How a core starts, beyond the provider it reaches. */
+export type CoreOptions = {
+  /** Where its fixed clock starts. A restart starts it at the same time again unless this moves it. */
+  now?: string
+  /**
+   * Its undo window in seconds. A window takes no real time and ends at once, unless it is
+   * an hour or more: then it holds for as long as this core runs (see crates/sim-client/src/main.rs).
+   */
+  undoWindow?: number
+  /** How long, in seconds, it looks for a send whose answer was lost. Waits as `undoWindow` does. */
+  confirmWindow?: number
+  /**
+   * True holds every wait for as long as this core runs, short or past. The clock still moves,
+   * so a scenario can act after a deadline passes and before the timer for it runs.
+   */
+  holdWaits?: boolean
+}
+
+/** An undo window that holds while the core runs, so a scenario can act inside it. */
+export const HELD_WINDOW = 3600
 
 type Definition = { name: string; dialects: Run[]; run: (t: Scenario) => Promise<void> }
 
@@ -57,11 +78,19 @@ const NOT_GMAIL = new Set([
   'a locked keychain fails the sign-in, and at start leaves the account waiting for one',
 ])
 
+/** Characters a transcript's file name may not hold: CI's artifact upload refuses them. */
+const UNSAFE_IN_FILE_NAMES = /[":<>|*?\\/\r\n]/
+
 /**
  * Registers a scenario. It runs once per dialect unless `only` narrows it, and as gmail
  * too when it runs on labels, unless NOT_GMAIL names it.
  */
 export function scenario(name: string, run: (t: Scenario) => Promise<void>, only?: Run[]) {
+  const unsafe = name.match(UNSAFE_IN_FILE_NAMES)
+  if (unsafe)
+    throw new Error(
+      `The scenario "${name}" has ${JSON.stringify(unsafe[0])} in its name. Its transcript is named after it, and CI's artifact upload rejects ${UNSAFE_IN_FILE_NAMES.source.slice(1, -1)} in file names, so write it in words instead (for example "on gmail, …" rather than "gmail: …").`,
+    )
   const dialects = only ?? ['labels', 'folders']
   const gmail = dialects.includes('labels') && !dialects.includes('gmail') && !NOT_GMAIL.has(name)
   definitions.push({ name, dialects: gmail ? [...dialects, 'gmail'] : dialects, run })
@@ -76,7 +105,7 @@ export type Result = { name: string; dialect: Run; passed: boolean; failure: str
 export const ARTIFACTS = process.env['LETTERBOX_ARTIFACTS'] ?? join(process.cwd(), 'artifacts', 'scenarios')
 
 /** Methods that only read, and so stay out of the transcript. */
-const READS = new Set<string | symbol>(['truth', 'calls', 'refreshes', 'refusals', 'handedOut', 'url'])
+const READS = new Set<string | symbol>(['truth', 'calls', 'sent', 'refreshes', 'refusals', 'handedOut', 'url'])
 
 /** Wraps a mailbox or the fake Gmail so every call a scenario makes on it lands in the transcript under `who`. */
 const recorded = <Target extends object>(
@@ -102,6 +131,8 @@ type Backend = {
   createMailbox(seed: Seed): SimMailbox
   /** The core-sim flags that point it at this backend. */
   args: string[]
+  /** Resolves once the backend takes connections. Lines to the core wait for it (see `startCore`). */
+  reachable?: () => Promise<void>
   handedOut(): ReadonlySet<string>
   /** The secrets the core must keep out of its store: sessions, or Gmail's tokens. */
   secrets(): ReadonlySet<string>
@@ -121,6 +152,7 @@ async function startBackend(run: Run, folder: string, record: (entry: Transcript
       // The scenario's own wrapper records what it does to the mailbox. The seed stays out.
       createMailbox: (seed) => fake.createMailbox(seed),
       args: ['--gmail', fake.url, '--gmail-redirects', redirects],
+      reachable: () => fake.reachable(),
       handedOut: () => fake.handedOut(),
       secrets: () => fake.secrets(),
       close: () => fake.close(),
@@ -173,9 +205,18 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
       passwords.push(seed.password)
       return recorded(backend.createMailbox(seed), seed.address, record)
     },
-    startCore: () => {
-      record({ from: 'scenario', note: 'core starts' })
-      const core = startCore(data, backend.args, record, newId)
+    startCore: (options = {}) => {
+      record({
+        from: 'scenario',
+        note: `core starts${Object.keys(options).length > 0 ? ` ${JSON.stringify(options)}` : ''}`,
+      })
+      const flags = [
+        ...(options.now === undefined ? [] : ['--now', options.now]),
+        ...(options.undoWindow === undefined ? [] : ['--undo-window', String(options.undoWindow)]),
+        ...(options.confirmWindow === undefined ? [] : ['--confirm-window', String(options.confirmWindow)]),
+        ...(options.holdWaits ? ['--hold-waits'] : []),
+      ]
+      const core = startCore(data, [...backend.args, ...flags], record, newId, backend.reachable)
       cores.push(core)
       return core
     },

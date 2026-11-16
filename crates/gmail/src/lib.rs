@@ -13,6 +13,9 @@
 //!                 An expired history id (404) is `cursor-expired`.
 //!   apply         users.messages.modify for one message, batchModify for several.
 //!                 Trash adds the TRASH label.
+//!   send          users.messages.send with the core's message as base64url, in the thread
+//!                 of the message it answers. A send that may have landed is never sent
+//!                 again: `find` searches rfc822msgid: for it (send.rs).
 //!
 //! Rate limits: a call Gmail refuses as over its rate limit waits and tries again, up to
 //! a limit (api.rs). The wait comes from `GmailConfig::pause`, and `close` ends it.
@@ -34,6 +37,7 @@ mod labels;
 mod loopback;
 mod message;
 mod oauth;
+mod send;
 mod wire;
 
 use std::rc::Rc;

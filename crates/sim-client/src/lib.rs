@@ -18,8 +18,8 @@ use std::rc::{Rc, Weak};
 
 use letterbox_core::adapter::{
     Adapter, AdapterCapabilities, AdapterFactory, AdapterFailure, ApplyResult, BodyResult, ChangesResult, Connection,
-    Cursor, FactoryOption, LocalFuture, MessageRef, Mutation, Outcome, PageToken, SignInFailure, SignInInput,
-    SnapshotPage,
+    Cursor, FactoryOption, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult,
+    SignInFailure, SignInInput, SnapshotPage,
 };
 use letterbox_protocol::SignInMethod;
 use serde::de::DeserializeOwned;
@@ -31,7 +31,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 pub use crate::keychain::FileKeychain;
-use crate::wire::{Call, CallResult, Dialect, Reply, RequestBody, Session, encode, outcome, sign_in_result};
+use crate::wire::{
+    Call, CallResult, Dialect, Reply, RequestBody, Session, encode, outcome, send_outcome, sign_in_result,
+};
 
 /// One open socket to the server. Cloning shares the socket.
 #[derive(Clone)]
@@ -103,18 +105,24 @@ impl Link {
         let weak: Weak<LinkState> = Rc::downgrade(&state);
         let closing = state.closing.clone();
         let reader = spawn_local(async move {
-            let mut lines = BufReader::new(read).lines();
+            let mut read = BufReader::new(read);
             loop {
-                let line = tokio::select! {
+                let mut line = String::new();
+                let ended = tokio::select! {
                     () = closing.cancelled() => break,
-                    line = lines.next_line() => line,
+                    ended = read.read_line(&mut line) => ended,
                 };
-                let Ok(Some(line)) = line else { break };
-                if line.is_empty() {
+                // A line the socket cut off, or one that is not a reply, ends the link like a
+                // dropped socket: every call still waiting gets no answer.
+                if !matches!(ended, Ok(length) if length > 0) || !line.ends_with('\n') {
+                    break;
+                }
+                if line.trim().is_empty() {
                     continue;
                 }
-                let reply: Reply = serde_json::from_str(&line)
-                    .unwrap_or_else(|error| panic!("sim provider: not a reply ({error}): {line}"));
+                let Ok(reply) = serde_json::from_str::<Reply>(&line) else {
+                    break;
+                };
                 let Some(state) = weak.upgrade() else { break };
                 state.dispatch(reply);
             }
@@ -228,7 +236,7 @@ impl Adapter for SimAdapter {
     fn capabilities(&self) -> AdapterCapabilities {
         AdapterCapabilities {
             modify: self.session.modify,
-            send: false,
+            send: self.session.modify,
             multiple_mailboxes: self.session.dialect == Dialect::Labels,
         }
     }
@@ -247,6 +255,28 @@ impl Adapter for SimAdapter {
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {
         Box::pin(self.call(Call::Apply(mutation)))
+    }
+
+    /// No socket means the server surely did not get it. Once the request went out, only a
+    /// whole answer that reads as one counts: a dropped socket, a cut-off line or an answer
+    /// that does not decode means it may have arrived (adapter rule 10, `send_outcome`).
+    fn send(&self, message: Outgoing) -> LocalFuture<'_, Outcome<SendResult>> {
+        Box::pin(async move {
+            let _in_flight = self.calls.token();
+            let link = self.reach().await.ok_or(AdapterFailure::Offline)?;
+            let body = RequestBody::Call {
+                address: self.session.address.clone(),
+                call: Call::Send(message),
+            };
+            match link.ask(&body).await {
+                Some(Reply::Result { result, .. }) if result.method == "send" => send_outcome(result.outcome),
+                _ => Ok(SendResult::Unconfirmed),
+            }
+        })
+    }
+
+    fn find(&self, message_id: String) -> LocalFuture<'_, Outcome<Found>> {
+        Box::pin(self.call(Call::Find(message_id)))
     }
 
     // Each call goes to the server once, so there is no wait between tries to end.

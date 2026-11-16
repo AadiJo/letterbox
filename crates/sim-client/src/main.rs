@@ -2,11 +2,18 @@
 //! talks to: one JSON message per line on stdin, one per line on stdout.
 //!
 //!   core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]
+//!            [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits]
 //!
 //! `--sim` lists the two sim provider options. `--gmail` adds the Gmail option, pointed at
 //! the fake Gmail server at `<url>` (packages/sim-provider/src/gmail). Its consent URLs must
 //! not change between runs, so its random source and loopback port are fixed here, and the
 //! browser's redirect arrives on a unix socket in `--gmail-redirects`. At least one is needed.
+//!
+//! The clock is fixed (`--now`) and a wait on it ends at once, so a send's undo window
+//! (`--undo-window`, 10 seconds unless given) and its confirm window (`--confirm-window`,
+//! 60 seconds unless given) take no real time. A wait of HELD_WAIT or longer holds for as
+//! long as this core runs, so a scenario can act inside it. `--hold-waits` holds every wait,
+//! so a scenario can act after the clock passes a deadline and before the timer for it runs.
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! The real app's program is `letterbox-core` in crates/host, which owns the stdio loop
@@ -26,15 +33,16 @@ use letterbox_gmail::{GmailConfig, Loopback, gmail_factory};
 use letterbox_host::{Parts, run_stdio};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 
-const USAGE: &str =
-    "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]";
+const USAGE: &str = "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] \
+                     [--now <time>] [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits]";
 
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
 const KEYCHAIN_FILE: &str = "sim-keychain.json";
 
-/// A rate-limit wait this long or longer holds until the adapter closes. Shorter ones end at
-/// once. A scenario reaches a held wait by having the fake send a Retry-After of an hour.
+/// A rate-limit wait this long or longer holds until the adapter closes, and an undo window
+/// this long holds while the core runs. Shorter ones end at once. A scenario reaches a held
+/// rate-limit wait by having the fake send a Retry-After of an hour.
 const HELD_WAIT: Duration = Duration::from_secs(3600);
 
 /// Written to stderr when a wait starts to hold, so a scenario knows the adapter is waiting.
@@ -52,6 +60,9 @@ struct Args {
     sim: Option<PathBuf>,
     gmail: Option<(String, PathBuf)>,
     now: String,
+    undo_window: Duration,
+    confirm_window: Duration,
+    hold_waits: bool,
 }
 
 fn parse_args() -> Option<Args> {
@@ -60,8 +71,15 @@ fn parse_args() -> Option<Args> {
     let mut gmail = None;
     let mut redirects = None;
     let mut now = "2026-01-01T00:00:00.000Z".to_owned();
+    let mut undo_window = Duration::from_secs(10);
+    let mut confirm_window = Duration::from_secs(60);
+    let mut hold_waits = false;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
+        if flag == "--hold-waits" {
+            hold_waits = true;
+            continue;
+        }
         let value = args.next()?;
         match flag.as_str() {
             "--data" => data = Some(PathBuf::from(value)),
@@ -69,6 +87,8 @@ fn parse_args() -> Option<Args> {
             "--gmail" => gmail = Some(value),
             "--gmail-redirects" => redirects = Some(PathBuf::from(value)),
             "--now" => now = value,
+            "--undo-window" => undo_window = Duration::from_secs(value.parse().ok()?),
+            "--confirm-window" => confirm_window = Duration::from_secs(value.parse().ok()?),
             _ => return None,
         }
     }
@@ -82,6 +102,9 @@ fn parse_args() -> Option<Args> {
         sim,
         gmail,
         now,
+        undo_window,
+        confirm_window,
+        hold_waits,
     })
 }
 
@@ -148,7 +171,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let env = match FixedEnvironment::new(&args.now) {
-        Ok(env) => env,
+        Ok(env) => env.holding_from(if args.hold_waits { Duration::ZERO } else { HELD_WAIT }),
         Err(error) => {
             eprintln!("--now: {error}\n{USAGE}");
             return ExitCode::from(2);
@@ -165,6 +188,8 @@ fn main() -> ExitCode {
             data_path: args.data,
             env: Box::new(env),
             factories,
+            undo_window: args.undo_window,
+            confirm_window: args.confirm_window,
         },
     )
 }

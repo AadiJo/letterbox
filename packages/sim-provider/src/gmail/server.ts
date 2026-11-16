@@ -11,7 +11,13 @@
 // messages.list page, one changes per history.list, one body per format=full get,
 // and one apply per modify or batchModify that changes labels. `setQuota` adds Gmail's
 // usage limits (quota.ts). The mailbox's `expirePageTokens` makes messages.list refuse
-// every page token it handed out.
+// every page token it handed out. messages.send goes through the mailbox's `send` (send.ts),
+// and a sent reply joins the thread its `threadId` names. Every other message is its own thread.
+//
+// Offline: while every account at the fake is offline, the fake stops listening, so a new
+// connection is refused as it is when the network is down. A client can then tell that its
+// request never arrived, which a send needs (adapter rule 10). With other accounts still
+// online, a request for an offline one is dropped after it arrives instead.
 //
 // Where Gmail's behaviour is not documented, the fake picks the strict reading:
 //   - messages.list answers a page token it does not accept with the 400 a live call
@@ -26,13 +32,14 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
-import type { PageToken } from '../adapter.ts'
-import type { Seed, SimMailbox } from '../contract.ts'
+import type { MessageRef, PageToken } from '../adapter.ts'
+import type { Seed, SendDamage, SimMailbox } from '../contract.ts'
 import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { ask, modify, parse, strings } from './modify.ts'
 import { MODIFY_SCOPE, READONLY_SCOPE, createOauth } from './oauth.ts'
 import { type Quota, createQuotas, unitsOf } from './quota.ts'
+import { searchMessageId, send as sendMessage } from './send.ts'
 import {
   cursorOf,
   fullOf,
@@ -69,6 +76,8 @@ export interface GmailFake {
   refusals(address: string): number
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
+  /** Resolves once the fake takes connections: at once, unless it is listening again after every account was offline. */
+  reachable(): Promise<void>
   /** Every refresh and access token this fake issued. None may reach the core's store. */
   secrets(): ReadonlySet<string>
   close(): Promise<void>
@@ -98,6 +107,25 @@ const send = (response: ServerResponse, status: number, body?: unknown): void =>
   response.writeHead(status, { 'Content-Type': 'application/json; charset=UTF-8' }).end(JSON.stringify(body))
 }
 
+/**
+ * A 200 that goes wrong on its way back. The status line and headers promise the whole body,
+ * then the connection ends before any of it, or halfway through it, or the body arrives
+ * whole but is not JSON.
+ */
+const damaged = (response: ServerResponse, body: string, how: SendDamage): void => {
+  const sent = how === 'invalid-json' ? '{"id": ' : body
+  response.writeHead(200, {
+    'Content-Type': 'application/json; charset=UTF-8',
+    'Content-Length': String(Buffer.byteLength(sent)),
+  })
+  if (how === 'invalid-json') return void response.end(sent)
+  // Write what goes, then end the connection with the rest of the body still owed.
+  if (how === 'truncated')
+    return void response.write(sent.slice(0, Math.floor(sent.length / 2)), () => response.socket?.end())
+  response.flushHeaders()
+  response.socket?.end()
+}
+
 /** An error in the shape every Gmail endpoint uses. https://developers.google.com/gmail/api/guides/handle-errors */
 const fail = (response: ServerResponse, code: number, message: string): void => {
   const [status, reason] = STATUS_NAMES[code] ?? ['UNKNOWN', 'backendError']
@@ -120,6 +148,10 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   const oauth = createOauth(redirects, remember)
   const sockets = new Set<Socket>()
   const quotas = createQuotas()
+  // The thread of each sent reply, by account and ref.
+  const threads = new Map<string, string>()
+  const threadOf = (entry: MailboxEntry, ref: MessageRef): string =>
+    threads.get(`${entry.control.address}\n${ref}`) ?? gmailIdOf(ref)
 
   /** Answers one API call for the account `address`. */
   const api = async (
@@ -148,6 +180,28 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       const labels = labelsOf(store)
       for (const label of labels) remember(label.id)
       return send(response, 200, { labels })
+    }
+    const q = query.get('q')
+    if (method === 'GET' && path === 'messages' && q !== null) {
+      const found = await searchMessageId(entry, q)
+      if (found === null) return fail(response, 400, `The fake searches by rfc822msgid: only, not ${q}`)
+      if ('status' in found) return fail(response, found.status, found.message)
+      const messages = found.map(
+        (ref) => (remember(gmailIdOf(ref)), { id: gmailIdOf(ref), threadId: threadOf(entry, ref) }),
+      )
+      return send(response, 200, { ...(messages.length > 0 ? { messages } : {}), resultSizeEstimate: messages.length })
+    }
+    if (method === 'POST' && path === 'messages/send') {
+      const hasThread = (id: string) =>
+        [...store.messages.values()].some((stored) => threadOf(entry, stored.ref) === id)
+      const sent = await sendMessage(entry, parse(body), hasThread)
+      if (sent === 'dropped') return void response.socket?.destroy()
+      if ('status' in sent) return fail(response, sent.status, sent.message)
+      if (sent.threadId !== null) threads.set(`${entry.control.address}\n${sent.ref}`, sent.threadId)
+      const id = remember(gmailIdOf(sent.ref))
+      const answer = { id, threadId: threadOf(entry, sent.ref), labelIds: ['SENT'] }
+      if (sent.damage === null) return send(response, 200, answer)
+      return damaged(response, JSON.stringify(answer), sent.damage)
     }
     if (method === 'GET' && path === 'messages') {
       const result = await ask(entry, { method: 'snapshot', arg: query.get('pageToken') as PageToken | null })
@@ -179,12 +233,15 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
         if (result.method !== 'body' || !result.outcome.ok) return fail(response, 503, 'Backend error')
         const stored = messageOfId(store, message)
         if (result.outcome.kind === 'gone' || !stored) return fail(response, 404, 'Requested entity was not found.')
-        return send(response, 200, fullOf(store, stored, history(), result.outcome.body))
+        const full = fullOf(store, stored, history(), result.outcome.body)
+        return send(response, 200, { ...full, threadId: threadOf(entry, stored.ref) })
       }
       const stored = messageOfId(store, message)
       if (!stored) return fail(response, 404, 'Requested entity was not found.')
-      if (format === 'minimal') return send(response, 200, minimalOf(store, stored, history()))
-      return send(response, 200, metadataOf(store, stored, history(), query.getAll('metadataHeaders')))
+      const threadId = threadOf(entry, stored.ref)
+      if (format === 'minimal') return send(response, 200, { ...minimalOf(store, stored, history()), threadId })
+      const metadata = metadataOf(store, stored, history(), query.getAll('metadataHeaders'))
+      return send(response, 200, { ...metadata, threadId })
     }
     if (method === 'GET' && path === 'history') {
       const cursor = cursorOf(query.get('startHistoryId') ?? '')
@@ -237,7 +294,26 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     return fail(response, 404, `No such endpoint: ${method} ${path}`)
   }
 
+  // Sockets with a request in flight. Going offline drops only the idle ones.
+  const busy = new WeakSet<Socket>()
+  let port: number | null = null
+  // Listening again resolves the host first, so it finishes on a later tick.
+  let listening: Promise<void> = Promise.resolve()
+  /** Stops listening while every account is offline, and listens again on the same port once one is back. */
+  const listenWhileReachable = () => {
+    const down = mailboxes.size > 0 && [...mailboxes.values()].every((entry) => entry.isOffline())
+    if (down && server.listening) {
+      server.close()
+      for (const socket of sockets) if (!busy.has(socket)) socket.destroy()
+    } else if (!down && !server.listening && port !== null && closing === null) {
+      const again = port
+      listening = new Promise((resolve) => server.listen(again, '127.0.0.1', resolve))
+    }
+  }
+
   const server = createServer((request, response) => {
+    busy.add(request.socket)
+    response.on('close', () => busy.delete(request.socket))
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     void readBody(request).then(async (body) => {
       if (request.method === 'POST' && url.pathname === '/token') {
@@ -276,7 +352,13 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       if (mailboxes.has(seed.address)) throw new Error(`fake gmail: ${seed.address} already has a mailbox`)
       const entry = createMailboxEntry('labels', seed)
       mailboxes.set(seed.address, entry)
-      return entry.control
+      const setOffline = (offline: boolean) => {
+        entry.control.setOffline(offline)
+        listenWhileReachable()
+      }
+      // A new account is online, so a fake that every account had left listens again.
+      listenWhileReachable()
+      return { ...entry.control, setOffline }
     },
     approveSignIn: (consent, address) => {
       const entry = mailboxes.get(address)
@@ -290,6 +372,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     setQuota: (address, quota) => quotas.set(address, quota),
     refusals: (address) => quotas.refusals(address),
     handedOut: () => handedOut,
+    reachable: () => listening,
     secrets: () => oauth.secrets(),
     close: () => {
       closing ??= new Promise<void>((resolve) => {
@@ -306,6 +389,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       server.off('error', reject)
       const address = server.address()
       if (address === null || typeof address === 'string') return reject(new Error('fake gmail: no TCP address'))
+      port = address.port
       resolve(fake(`http://127.0.0.1:${address.port}`))
     })
   })

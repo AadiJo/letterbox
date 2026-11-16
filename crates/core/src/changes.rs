@@ -20,6 +20,8 @@ pub fn overlay(state: &MessageState, op: &Op, id: &MessageId) -> MessageState {
         return state.clone();
     }
     match op {
+        // A send changes no state. Its message shows from the moment it is accepted.
+        Op::Send(_) => state.clone(),
         Op::Flags { unread, flagged, .. } => MessageState {
             mailboxes: state.mailboxes.clone(),
             unread: unread.unwrap_or(state.unread),
@@ -121,7 +123,8 @@ pub fn targets(world: &World, thread_ids: &[ThreadId]) -> Result<Targets, Refusa
 }
 
 /// What a command that reaches the provider asks for, apart from the threads it names.
-/// Commands the core answers on its own (set-turn) or does not support have no Edit.
+/// Set-turn, which the core answers on its own, and send and undo, which the outbox
+/// answers (see outbox.rs), have no Edit.
 pub enum Edit<'a> {
     Flags {
         unread: Option<bool>,
@@ -256,18 +259,24 @@ pub struct Step {
 
 /// The adapter calls that carry one Op to the provider, worked out from what
 /// the provider holds now. A message that is already where the Op puts it is
-/// left out, so pushing the same Op again after a restart does no harm.
-/// None when every message the Op names is gone.
+/// left out, so pushing the same Op again after a restart does no harm. Messages
+/// still in the outbox are left out too: the provider does not hold them.
+/// None when every message the Op names is gone. A send is never planned: the
+/// outbox delivers it whole (see outbox.rs), so it has no steps.
 pub fn plan(world: &World, op: &Op) -> Option<Vec<Step>> {
     let records: Vec<&MessageRecord> = op
         .message_ids()
         .iter()
         .filter_map(|id| world.messages.get(id))
+        .filter(|record| record.provider_ref().is_some())
         .collect();
     if records.is_empty() {
         return None;
     }
-    let refs = records.iter().map(|record| record.r#ref.clone()).collect();
+    let refs = records
+        .iter()
+        .filter_map(|record| record.provider_ref().cloned())
+        .collect();
     let message_ids: Vec<MessageId> = records.iter().map(|record| record.id.clone()).collect();
     let mailbox_refs = |ids: &[MailboxId]| -> Vec<MailboxRef> {
         ids.iter()
@@ -276,6 +285,7 @@ pub fn plan(world: &World, op: &Op) -> Option<Vec<Step>> {
     };
 
     match op {
+        Op::Send(_) => None,
         Op::Flags { unread, flagged, .. } => Some(vec![Step {
             mutation: Mutation::Flags {
                 refs,
@@ -330,7 +340,10 @@ pub fn plan(world: &World, op: &Op) -> Option<Vec<Step>> {
                     let ids: Vec<MessageId> = group.iter().map(|record| record.id.clone()).collect();
                     Step {
                         mutation: Mutation::Mailboxes {
-                            refs: group.iter().map(|record| record.r#ref.clone()).collect(),
+                            refs: group
+                                .iter()
+                                .filter_map(|record| record.provider_ref().cloned())
+                                .collect(),
                             add: mailbox_refs(add),
                             remove: mailbox_refs(std::slice::from_ref(source)),
                         },

@@ -6,6 +6,36 @@ const gmail = (file: string) => `crates/gmail/src/${file}`
 
 export const GMAIL_MUTATIONS: Mutation[] = [
   {
+    name: 'gmail: a send whose answer cannot be read whole reads as an error, so the core sends it again',
+    file: gmail('send.rs'),
+    find: '        Err(CallError::Lost | CallError::Unreadable) => Ok(SendResult::Unconfirmed),',
+    replace:
+      '        Err(CallError::Lost) => Ok(SendResult::Unconfirmed),\n        Err(CallError::Unreadable) => Err(AdapterFailure::ProviderError),',
+    scenarios: 'answer comes back damaged',
+  },
+  {
+    name: 'gmail: a lost answer reads as offline, so the core sends the message again',
+    file: gmail('send.rs'),
+    find: '        Err(CallError::Lost | CallError::Unreadable) => Ok(SendResult::Unconfirmed),',
+    replace:
+      '        Err(CallError::Lost) => Err(AdapterFailure::Offline),\n        Err(CallError::Unreadable) => Ok(SendResult::Unconfirmed),',
+    scenarios: 'lost in transit',
+  },
+  {
+    name: 'gmail: find never finds a sent message, so a send cut off by a crash fails though it went',
+    file: gmail('adapter.rs'),
+    find: '                r#ref: found.map(MessageRef::new),',
+    replace: '                r#ref: found.map(MessageRef::new).filter(|_| false),',
+    scenarios: 'killed in the middle of a delivery',
+  },
+  {
+    name: 'gmail: bcc recipients never get the message',
+    file: gmail('send.rs'),
+    find: 'URL_SAFE.encode(outgoing.raw_with_bcc())',
+    replace: 'URL_SAFE.encode(&outgoing.raw)',
+    scenarios: 'a new message starts',
+  },
+  {
     name: 'gmail: STARRED shows up as a mailbox',
     file: gmail('labels.rs'),
     find: 'None if label.kind.as_deref() == Some("system") || !is_mailbox_id(&label.id) => return None,',

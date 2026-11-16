@@ -121,7 +121,7 @@ export const bareMessageId = (seed: SeedMessage): string =>
   (seed.messageId ?? `${seed.key}@sim.test`).replace(/^<(.*)>$/, '$1')
 
 /** The start of the text as a list row shows it: no quoted lines, single spaces, at most 200 characters. */
-const previewOf = (text: string): string =>
+export const previewOf = (text: string): string =>
   text
     .split('\n')
     .filter((line) => !line.startsWith('>'))

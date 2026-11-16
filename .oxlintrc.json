@@ -26,7 +26,12 @@
     {
       // Scenarios and the self-checks act one step at a time, each waiting for the answer
       // before the next, so a run is the same every time. Awaiting in a loop is how that is written.
-      "files": ["packages/harness/**", "packages/sim-provider/src/selfcheck.ts", "packages/client/src/selfcheck.ts"],
+      "files": [
+        "packages/harness/**",
+        "packages/sim-provider/src/selfcheck.ts",
+        "packages/sim-provider/src/selfcheck-send.ts",
+        "packages/client/src/selfcheck.ts"
+      ],
       "rules": { "eslint/no-await-in-loop": "off" }
     },
     {

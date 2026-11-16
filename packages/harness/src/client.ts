@@ -33,6 +33,8 @@ export type CoreClient = KeepingClient & {
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
   stop(): Promise<void>
+  /** Ends the process at once, as a crash or a power cut would, and waits for it to be gone. */
+  kill(): Promise<void>
   /** Every message the core sent that broke the protocol's shapes. A scenario fails if there is one. */
   violations(): string[]
 }
@@ -79,11 +81,18 @@ const within = <T>(what: string, promise: Promise<T>): Promise<T> =>
   })
 
 /** Starts a core process over `dataDir`. `providerArgs` say which provider it reaches: `--sim` or `--gmail`. */
+/**
+ * Starts a core process over `dataDir`. `providerArgs` say which provider it reaches: `--sim` or `--gmail`.
+ * `reachable`, when given, resolves once the provider can take connections. Each line to the core
+ * waits for it, so the core never reaches for a provider a scenario has just brought back online
+ * before it listens again (see `listenWhileReachable` in the fake Gmail).
+ */
 export function startCore(
   dataDir: string,
   providerArgs: string[],
   record: (entry: TranscriptEntry) => void,
   newId: Options['newId'],
+  reachable?: () => Promise<void>,
 ): CoreClient {
   const child = spawn(CORE_PROGRAM, ['--data', dataDir, ...providerArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -108,9 +117,16 @@ export function startCore(
     })
   const waitsBegun = () => [...stderr.matchAll(WAIT_BEGUN)].map((match) => Number(match[1]) / 1000)
 
+  // Lines to the core, in order. Each waits for `reachable` before it is written.
+  let written: Promise<void> = Promise.resolve()
+  const write = (act: () => void) => {
+    if (!reachable) return act()
+    written = written.then(reachable).then(act)
+  }
   const sendRaw = (value: unknown) => {
     record({ from: 'ui', message: value })
-    child.stdin.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
+    const line = `${typeof value === 'string' ? value : JSON.stringify(value)}\n`
+    write(() => void child.stdin.write(line))
   }
   let listener: Listener | undefined
   // Held messages serve `take` and `settled`.
@@ -193,8 +209,14 @@ export function startCore(
       await untilStderr(() => waitsBegun().length >= count, `${count} gmail rate-limit waits`)
       return waitsBegun().slice(0, count)
     },
+    kill: async () => {
+      record({ from: 'scenario', note: 'the core is killed' })
+      child.kill('SIGKILL')
+      await exited
+    },
     stop: async () => {
-      child.stdin.end()
+      if (child.exitCode !== null || child.signalCode !== null) return
+      write(() => child.stdin.end())
       // A core that never exits would hang the whole run. It gets as long as any answer does.
       let killed = false
       const timer = setTimeout(() => {

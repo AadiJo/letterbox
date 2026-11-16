@@ -9,19 +9,32 @@ import type {
   MessageRef,
   Mutation,
   Outcome,
+  Outgoing,
   PageToken,
+  SendResult,
   SnapshotPage,
 } from './adapter.ts'
-import type { CallCounts, Dialect, SimMailbox, Seed, SeedMailbox, SeedMessage } from './contract.ts'
+import type {
+  CallCounts,
+  Dialect,
+  SendDamage,
+  SentCopy,
+  SimMailbox,
+  Seed,
+  SeedMailbox,
+  SeedMessage,
+} from './contract.ts'
 import { foldersEngine } from './folders.ts'
 import { labelsEngine } from './labels.ts'
-import { bareMessageId, bodyOf, boxOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
-import type { Box, Store, Stored } from './store.ts'
+import { readSent } from './sent.ts'
+import { bodyOf, boxOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
+import type { Box, Draft, Store, Stored } from './store.ts'
 import { failedCall, isRecord } from './wire.ts'
 import type { Call, CallResult, Session } from './wire.ts'
 
 type Flags = { unread?: boolean; flagged?: boolean }
 type Refusal = Extract<ApplyResult, { kind: 'refused' }>['reason']
+type SendRefusal = Extract<SendResult, { kind: 'refused' }>['reason']
 
 /** What server.ts, and the fake Gmail server in gmail/, need from one mailbox. */
 export type MailboxEntry = {
@@ -34,8 +47,8 @@ export type MailboxEntry = {
   /** Goes into the session string, so `resume` can rebuild the adapter. */
   session: Session
   isOffline(): boolean
-  /** Answers one adapter call through `reply`. A body, apply or snapshot call waits while its method is held. */
-  respond(call: Call, reply: (result: CallResult) => void): void
+  /** Answers one adapter call through `reply`. A body, apply, send or snapshot call waits while its method is held. */
+  respond(call: Call, reply: (result: CallResult, damage?: SendDamage) => void): void
 }
 
 /** Where a snapshot page starts: below this delivery count, with the first page's cursor. */
@@ -58,8 +71,8 @@ const readToken = (token: PageToken): PageStart | null => {
 const createHold = () => {
   // Answers waiting for `release`. Null while calls are not held.
   let waiting: (() => void)[] | null = null
-  // Callers of `held` waiting for the next call to be held.
-  const onHeld: (() => void)[] = []
+  // Callers of `held`, each checked again whenever another call is held.
+  let onHeld: (() => boolean)[] = []
   return {
     hold: () => {
       waiting ??= []
@@ -68,13 +81,14 @@ const createHold = () => {
     keep: (answerNow: () => void): boolean => {
       if (waiting === null) return false
       waiting.push(answerNow)
-      for (const notify of onHeld.splice(0)) notify()
+      onHeld = onHeld.filter((ready) => !ready())
       return true
     },
-    held: () =>
+    /** Resolves once at least `count` calls are waiting. */
+    held: (count = 1) =>
       new Promise<void>((resolve) => {
-        if (waiting !== null && waiting.length > 0) resolve()
-        else onHeld.push(resolve)
+        const ready = () => (waiting?.length ?? 0) >= count && (resolve(), true)
+        if (!ready()) onHeld.push(ready)
       }),
     release: () => {
       const now = waiting ?? []
@@ -93,15 +107,20 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   const engine = dialect === 'labels' ? labelsEngine(store) : foldersEngine(store)
   // The Message-ID of every key ever delivered. It outlives an expunge, so replies can still name it.
   const messageIds = new Map<string, string>()
-  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, apply: 0 }
+  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0, find: 0 }
+  const sentCopies: SentCopy[] = []
   const pageSize = seed.pageSize ?? 50
   const canModify = seed.canModify ?? true
   let delivered = 0
   let offline = false
   let refusal: Refusal | null = null
+  let sendRefusal: SendRefusal | null = null
+  let sendDamage: SendDamage | null = null
+  let findFails = false
+  let searchLags = false
   // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
   let generation = 0
-  const holds = { body: createHold(), apply: createHold(), snapshot: createHold() }
+  const holds = { body: createHold(), apply: createHold(), snapshot: createHold(), send: createHold() }
 
   if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`sim provider: pageSize ${pageSize} is not usable`)
 
@@ -121,6 +140,15 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     })
   }
 
+  /** Files a message in the store, in delivery order. Seeded, delivered and sent mail all come through here. */
+  const file = (draft: Omit<Draft, 'order'>): Stored => {
+    const stored = engine.deliver({ ...draft, order: delivered + 1 })
+    delivered += 1
+    store.messages.set(draft.key, stored)
+    messageIds.set(draft.key, draft.facts.messageId ?? '')
+    return stored
+  }
+
   /** Adds a message to the store. Used for the seed and for `deliver`. */
   const deliver = (message: SeedMessage): void => {
     if (messageIds.has(message.key)) throw new Error(`sim provider: message key "${message.key}" is already used`)
@@ -131,18 +159,14 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       if (messageId === undefined) throw new Error(`sim provider: "${message.key}" replies to unknown "${key}"`)
       return messageId
     })
-    const stored = engine.deliver({
+    file({
       key: message.key,
-      order: delivered + 1,
       facts: factsOf(message, references, dialect === 'labels' ? (message.bulk ?? false) : null),
       body: bodyOf(message),
       unread: message.unread ?? true,
       flagged: message.flagged ?? false,
       mailboxes,
     })
-    delivered += 1
-    store.messages.set(message.key, stored)
-    messageIds.set(message.key, bareMessageId(message))
   }
 
   /** Looks up a message that exists by key. An unknown key is a scenario bug. */
@@ -210,6 +234,18 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     refuseNextApply: (reason) => {
       refusal = reason
     },
+    refuseNextSend: (reason) => {
+      sendRefusal = reason
+    },
+    damageNextSendAnswer: (how) => {
+      sendDamage = how
+    },
+    failNextFind: () => {
+      findFails = true
+    },
+    setSearchLag: (lagging) => {
+      searchLags = lagging
+    },
     expirePageTokens: () => {
       generation += 1
     },
@@ -221,6 +257,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     holdSnapshots: holds.snapshot.hold,
     snapshotHeld: holds.snapshot.held,
     releaseSnapshots: holds.snapshot.release,
+    holdSends: holds.send.hold,
+    sendHeld: holds.send.held,
+    releaseSends: holds.send.release,
     truth: () =>
       [...store.messages.values()].map((message) => ({
         key: message.key,
@@ -229,6 +268,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         flagged: message.flagged,
       })),
     calls: () => ({ ...counts }),
+    sent: () => sentCopies.map((copy) => ({ ...copy, recipients: [...copy.recipients] })),
   }
 
   /**
@@ -304,6 +344,30 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     return { kind: 'applied', moved }
   }
 
+  /**
+   * Delivers a message the core wrote (adapter rule 10): files a copy in the Sent mailbox,
+   * read, with the facts read from the message, so the copy is what a later sync reports.
+   */
+  const send = (outgoing: Outgoing): SendResult => {
+    if (sendRefusal !== null) {
+      const reason = sendRefusal
+      sendRefusal = null
+      return { kind: 'refused', reason }
+    }
+    if (!canModify) return { kind: 'refused', reason: 'not-permitted' }
+    // RFC 5322 section 2.1.1: "Each line of characters MUST be no more than 998 characters".
+    if (outgoing.raw.split('\r\n').some((line) => line.length > 998))
+      return { kind: 'refused', reason: 'refused-by-provider' }
+    const sentBox = [...store.boxes.values()].find((box) => box.role === 'sent')
+    if (!sentBox) return { kind: 'refused', reason: 'not-supported' }
+    const copy = readSent(outgoing.raw, dialect === 'labels' ? false : null)
+    const key = `sent-${sentCopies.length + 1}`
+    const stored = file({ key, ...copy, unread: false, flagged: false, mailboxes: [sentBox.key] })
+    const recipients = [...copy.facts.to, ...copy.facts.cc].map((address) => address.address)
+    sentCopies.push({ key, recipients: [...recipients, ...outgoing.bcc], raw: outgoing.raw })
+    return { kind: 'sent', ref: stored.ref }
+  }
+
   /** Answers one adapter call, unless the mailbox is offline. Counts the calls it answers. */
   const answer = (call: Call): CallResult => {
     if (offline) return failedCall(call, 'offline')
@@ -317,6 +381,16 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         return { method: 'body', outcome: { ok: true, ...body(call.arg) } }
       case 'apply':
         return { method: 'apply', outcome: { ok: true, ...apply(call.arg) } }
+      case 'send':
+        return { method: 'send', outcome: { ok: true, ...send(call.arg) } }
+      case 'find': {
+        if (findFails) {
+          findFails = false
+          return failedCall(call, 'provider-error')
+        }
+        const found = [...store.messages.values()].find((message) => message.facts.messageId === call.arg)
+        return { method: 'find', outcome: { ok: true, ref: searchLags ? null : (found?.ref ?? null) } }
+      }
     }
   }
 
@@ -331,8 +405,15 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     session: { address: seed.address, dialect, modify: canModify },
     isOffline: () => offline,
     respond: (call, reply) => {
-      const hold = call.method === 'changes' || offline ? null : holds[call.method]
-      if (!hold?.keep(() => reply(answer(call)))) reply(answer(call))
+      const answerNow = () => {
+        const result = answer(call)
+        const damage = call.method === 'send' ? sendDamage : null
+        if (damage === null) return reply(result)
+        sendDamage = null
+        reply(result, damage)
+      }
+      const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
+      if (!hold?.keep(answerNow)) answerNow()
     },
   }
 }

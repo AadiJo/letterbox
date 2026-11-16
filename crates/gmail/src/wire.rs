@@ -46,6 +46,7 @@ pub struct MessageId {
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub id: String,
+    pub thread_id: Option<String>,
     #[serde(default)]
     pub label_ids: Vec<String>,
     #[serde(default)]
@@ -127,6 +128,15 @@ pub struct Modify<'a> {
     pub ids: Option<&'a [String]>,
     pub add_label_ids: &'a [String],
     pub remove_label_ids: &'a [String],
+}
+
+/// The body of users.messages.send: the whole message as base64url, and the thread it joins.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Send<'a> {
+    pub raw: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<&'a str>,
 }
 
 /// The error body every Gmail endpoint returns. Only `reason` tells a rate limit apart

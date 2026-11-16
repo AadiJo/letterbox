@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::time::Duration;
 
 use letterbox_core::adapter::AdapterFactory;
 use letterbox_core::clock::{Environment, SystemEnvironment};
@@ -32,7 +33,18 @@ pub struct Parts {
     pub secrets: Box<dyn Secrets>,
     /// One per way to add an account.
     pub factories: Vec<Rc<dyn AdapterFactory>>,
+    /// How long a send waits before it goes out, so the user can undo it.
+    pub undo_window: Duration,
+    /// How long the core looks for a send whose answer was lost before it says so.
+    pub confirm_window: Duration,
 }
+
+/// The undo window a person gets: long enough to catch a mistake, short enough not to wonder.
+pub const UNDO_WINDOW: Duration = Duration::from_secs(10);
+
+/// How long a person's core looks for a send whose answer was lost. A provider's search
+/// can lag a send by seconds, so a couple of minutes covers it.
+pub const CONFIRM_WINDOW: Duration = Duration::from_secs(120);
 
 /// The owner's Google OAuth client of type "Desktop app". Gmail sign-ins go through it.
 /// It never lives in the repo: the app reads it from a file at startup.
@@ -49,6 +61,8 @@ pub fn app_parts(data_path: PathBuf, gmail: GmailClient) -> Parts {
         env: Box::new(SystemEnvironment),
         secrets: Box::new(SystemKeychain),
         factories: vec![gmail_factory(GmailConfig::google(gmail.id, gmail.secret))],
+        undo_window: UNDO_WINDOW,
+        confirm_window: CONFIRM_WINDOW,
     }
 }
 
@@ -70,6 +84,8 @@ pub async fn run(
         env: parts.env,
         secrets: parts.secrets,
         factories: parts.factories,
+        undo_window: parts.undo_window,
+        confirm_window: parts.confirm_window,
         send: Box::new(move |message| {
             let mut line = serde_json::to_vec(&message).expect("core messages are plain data");
             line.push(b'\n');

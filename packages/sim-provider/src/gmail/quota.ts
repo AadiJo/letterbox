@@ -61,6 +61,7 @@ export const unitsOf = (method: string, path: string, query: URLSearchParams): n
   }
   if (method === 'POST') {
     if (path === 'messages/batchModify') return 50
+    if (path === 'messages/send') return 100
     if (/^messages\/[^/]+\/modify$/.test(path)) return 5
   }
   return 0

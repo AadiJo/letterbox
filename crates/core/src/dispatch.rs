@@ -18,7 +18,7 @@ impl Inner {
         (self.send)(message);
     }
 
-    fn accepted(&self, change: &ChangeId, rev: Rev) {
+    pub(crate) fn accepted(&self, change: &ChangeId, rev: Rev) {
         self.send(CoreMessage::Accepted {
             change: change.clone(),
             rev,
@@ -92,9 +92,15 @@ impl Inner {
         }
 
         let Some((thread_ids, edit)) = Edit::of(&command) else {
-            // Set-turn was answered above. Send and undo are refused as not supported.
-            let reason = Refusal::NotSupported;
-            return self.send(CoreMessage::Rejected { change, reason });
+            // Set-turn was answered above. Sends and undos belong to the outbox.
+            return match &command {
+                Command::Send { draft } => self.send_draft(change, draft),
+                Command::Undo { change: target } => self.undo_send(change, target),
+                _ => self.send(CoreMessage::Rejected {
+                    change,
+                    reason: Refusal::NotSupported,
+                }),
+            };
         };
         let resolved = resolve(&self.state.borrow().world, thread_ids, edit);
         let (account_id, op) = match resolved {

@@ -273,7 +273,7 @@ await check('L01 labels: snapshot lists newest first, the mailbox list and a cur
 
 await check('L02 labels: capabilities and the bulk verdict', async () => {
   const { adapter } = await open('labels', [mail('a', 'inbox', { bulk: true }), mail('b')])
-  assert.deepEqual(adapter.capabilities, { modify: true, send: false, multipleMailboxes: true })
+  assert.deepEqual(adapter.capabilities, { modify: true, send: true, multipleMailboxes: true })
   const { messages } = await snapshotFrom(adapter, null)
   assert.deepEqual([find(messages, 'a').bulk, find(messages, 'b').bulk], [true, false])
 })
@@ -432,7 +432,7 @@ await check('L14 labels: control move leaves the message in exactly one mailbox'
 
 await check('F01 folders: capabilities, null bulk and one mailbox per message', async () => {
   const { adapter } = await open('folders', [mail('a', 'inbox', { bulk: true }), mail('b', 'archive')])
-  assert.deepEqual(adapter.capabilities, { modify: true, send: false, multipleMailboxes: false })
+  assert.deepEqual(adapter.capabilities, { modify: true, send: true, multipleMailboxes: false })
   const { messages, mailboxes } = await snapshotFrom(adapter, null)
   assert.deepEqual(keys(messages), ['b', 'a'])
   assert.deepEqual(
@@ -845,7 +845,7 @@ await both('B17 recovery: the same adapter and cursor work once back online', as
 
 await both('B18 calls() counts each method that reached the server', async (dialect) => {
   const { adapter, box } = await open(dialect, [mail('a'), mail('b'), mail('c')], { pageSize: 2 })
-  assert.deepEqual(box.calls(), { snapshot: 0, changes: 0, body: 0, apply: 0 })
+  assert.deepEqual(box.calls(), { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0, find: 0 })
   const { messages, cursor } = await snapshotFrom(adapter, null)
   const ref = find(messages, 'a').ref
   await adapter.changes(cursor)
@@ -855,7 +855,7 @@ await both('B18 calls() counts each method that reached the server', async (dial
   box.refuseNextApply('conflict')
   await adapter.apply({ kind: 'flags', refs: [ref], unread: false })
   await adapter.apply({ kind: 'flags', refs: [ref], unread: false })
-  assert.deepEqual(box.calls(), { snapshot: 2, changes: 3, body: 1, apply: 2 })
+  assert.deepEqual(box.calls(), { snapshot: 2, changes: 3, body: 1, apply: 2, send: 0, find: 0 })
 })
 
 await both('B19 truth() is in delivery order without expunged messages', async (dialect) => {
@@ -1081,7 +1081,7 @@ await both('C02 resume reaches the same mailbox without the password', async (di
     assert.equal(set.added.at(-1)?.subject, `n-${factory.option.id}`)
     await resumed.close()
   }
-  assert.deepEqual(box.calls(), { snapshot: 1, changes: 2, body: 0, apply: 0 })
+  assert.deepEqual(box.calls(), { snapshot: 1, changes: 2, body: 0, apply: 0, send: 0, find: 0 })
 })
 
 await check('C03 resume connects lazily, on first use', async () => {
@@ -1094,7 +1094,7 @@ await check('C03 resume connects lazily, on first use', async () => {
   assert.equal(openPipes(), before, 'resume opened a socket before its first call')
   const provider = await start()
   const box = provider.createMailbox('labels', seedOf([mail('a'), mail('b')]))
-  assert.deepEqual(box.calls(), { snapshot: 0, changes: 0, body: 0, apply: 0 })
+  assert.deepEqual(box.calls(), { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0, find: 0 })
   assert.deepEqual(keys((await snapshotFrom(resumed, null)).messages), ['b', 'a'])
 })
 

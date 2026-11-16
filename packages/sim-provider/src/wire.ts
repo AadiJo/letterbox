@@ -12,10 +12,13 @@ import type {
   BodyResult,
   ChangesResult,
   Cursor,
+  Found,
   MessageRef,
   Mutation,
   Outcome,
+  Outgoing,
   PageToken,
+  SendResult,
   SignInFailure,
   SnapshotPage,
 } from './adapter.ts'
@@ -27,6 +30,8 @@ export type Call =
   | { method: 'changes'; arg: Cursor }
   | { method: 'body'; arg: MessageRef }
   | { method: 'apply'; arg: Mutation }
+  | { method: 'send'; arg: Outgoing }
+  | { method: 'find'; arg: string }
 
 /** The answer to one adapter call. `method` repeats the call's, so the client can narrow on it. */
 export type CallResult =
@@ -34,6 +39,8 @@ export type CallResult =
   | { method: 'changes'; outcome: Outcome<ChangesResult> }
   | { method: 'body'; outcome: Outcome<BodyResult> }
   | { method: 'apply'; outcome: Outcome<ApplyResult> }
+  | { method: 'send'; outcome: Outcome<SendResult> }
+  | { method: 'find'; outcome: Outcome<Found> }
 
 /** The answer to a call that never reached a usable mailbox. */
 export const failedCall = (call: Call, failure: AdapterFailure): CallResult => ({

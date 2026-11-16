@@ -83,7 +83,31 @@ export type Seed = {
 export type TruthMessage = { key: string; mailboxes: string[]; unread: boolean; flagged: boolean }
 
 /** How many times the core called each adapter method on this mailbox. */
-export type CallCounts = { snapshot: number; changes: number; body: number; apply: number }
+export type CallCounts = {
+  snapshot: number
+  changes: number
+  body: number
+  apply: number
+  send: number
+  find: number
+}
+
+/**
+ * How the answer to a delivered send can go wrong on its way back: the connection drops
+ * before any answer (over HTTP, after the status line), the answer is cut off halfway, or
+ * it arrives whole but is not JSON.
+ */
+export type SendDamage = 'disconnect' | 'truncated' | 'invalid-json'
+
+/** One message the core sent through this mailbox, as the provider delivered it. */
+export type SentCopy = {
+  /** The key of the copy in the Sent mailbox, "sent-<n>" in the order they arrived. */
+  key: string
+  /** Every address it went to: To, Cc and Bcc. */
+  recipients: string[]
+  /** The message as the provider got it. */
+  raw: string
+}
 
 /** One mailbox at the sim provider, as a scenario drives it. Every method takes effect at once. */
 export interface SimMailbox {
@@ -112,6 +136,14 @@ export interface SimMailbox {
   setOffline(offline: boolean): void
   /** The next `apply` answers refused with this reason and changes nothing. */
   refuseNextApply(reason: 'conflict' | 'refused-by-provider'): void
+  /** The next `send` answers refused with this reason and delivers nothing. */
+  refuseNextSend(reason: 'not-permitted' | 'refused-by-provider'): void
+  /** The next `send` delivers the message, then its answer reaches the core damaged this way. */
+  damageNextSendAnswer(how: SendDamage): void
+  /** The next `find` fails, as a provider's search does when it is briefly down. */
+  failNextFind(): void
+  /** While true, `find` finds nothing, as a provider's search does before its index catches up. */
+  setSearchLag(lagging: boolean): void
   /** From now on, body calls wait. Lets a scenario change the mailbox while a fetch is in flight. */
   holdBodies(): void
   /** Answers every waiting body call, from the truth as it is now, and stops holding. */
@@ -128,10 +160,18 @@ export interface SimMailbox {
   snapshotHeld(): Promise<void>
   /** Answers every waiting snapshot call, from the truth as it is now, and stops holding. */
   releaseSnapshots(): void
+  /** From now on, send calls wait and deliver nothing. Lets a scenario stop a core in the middle of a send. */
+  holdSends(): void
+  /** Resolves once `count` send calls (1 unless given) are waiting, at once if they already are. */
+  sendHeld(count?: number): Promise<void>
+  /** Delivers and answers every waiting send call, in the order they came, and stops holding. */
+  releaseSends(): void
 
   // What a scenario checks.
   truth(): TruthMessage[]
   calls(): CallCounts
+  /** Every message the core sent, in the order the provider delivered them. */
+  sent(): SentCopy[]
 }
 
 /** A pending sim oauth attempt, named by the url the core was told to open. */

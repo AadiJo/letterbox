@@ -11,9 +11,11 @@
 //! Guarantees the core makes. Each one is a conformance test for any core or adapter.
 //!   1. Read your writes. An update with rev >= the rev of an accepted change includes that change.
 //!   2. Every accepted change gets exactly one `settled`.
-//!   3. Changes on one account reach the provider in the order they were accepted.
+//!   3. Changes on one account reach the provider in the order they were accepted. A send
+//!      joins that order when its undo window ends.
 //!   4. Sending the same ChangeId twice has the same effect as sending it once.
-//!   5. A failed change is reverted in the store before `settled` is sent.
+//!   5. A failed change is reverted in the store before `settled` is sent. A failed send
+//!      stays in its conversation, marked failed.
 //!   6. No provider id, provider name or credential appears in a core-to-UI message.
 //!      The only exception is the display label on Account and SignInOption.
 //!   7. Every request gets exactly one response. That includes a sign-in that is
@@ -21,8 +23,13 @@
 //!   8. Updates caused by a command or request are sent before its `settled` or
 //!      `response`. A client that has the answer has already seen the effects.
 
+mod outcome;
+mod send;
+
 use std::num::NonZeroU64;
 
+pub use outcome::{ChangeResult, Refusal};
+pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
 
@@ -265,6 +272,8 @@ pub struct Message {
     pub unread: bool,
     pub body: Body,
     pub attachments: Vec<Attachment>,
+    /// Set only on a message the user sent that the provider does not hold yet, or refused.
+    pub delivery: Option<Delivery>,
 }
 
 /// Bodies download on demand, so one can be missing while offline.
@@ -398,7 +407,7 @@ pub enum Command {
     Send {
         draft: Draft,
     },
-    /// Cancels a change that has not synced, or applies its opposite if it has.
+    /// Cancels a send still in its undo window. No other change can be undone yet.
     Undo {
         change: ChangeId,
     },
@@ -425,44 +434,6 @@ impl TurnChoice {
             TurnChoice::Auto => None,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Draft {
-    pub account_id: AccountId,
-    pub to: Vec<String>,
-    pub cc: Vec<String>,
-    pub bcc: Vec<String>,
-    pub subject: String,
-    pub text: String,
-    /// Required, but may be null. `Option::deserialize` stops serde from reading a missing field as null.
-    #[serde(deserialize_with = "Option::deserialize")]
-    pub html: Option<String>,
-    /// The core writes Message-ID, In-Reply-To and References from this. Required, but may be null.
-    #[serde(deserialize_with = "Option::deserialize")]
-    pub in_reply_to: Option<MessageId>,
-}
-
-/// Why the core or the provider said no.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum Refusal {
-    NotPermitted,
-    NotSupported,
-    UnknownTarget,
-    Conflict,
-    RefusedByProvider,
-    Invalid,
-}
-
-/// The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChangeResult {
-    Done,
-    Undone,
-    Failed(Refusal),
 }
 
 // ---------------------------------------------------------------- request

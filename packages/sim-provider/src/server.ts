@@ -5,7 +5,7 @@
 import { rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import type { Socket } from 'node:net'
-import type { SimProvider, StartSimProvider } from './contract.ts'
+import type { SendDamage, SimProvider, StartSimProvider } from './contract.ts'
 import { createMailboxEntry } from './mailbox.ts'
 import type { MailboxEntry } from './mailbox.ts'
 import { encode, failedCall, isRequest, lineReader } from './wire.ts'
@@ -78,9 +78,14 @@ export const startSimProvider: StartSimProvider = (socketPath) => {
       }
       case 'call': {
         const entry = mailboxes.get(request.address)
-        const reply = (result: CallResult) => {
+        const reply = (result: CallResult, damage?: SendDamage) => {
           collectOpaque(result.outcome, handedOut)
-          send(socket, { id: request.id, kind: 'result', result })
+          const line = encode({ id: request.id, kind: 'result', result })
+          if (damage === undefined) return send(socket, { id: request.id, kind: 'result', result })
+          if (damage === 'disconnect') return void socket.destroy()
+          // Half the line, then the end of the stream, which flushes what was written first.
+          if (damage === 'truncated') return void socket.end(line.slice(0, Math.floor(line.length / 2)))
+          socket.write('this is not json\n')
         }
         if (entry) entry.respond(request.call, reply)
         else reply(failedCall(request.call, 'needs-sign-in'))
