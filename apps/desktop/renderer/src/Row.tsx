@@ -16,7 +16,10 @@ export const ROW_HEIGHT = 73
  */
 export type Slot = 'turn' | 'wait' | 'time'
 
-/** Who a row is with: the first person who is not me. The core lists only who wrote, so it can be me. */
+/**
+ * Who a row is with: the first person who is not me. The core lists everyone a message was
+ * from, to or cc'd, so this is me only in a conversation with nobody else.
+ */
 export const otherPerson = (thread: ThreadSummary): Person | undefined =>
   thread.people.find((person) => !person.isMe) ?? thread.people[0]
 

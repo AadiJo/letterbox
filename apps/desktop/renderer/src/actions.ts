@@ -1,7 +1,7 @@
 // What each toolbar button and shortcut does to a conversation, as a protocol command.
 // Only commands the core already has are here. Reply and compose wait for the core.
 
-import type { Account, Command, Mailbox, ThreadSummary } from '@letterbox/protocol'
+import type { Account, Command, Mailbox, MailboxId, ThreadSummary } from '@letterbox/protocol'
 import { client } from './core.ts'
 
 /** The accounts and mailboxes an action needs to build its command. */
@@ -22,8 +22,15 @@ const byKey = new Map<string, Action>(ALL.map((action) => [SHORTCUTS[action], ac
 /** The action a key runs, if any. */
 export const actionForKey = (key: string) => byKey.get(key)
 
-/** Whether `action` takes the conversation out of the list it is in, so the selection moves on. */
-export const removes = (action: Action) => action === 'archive' || action === 'trash'
+/**
+ * Whether `command` takes a conversation out of the mailbox `mailboxId`. Trash moves it out
+ * of every mailbox but Trash, and set-mailboxes out of each one it removes.
+ */
+export function leavesMailbox(command: Command, mailboxId: MailboxId, mailboxes: readonly Mailbox[]) {
+  if (command.kind === 'set-mailboxes') return command.remove.includes(mailboxId)
+  if (command.kind === 'trash') return mailboxes.find((mailbox) => mailbox.id === mailboxId)?.role !== 'trash'
+  return false
+}
 
 /**
  * The command for `action` on `thread`, or null where the account cannot do it: read-only
@@ -56,12 +63,12 @@ export function commandFor(action: Action, thread: ThreadSummary, mail: Mail): C
   }
 }
 
-/** Sends `action` for `thread` if the account allows it. Returns whether it went. */
+/** Sends `action` for `thread` if the account allows it. Returns the command it sent, or null. */
 export function run(action: Action, thread: ThreadSummary, mail: Mail) {
   const command = commandFor(action, thread, mail)
   // The lists and the reader follow the core's views, which show the change or its refusal.
   if (command) void client.command(command)
-  return command !== null
+  return command
 }
 
 /** Marks a conversation read when it opens, as Apple Mail does. */

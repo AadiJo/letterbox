@@ -4,6 +4,7 @@
 
 import type { Account, ThreadFilter } from '@letterbox/protocol'
 import { useEffect, useRef, useState } from 'react'
+import { leavesMailbox } from './actions.ts'
 import { Row, ROW_HEIGHT } from './Row.tsx'
 import { type Chrome, Screen, useSelection } from './Screen.tsx'
 import { type Range, type Slice, useThreadWindow } from './threads.ts'
@@ -27,7 +28,13 @@ type Props = { title: string; filter: ThreadFilter; chrome: Chrome; accounts: re
 export function MailScreen({ title, filter, chrome, accounts }: Props) {
   const { slice, show } = useThreadWindow(filter)
   const order = slice?.entries.map((entry) => entry.id) ?? []
-  const selection = useSelection(order, chrome.mail)
+  // Only a mailbox list loses rows to an action. All mail and search keep archived and trashed mail.
+  const { mailboxId } = filter
+  const selection = useSelection(
+    order,
+    chrome.mail,
+    (command) => mailboxId !== undefined && leavesMailbox(command, mailboxId, chrome.mail.mailboxes),
+  )
   const total = slice?.total ?? 0
   return (
     <Screen

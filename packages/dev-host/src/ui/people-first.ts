@@ -52,6 +52,16 @@ const sidebar = (page: Page) => page.getByRole('navigation', { name: 'Sidebar' }
 const nav = (page: Page, name: string) => sidebar(page).getByRole('button', { name: new RegExp(`^${name}`) })
 const subtitle = (page: Page) => page.locator('[data-field="subtitle"]').textContent()
 
+/** The unread count beside Inbox in the sidebar, read in the page. The sidebar leaves out a count of 0. */
+const inboxCount = () => {
+  const inbox = [...document.querySelectorAll('nav[aria-label="Sidebar"] button')].find((button) =>
+    button.textContent?.startsWith('Inbox'),
+  )
+  return Number(inbox?.textContent?.replace(/\D/g, '') || 0)
+}
+
+const inboxUnread = (page: Page) => page.evaluate(inboxCount)
+
 /** Waits for a list header to read `text`. */
 const waitForSubtitle = (page: Page, text: string) =>
   page.waitForFunction((expected) => document.querySelector('[data-field="subtitle"]')?.textContent === expected, text)
@@ -157,8 +167,8 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     window.addEventListener('message', (event) => document.body.setAttribute('data-got-message', String(event.data)))
   })
   // Every remote URL the body names. Each must be refused before it reaches the network.
-  const remoteLoads = [...htmlMessage.html.matchAll(/(?:href="|src="|url\()(https:[^")]+)/g)].flatMap((match) =>
-    match[1] ? [match[1]] : [],
+  const remoteLoads = [...htmlMessage.html.matchAll(/(?:<link [^>]*href="|src="|url\()(https:[^")]+)/g)].flatMap(
+    (match) => (match[1] ? [match[1]] : []),
   )
   const refused = Promise.all(
     remoteLoads.map((load) => page.waitForEvent('requestfailed', (request) => request.url() === load)),
@@ -182,15 +192,46 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   equal(remote, [], 'the page never reached past 127.0.0.1')
   await page.screenshot({ path: join(ARTIFACTS, 'html-body.png') })
 
-  // Archiving from the keyboard takes the row out of Inbox and out of its count.
+  // A link in the body cannot take the frame to a remote page. The click ends in a request,
+  // or in a refusal the console names by origin, and either way nothing remote may load.
+  const link = /<a id="out" href="([^"]+)"/.exec(htmlMessage.html)?.[1]
+  if (!link) throw new Error('the HTML message has no link')
+  const clicked = Promise.race([
+    page.waitForEvent('requestfinished', (request) => request.url().startsWith(link)),
+    page.waitForEvent('requestfailed', (request) => request.url().startsWith(link)),
+    page.waitForEvent('console', (message) => message.text().includes(new URL(link).origin)),
+  ])
+  await frame.locator('#out').click()
+  await clicked
+  equal(remote, [], 'clicking a link in the body loads nothing remote')
+  equal(
+    page
+      .frames()
+      .slice(1)
+      .map((child) => child.url()),
+    ['about:srcdoc'],
+    'the body frame stays on its own document after a link click',
+  )
+
+  // Archiving from the keyboard takes the row out of Inbox and out of its count. The next
+  // conversation opens in its place, marked read like one opened by hand.
   await nav(page, 'Inbox').click()
   await page.waitForFunction(() =>
     /^\d+ conversations$/.test(document.querySelector('[data-field="subtitle"]')?.textContent ?? ''),
   )
   const inbox = Number.parseInt((await subtitle(page)) ?? '', 10)
   const rows = page.locator('[data-list="mail"] [role="option"]')
-  const [first, second] = [await rows.nth(0).getAttribute('data-row'), await rows.nth(1).getAttribute('data-row')]
-  await rows.nth(0).click()
+  const listed = await rows.evaluateAll((elements) =>
+    elements.map((element) => ({
+      id: element.getAttribute('data-row') ?? '',
+      unread: element.getAttribute('data-unread') === 'true',
+    })),
+  )
+  const at = listed.findIndex((row, index) => row.unread && listed[index + 1]?.unread)
+  const [first, second] = [listed[at]?.id, listed[at + 1]?.id]
+  if (!first || !second) throw new Error('Inbox shows no two unread conversations next to each other')
+  const unreadBefore = await inboxUnread(page)
+  await page.locator(`[data-row="${first}"]`).click()
   await page.keyboard.press('e')
   await waitForSubtitle(page, `${inbox - 1} conversations`)
   equal(await page.locator(`[data-row="${first}"]`).count(), 0, 'archiving with e takes the row out of Inbox')
@@ -199,6 +240,44 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     second,
     'the next conversation opens in its place',
   )
+  // Marking read is a command of its own, so give its update a moment to land.
+  await page.waitForFunction(`(${inboxCount})() === ${unreadBefore - 2}`, null, { timeout: 5000 }).catch(() => {})
+  equal(await inboxUnread(page), unreadBefore - 2, 'the conversation that opens after an archive is marked read')
+
+  // Flagging leaves the row in Inbox, so scrolling it out of the window keeps it open.
+  const open = await page.locator('[data-field="reader-subject"]').textContent()
+  await page.keyboard.press('s')
+  const away = 400 * 73
+  await page.locator('[data-list="mail"]').evaluate((list, top) => list.scrollTo({ top }), away)
+  await page.waitForFunction(
+    (top) =>
+      [...document.querySelectorAll<HTMLElement>('[data-list="mail"] [role="option"]')].some(
+        (row) => Number.parseFloat(row.style.top) >= top,
+      ),
+    away,
+  )
+  equal(await page.locator(`[data-row="${second}"]`).count(), 0, 'the flagged row scrolled out of the window')
+  equal(
+    await page.locator('[data-field="reader-subject"]').textContent(),
+    open,
+    'scrolling a flagged conversation out of the window keeps it open',
+  )
+
+  // Each search starts with nothing open.
+  const search = page.getByLabel('Search mail')
+  await search.fill('Climbing on Saturday')
+  await search.press('Enter')
+  await page.waitForFunction(() =>
+    /^[1-9]\d* conversations?$/.test(document.querySelector('[data-field="subtitle"]')?.textContent ?? ''),
+  )
+  await page.locator('[data-list="mail"] [role="option"]').first().click()
+  await page.locator('[data-message="open"]').waitFor()
+  await page.getByLabel('Search mail').fill('no conversation says this')
+  await page.getByLabel('Search mail').press('Enter')
+  await waitForSubtitle(page, '0 conversations')
+  equal(await page.getByText('No conversation selected').isVisible(), true, 'a new search starts with nothing open')
+  equal(await page.getByRole('button', { name: 'Archive' }).isDisabled(), true, 'with nothing open, the toolbar is off')
+  await page.getByLabel('Search mail').press('Escape')
 
   // New mail shows up live.
   await nav(page, 'All mail').click()
@@ -218,8 +297,8 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   const compiled = await (await fetch(new URL('src/Row.tsx', url))).text()
   equal(compiled.includes('compiler-runtime'), true, 'React Compiler compiles the renderer')
   equal(await page.getByRole('alert').count(), 0, 'the page never lost the core')
-  // The body frame's blocked script and loads log errors. They are the sandbox and the policy working.
-  const refusal = /Content Security Policy|sandboxed and the 'allow-scripts'/
+  // The body frame's blocked script, loads and link log errors. They are the sandbox and the policy working.
+  const refusal = /Content Security Policy|in a sandboxed frame|sandboxed and the 'allow-scripts'/
   equal(
     errors.filter((error) => !refusal.test(error)),
     [],

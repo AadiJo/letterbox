@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Frames may hold only their own srcdoc. A message body renders in one (src/Body.tsx), and
+      this stops a link in it from taking the frame to a remote page. It restricts nothing else.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'none'" />
     <title>Letterbox</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>

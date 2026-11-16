@@ -1,7 +1,7 @@
 // What every list screen shares: the list pane's head and sync strip, the reader pane, and
 // the selection with its keyboard. PeopleScreen and MailScreen fill in the list.
 
-import type { Account, ThreadId } from '@letterbox/protocol'
+import type { Account, Command, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useState } from 'react'
 import { type Action, actionForKey, type Mail, markRead, run } from './actions.ts'
@@ -18,38 +18,34 @@ export type Chrome = {
   search: ReactNode
 }
 
-/** The selected conversation. `leaving` marks one an action may take out of the list. */
-type Choice = { id: ThreadId; index: number; leaving: boolean }
-
 /** True when focus is in a text field, where letters are typing, not shortcuts. */
 const typing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
 /**
- * The selection in a list whose rows, top to bottom, are `order`. Opening a conversation
- * marks it read. Arrow keys and j/k move, and actions.ts's keys act on the open one. When
- * an action takes the open conversation out of the list, the next one opens in its place.
+ * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
+ * and actions.ts's keys act on the open conversation. `leaves` says whether a command takes
+ * a conversation out of this list. When it does, the next one opens in its place.
  */
-export function useSelection(order: readonly ThreadId[], mail: Mail) {
-  const [choice, setChoice] = useState<Choice | null>(null)
-  let selected = choice?.id ?? null
-  if (choice?.leaving && !order.includes(choice.id)) {
-    const next = order[Math.min(choice.index, order.length - 1)]
-    selected = next ?? null
-    setChoice(next ? { id: next, index: choice.index, leaving: false } : null)
-  }
+export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
+  const [selected, setSelected] = useState<ThreadId | null>(null)
 
-  const select = (id: ThreadId) => {
-    setChoice({ id, index: order.indexOf(id), leaving: false })
-    const thread = threadRecord(id)
+  /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
+  const select = (id: ThreadId | null) => {
+    setSelected(id)
+    const thread = id === null ? undefined : threadRecord(id)
     if (thread) markRead(thread, mail)
   }
 
   const act = (action: Action) => {
     const thread = selected ? threadRecord(selected) : undefined
-    if (!thread || !run(action, thread, mail)) return
-    setChoice({ id: thread.id, index: order.indexOf(thread.id), leaving: true })
+    if (!thread) return
+    const command = run(action, thread, mail)
+    if (!command || !leaves(command)) return
+    // The list has not changed yet, so the rows around the open one are still where they were.
+    const index = order.indexOf(thread.id)
+    select(index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null))
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {

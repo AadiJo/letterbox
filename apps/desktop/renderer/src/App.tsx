@@ -31,7 +31,16 @@ export function App() {
 
   const screen = () => {
     if (query !== '')
-      return <MailScreen key="search" title="Search" filter={{ text: query }} chrome={chrome} accounts={accounts} />
+      // Keyed by the query, so each search starts with nothing open.
+      return (
+        <MailScreen
+          key={`search ${query}`}
+          title="Search"
+          filter={{ text: query }}
+          chrome={chrome}
+          accounts={accounts}
+        />
+      )
     switch (place.kind) {
       case 'people':
         return <PeopleScreen key="people" chrome={chrome} accounts={accounts} />

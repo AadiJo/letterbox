@@ -32,7 +32,12 @@ export function usePeople() {
 export function PeopleScreen({ chrome, accounts }: { chrome: Chrome; accounts: readonly Account[] }) {
   const people = usePeople()
   const order = people ? [...people.mine, ...people.theirs] : []
-  const selection = useSelection(order, chrome.mail)
+  // Done hands the turn to nobody, which takes the conversation out of both sections.
+  const selection = useSelection(
+    order,
+    chrome.mail,
+    (command) => command.kind === 'set-turn' && command.turn === 'none',
+  )
   const list = useRef<HTMLDivElement>(null)
 
   // Keeps the selected row on screen when the keyboard moves past the edge.

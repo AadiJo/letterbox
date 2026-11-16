@@ -267,7 +267,7 @@ const automated = (index: number, sentAt: string): SeedMessage => {
 
 /**
  * An HTML newsletter that tries what hostile mail tries: a script, an inline handler, a
- * tracking pixel, a remote stylesheet and a remote font. The `probe` paragraph keeps its
+ * tracking pixel, a remote stylesheet, a remote font and a link to a remote page. The `probe` paragraph keeps its
  * text only if none of it ran, and the dev host's UI check reads it.
  */
 const htmlNewsletter: SeedMessage = {
@@ -283,6 +283,7 @@ const htmlNewsletter: SeedMessage = {
     '<h1>Five essays for the weekend</h1>',
     '<p id="probe">Nothing in this message ran.</p>',
     '<p>On slow mornings, small gardens and the quiet web.</p>',
+    '<p><a id="out" href="https://read.longread.example/essays">Read in your browser</a></p>',
     '<img src="https://pixel.longread.example/open.gif" width="1" height="1" alt="">',
     '<img src="missing.png" alt="" onerror="document.getElementById(\'probe\').textContent=\'A handler ran.\'">',
     "<script>document.getElementById('probe').textContent='A script ran.';top.postMessage('script ran','*')</script>",
