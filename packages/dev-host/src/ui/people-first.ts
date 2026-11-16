@@ -62,6 +62,16 @@ const inboxCount = () => {
 
 const inboxUnread = (page: Page) => page.evaluate(inboxCount)
 
+/** Presses s, gives the change a moment to land, and checks the toolbar's flag button then reads `label`. */
+async function pressFlag(page: Page, label: 'Flag' | 'Unflag', what: string) {
+  await page.keyboard.press('s')
+  await page
+    .locator(`[aria-label="${label}"]`)
+    .waitFor({ timeout: 5000 })
+    .catch(() => {})
+  equal(await page.getByRole('button', { name: /^(Flag|Unflag)$/ }).getAttribute('aria-label'), label, what)
+}
+
 /** Waits for a list header to read `text`. */
 const waitForSubtitle = (page: Page, text: string) =>
   page.waitForFunction((expected) => document.querySelector('[data-field="subtitle"]')?.textContent === expected, text)
@@ -247,6 +257,7 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   // Flagging leaves the row in Inbox, so scrolling it out of the window keeps it open.
   const open = await page.locator('[data-field="reader-subject"]').textContent()
   await page.keyboard.press('s')
+  await page.locator('[aria-label="Unflag"]').waitFor()
   const away = 400 * 73
   await page.locator('[data-list="mail"]').evaluate((list, top) => list.scrollTo({ top }), away)
   await page.waitForFunction(
@@ -261,6 +272,17 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     await page.locator('[data-field="reader-subject"]').textContent(),
     open,
     'scrolling a flagged conversation out of the window keeps it open',
+  )
+
+  // Out of the window, the open conversation still follows the core: s unflags, then flags again.
+  await pressFlag(page, 'Flag', 'out of the window, s unflags the open conversation')
+  await pressFlag(page, 'Unflag', 'out of the window, s flags it again')
+  await page.locator('[data-list="mail"]').evaluate((list) => list.scrollTo({ top: 0 }))
+  await page.locator(`[data-row="${second}"] [data-field="subject"]`).waitFor()
+  equal(
+    await page.locator(`[data-row="${second}"] [aria-label="Flagged"]`).count(),
+    1,
+    'the core holds the flag the toolbar shows',
   )
 
   // Each search starts with nothing open.

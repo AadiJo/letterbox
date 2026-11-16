@@ -34,8 +34,8 @@ export function leavesMailbox(command: Command, mailboxId: MailboxId, mailboxes:
 
 /**
  * The command for `action` on `thread`, or null where the account cannot do it: read-only
- * access, a turn that is already nobody's, a conversation not in the inbox, or a folder
- * account with no Archive.
+ * access, a turn that is already nobody's, a conversation not in the inbox, a folder
+ * account with no Archive, or an account with no Trash.
  */
 export function commandFor(action: Action, thread: ThreadSummary, mail: Mail): Command | null {
   const account = mail.accounts.find((candidate) => candidate.id === thread.accountId)
@@ -54,8 +54,11 @@ export function commandFor(action: Action, thread: ThreadSummary, mail: Mail): C
       const archive = own.find((mailbox) => mailbox.role === 'archive')
       return archive ? { kind: 'set-mailboxes', threadIds, add: [archive.id], remove: [inbox.id] } : null
     }
-    case 'trash':
-      return { kind: 'trash', threadIds }
+    case 'trash': {
+      // The core moves trashed mail to the account's Trash. An account without one cannot trash.
+      const trash = mail.mailboxes.some((mailbox) => mailbox.accountId === account.id && mailbox.role === 'trash')
+      return trash ? { kind: 'trash', threadIds } : null
+    }
     case 'flag':
       return { kind: 'set-flags', threadIds, flagged: !thread.flagged }
     case 'unread':
@@ -63,12 +66,16 @@ export function commandFor(action: Action, thread: ThreadSummary, mail: Mail): C
   }
 }
 
-/** Sends `action` for `thread` if the account allows it. Returns the command it sent, or null. */
-export function run(action: Action, thread: ThreadSummary, mail: Mail) {
+/**
+ * Sends `action` for `thread` if the account allows it. Resolves with the command once the
+ * core accepts it, or null when the account cannot do it, the core refuses, or the core is gone.
+ */
+export async function run(action: Action, thread: ThreadSummary, mail: Mail) {
   const command = commandFor(action, thread, mail)
+  if (!command) return null
   // The lists and the reader follow the core's views, which show the change or its refusal.
-  if (command) void client.command(command)
-  return command
+  const answer = await client.command(command).catch(() => null)
+  return answer?.kind === 'accepted' ? command : null
 }
 
 /** Marks a conversation read when it opens, as Apple Mail does. */

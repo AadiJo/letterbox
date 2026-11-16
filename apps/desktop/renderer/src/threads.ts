@@ -1,12 +1,12 @@
-// Conversation lists and their rows. The only place the renderer subscribes to the core's
-// threads view; lint/rules/renderer-thread-lists.ts keeps it that way.
+// Conversation lists, their rows and the open conversation. The only place the renderer
+// subscribes to the core's threads view; lint/rules/renderer-thread-lists.ts keeps it that way.
 //
 // A list holds ids, never rows. Each row reads its own record with `useThread`, and a
 // record only tells its watchers when its own data changed. So when one conversation
 // changes, one row re-renders, and the list re-renders only when its order or length does.
 
 import type { Subscription } from '@letterbox/client'
-import type { ThreadFilter, ThreadId, ThreadPage, ThreadSummary } from '@letterbox/protocol'
+import type { ThreadDetail, ThreadFilter, ThreadId, ThreadPage, ThreadSummary } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import { client } from './core.ts'
 
@@ -19,20 +19,21 @@ export type Slice = { total: number; offset: number; entries: readonly Entry[] }
 /** Rows `offset` to `offset + limit` of a list. */
 export type Range = { offset: number; limit: number }
 
-// Records: the newest summary of every conversation any list has shown.
+// Records: the newest summary of every conversation a list or the reader has shown.
 
 const records = new Map<ThreadId, { thread: ThreadSummary; json: string }>()
 const recordWatchers = new Map<ThreadId, Set<() => void>>()
 
-/** Saves a page's rows, and tells each changed row's watchers. */
-function remember(page: ThreadPage) {
-  for (const thread of page.threads) {
-    const json = JSON.stringify(thread)
-    if (records.get(thread.id)?.json === json) continue
-    records.set(thread.id, { thread, json })
-    recordWatchers.get(thread.id)?.forEach((watcher) => watcher())
-  }
+/** Saves one conversation's summary, and tells its watchers if it changed. */
+function rememberThread(thread: ThreadSummary) {
+  const json = JSON.stringify(thread)
+  if (records.get(thread.id)?.json === json) return
+  records.set(thread.id, { thread, json })
+  recordWatchers.get(thread.id)?.forEach((watcher) => watcher())
 }
+
+/** Saves a page's rows. */
+const remember = (page: ThreadPage) => page.threads.forEach(rememberThread)
 
 /** One subscribe function per id, so React keeps a row's subscription across renders. */
 const recordSubscribers = new Map<ThreadId, (onChange: () => void) => () => void>()
@@ -60,6 +61,61 @@ export function useThread(id: ThreadId | null) {
 
 /** The same, read once, for an event handler. */
 export const threadRecord = (id: ThreadId) => records.get(id)?.thread
+
+// Details: the open conversation, with its messages.
+
+const details = new Map<
+  ThreadId,
+  { subscribe: (onChange: () => void) => () => void; latest: () => ThreadDetail | null | undefined }
+>()
+
+/**
+ * The live detail view of one conversation. Each update also refreshes its record, so the
+ * open conversation's row, toolbar and actions stay current after it leaves every list's window.
+ */
+function detailView(id: ThreadId) {
+  const existing = details.get(id)
+  if (existing) return existing
+  let open: { subscription: Subscription<'thread'>; stop: () => void } | undefined
+  let watchers = 0
+  const view = {
+    subscribe: (onChange: () => void) => {
+      if (!open) {
+        const subscription = client.subscribe({ view: 'thread', threadId: id })
+        const stop = subscription.watch(() => {
+          const detail = subscription.latest()
+          if (!detail) return
+          const { messages: _messages, ...summary } = detail
+          rememberThread(summary)
+        })
+        open = { subscription, stop }
+      }
+      const current = open
+      const unwatch = current.subscription.watch(onChange)
+      watchers += 1
+      return () => {
+        unwatch()
+        watchers -= 1
+        // React unsubscribes and subscribes again at once in Strict Mode. Close only if nobody came back.
+        queueMicrotask(() => {
+          if (watchers > 0 || open !== current) return
+          current.stop()
+          current.subscription.close()
+          open = undefined
+        })
+      }
+    },
+    latest: () => open?.subscription.latest(),
+  }
+  details.set(id, view)
+  return view
+}
+
+/** One conversation with its messages, live. Undefined until the core answers, null once it is gone. */
+export function useThreadDetail(id: ThreadId) {
+  const view = detailView(id)
+  return useSyncExternalStore(view.subscribe, view.latest)
+}
 
 // Pagers: one live list each, over one filter, showing one range at a time.
 

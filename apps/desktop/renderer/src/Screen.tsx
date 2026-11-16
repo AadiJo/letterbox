@@ -3,7 +3,7 @@
 
 import type { Account, Command, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
-import { type ReactNode, useEffect, useEffectEvent, useState } from 'react'
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Action, actionForKey, type Mail, markRead, run } from './actions.ts'
 import { Reader } from './Reader.tsx'
 import { threadRecord, useThread } from './threads.ts'
@@ -30,22 +30,29 @@ const typing = (target: EventTarget | null) =>
  */
 export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
+  // The open conversation as event handlers see it, including a handler that resumes after a wait.
+  const open = useRef<ThreadId | null>(null)
 
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
+    open.current = id
     setSelected(id)
     const thread = id === null ? undefined : threadRecord(id)
     if (thread) markRead(thread, mail)
   }
 
-  const act = (action: Action) => {
+  /**
+   * Runs `action` on the open conversation. Once the core accepts a command that takes it out
+   * of this list, the next one opens, unless the user opened another meanwhile. The list has
+   * not changed yet when the action starts, so the rows around the open one are where they were.
+   */
+  const act = async (action: Action) => {
     const thread = selected ? threadRecord(selected) : undefined
     if (!thread) return
-    const command = run(action, thread, mail)
-    if (!command || !leaves(command)) return
-    // The list has not changed yet, so the rows around the open one are still where they were.
     const index = order.indexOf(thread.id)
-    select(index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null))
+    const next = index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null)
+    const command = await run(action, thread, mail)
+    if (command && leaves(command) && open.current === thread.id) select(next)
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {
@@ -60,7 +67,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     }
     const action = actionForKey(event.key)
     if (!action) return
-    act(action)
+    void act(action)
     event.preventDefault()
   })
   useEffect(() => {

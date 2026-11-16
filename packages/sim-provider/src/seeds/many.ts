@@ -1,5 +1,6 @@
 // `many`: a mailbox of 6,000 conversations, one message each, for scrolling a whole mailbox.
 // Every message is a made-up notification, a minute apart, the newest five minutes before NOW.
+// It has no Trash, as some folder accounts have none, so the core cannot trash anything here.
 
 import type { SeedMessage } from '../contract.ts'
 import type { DevSeed } from '../seeds.ts'
@@ -46,7 +47,6 @@ export const many: DevSeed = {
     mailboxes: [
       { key: 'inbox', name: 'Inbox', role: 'inbox' },
       { key: 'sent', name: 'Sent', role: 'sent' },
-      { key: 'trash', name: 'Trash', role: 'trash' },
     ],
     messages: Array.from({ length: COUNT }, (_, index) => message(index, minutesBefore(5 + COUNT - 1 - index))),
   },

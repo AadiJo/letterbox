@@ -6,8 +6,8 @@ import { ChevronRight, Hourglass, Reply } from 'lucide-react'
 import { useState } from 'react'
 import { Body } from './Body.tsx'
 import { useNow } from './clock.ts'
-import { useView } from './core.ts'
 import { otherPerson, personName } from './Row.tsx'
+import { useThreadDetail } from './threads.ts'
 import { isLate, messageTime } from './time.ts'
 
 const COLUMN = 'mx-auto max-w-[680px]'
@@ -18,7 +18,7 @@ export function Reader({ id, mailboxes }: { id: ThreadId | null; mailboxes: read
 }
 
 function Conversation({ id, mailboxes }: { id: ThreadId; mailboxes: readonly Mailbox[] }) {
-  const thread = useView({ view: 'thread', threadId: id })
+  const thread = useThreadDetail(id)
   const now = useNow()
   const [opened, setOpened] = useState<ReadonlySet<MessageId>>(new Set())
   if (thread === undefined) return null

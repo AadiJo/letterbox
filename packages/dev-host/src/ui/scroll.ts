@@ -83,5 +83,28 @@ export async function checkScroll(browser: Browser, url: string) {
   }
   writeFileSync(join(ARTIFACTS, 'scroll.json'), `${JSON.stringify(timings, null, 2)}\n`)
   console.log(`     scroll: ${JSON.stringify(timings)}`)
+
+  // The mailbox has no Trash, so the core cannot trash. Nothing offers it, and the key leaves the open one open.
+  await page
+    .getByRole('navigation', { name: 'Sidebar' })
+    .getByRole('button', { name: /^Inbox/ })
+    .click()
+  const rows = page.locator('[data-list="mail"] [role="option"]')
+  await rows.first().locator('[data-field="subject"]').waitFor()
+  const first = await rows.first().getAttribute('data-row')
+  await rows.first().click()
+  equal(
+    await page.getByRole('button', { name: 'Move to Trash' }).isDisabled(),
+    true,
+    'with no Trash mailbox, Move to Trash is off',
+  )
+  await page.keyboard.press('#')
+  // Two frames: long enough for React to render any change the key made.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  equal(
+    await page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row'),
+    first,
+    'trashing where the core cannot leaves the selection where it was',
+  )
   await close()
 }

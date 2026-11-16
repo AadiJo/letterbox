@@ -9,7 +9,8 @@ import { type Action, commandFor, type Mail, SHORTCUTS } from './actions.ts'
 type Props = {
   thread: ThreadSummary | undefined
   mail: Mail
-  onAct: (action: Action) => void
+  /** Runs an action. It settles once the core has answered. */
+  onAct: (action: Action) => Promise<void>
   search: ReactNode
 }
 
@@ -24,7 +25,7 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
       aria-label={label}
       title={title(label, action)}
       disabled={!can(action)}
-      onClick={() => onAct(action)}
+      onClick={() => void onAct(action)}
       className="inline-flex h-[26px] w-8 items-center justify-center text-fg2 not-first:border-l not-first:border-line2 enabled:hover:bg-hover disabled:text-faint"
     >
       <Icon className="size-[15px]" strokeWidth={1.75} aria-hidden />
@@ -37,7 +38,7 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
           type="button"
           title={title('Done', 'done')}
           disabled={!can('done')}
-          onClick={() => onAct('done')}
+          onClick={() => void onAct('done')}
           className="inline-flex h-7 items-center gap-1.5 rounded-[7px] border border-key bg-raised px-2.5 text-[12.5px] font-medium whitespace-nowrap text-fg enabled:hover:bg-hover disabled:text-faint"
         >
           <Check className="size-3.5" strokeWidth={1.75} aria-hidden />
