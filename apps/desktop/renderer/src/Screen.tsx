@@ -5,12 +5,12 @@ import type { Account, Command, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Action, actionForKey, type Mail, markRead, run } from './actions.ts'
-import { leave, restore, shake } from './motion.ts'
+import { leave, release, shake } from './motion.ts'
 import { Reader } from './Reader.tsx'
 import { threadRecord, useThread } from './threads.ts'
 import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
-import { offerUndo, undo, UNDO_KEY, withdraw } from './undo.ts'
+import { notify, undo, UNDO_KEY, withdraw } from './undo.ts'
 
 /** What App hands every screen. */
 export type Chrome = {
@@ -37,14 +37,17 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   // Rises on every selection and when the screen goes, so an action that resumes after a
   // wait can tell whether anything moved on meanwhile.
   const generation = useRef(0)
-  // An undo offer belongs to the screen it was made on.
-  useEffect(
-    () => () => {
+  // False once the screen has gone. An action it started that the core accepts later shows
+  // no toast and moves no row: those belong to whatever screen is up now.
+  const live = useRef(false)
+  useEffect(() => {
+    live.current = true
+    return () => {
+      live.current = false
       generation.current += 1
       withdraw()
-    },
-    [],
-  )
+    }
+  }, [])
 
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
@@ -55,7 +58,8 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   }
 
   /**
-   * Runs `action` on the open conversation. A refused action shakes its row. Once the core
+   * Runs `action` on the open conversation, unless the screen goes before the core answers.
+   * A refused action shakes its row. Once the core
    * accepts a command that takes the conversation out of this list, its row slides out and,
    * as the row folds, the next one opens, unless anything was selected or the screen left
    * meanwhile. The list has not changed yet when the action starts, so the rows around the
@@ -68,19 +72,20 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     const next = index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null)
     const started = generation.current
     const command = await run(action, thread, mail)
+    if (!live.current) return
     if (!command) return shake(thread.id)
-    offerUndo(action, thread, command, mail)
+    notify(action, thread)
     if (!leaves(command)) return
     await leave(thread.id)
     if (generation.current === started) select(next)
   }
 
-  /** Undoes the offered action. Once the core accepts, its conversation is back and opens again. */
+  /** Undoes the action on the toast, if it can be. Once the core accepts, its conversation is back and opens again. */
   const undoLast = async () => {
     const started = generation.current
     const id = await undo()
-    if (!id) return
-    restore(id)
+    if (!id || !live.current) return
+    release(id)
     if (generation.current === started) select(id)
   }
 

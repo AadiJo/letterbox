@@ -3,7 +3,7 @@
 import type { Person, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { Flag, Hourglass, Paperclip, Reply } from 'lucide-react'
 import { useNow } from './clock.ts'
-import { trackRow } from './motion.ts'
+import { trackRow, useExit } from './motion.ts'
 import { useThread } from './threads.ts'
 import { age, isLate, listTime } from './time.ts'
 
@@ -32,11 +32,14 @@ type Props = {
   /** Draws the hairline above the row. Off for a section's first row and next to the selection. */
   divider: boolean
   onSelect: (id: ThreadId) => void
+  /** Shown only while it leaves: the list no longer has it (motion.ts `useHeld`). */
+  held: boolean
 }
 
-export function Row({ id, slot, selected, divider, onSelect }: Props) {
+export function Row({ id, slot, selected, divider, onSelect, held }: Props) {
   const thread = useThread(id)
   const now = useNow()
+  useExit(id, held)
   // Clipped, so the row can fold closed when it leaves (motion.ts).
   const base = 'relative mx-1.5 flex h-[73px] gap-2 overflow-hidden rounded-lg pt-2 pr-3 pb-[9px] pl-2'
   const line = divider

@@ -1,102 +1,90 @@
-// Undoable actions: Done, archive and move to Trash. The newest one is offered in a toast
-// for 5 s, and its Undo button or z takes it back. A new action replaces the offer.
+// What the last action did, in a toast for 5 s: "Marked done" with Undo (or z), or
+// "Archived" and "Moved to Trash" with nothing to undo yet. A new action replaces it.
 //
-// The core answers an `undo` command with not-supported today (crates/core/src/dispatch.rs),
-// so Undo sends the opposite command, worked out from the conversation as it was before.
+// Only Done can be undone: setting the turn back to the one the conversation had is exact.
+// Archive and Trash wait for the core's own `undo`, which answers not-supported today.
 
-import type { Command, Role, ThreadId, ThreadSummary } from '@letterbox/protocol'
+import type { Command, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
-import { type Action, type Mail, send } from './actions.ts'
+import { type Action, send } from './actions.ts'
 
-/** What the toast says after each undoable action. */
-const LABELS = { done: 'Marked done', archive: 'Archived', trash: 'Moved to Trash' } as const satisfies Partial<
-  Record<Action, string>
->
-
-type Undoable = keyof typeof LABELS
-
-const isUndoable = (action: Action): action is Undoable => action in LABELS
-
-/** Mailboxes Undo never puts a trashed conversation back in. The provider files Sent and Drafts itself. */
-const NOT_BACK: ReadonlySet<Role | null> = new Set(['trash', 'sent', 'drafts'])
-
-/** The key that undoes the offered action. */
+/** The key that undoes the last undoable action. */
 export const UNDO_KEY = 'z'
 
-/** How long an offer stays. */
-const OFFER_MS = 5000
+/** How long a notice stays. */
+const NOTICE_MS = 5000
 
-/** The action on offer. `serial` rises with each one, so a new toast replays its entrance. */
-export type Offer = { serial: number; label: (typeof LABELS)[Undoable]; threadId: ThreadId; reverse: Command }
+type SetTurn = Extract<Command, { kind: 'set-turn' }>
 
-let offer: Offer | null = null
+/** What the toast says, and the command that undoes it if there is one. */
+type Said = { label: 'Marked done'; undo: SetTurn } | { label: 'Archived' | 'Moved to Trash'; undo: null }
+
+/** The toast's content. `serial` rises with each one, so a new toast replays its entrance. */
+export type Notice = { serial: number; threadId: ThreadId } & Said
+
+let notice: Notice | null = null
 let serial = 0
 let expiry: ReturnType<typeof setTimeout> | undefined
 const watchers = new Set<() => void>()
 
-const setOffer = (next: Offer | null) => {
+const setNotice = (next: Notice | null) => {
   clearTimeout(expiry)
-  offer = next
-  if (next) expiry = setTimeout(() => setOffer(null), OFFER_MS)
+  notice = next
+  if (next) expiry = setTimeout(() => setNotice(null), NOTICE_MS)
   watchers.forEach((watcher) => watcher())
 }
 
 /**
- * The command that puts `before` back as it was after the core accepted `command`.
- * A turn the user set goes back to them, and one the rule gave goes back to the rule.
+ * What the toast says after `action` on `before`, or null for an action that says nothing.
+ * Done's undo gives the turn back to the user if they set it, or to the rule if the rule gave it.
  */
-function reverse(command: Command, before: ThreadSummary, mail: Mail): Command | null {
-  const threadIds = [before.id]
-  switch (command.kind) {
-    case 'set-turn':
-      return { kind: 'set-turn', threadIds, turn: before.turn.reason === 'set-by-user' ? before.turn.holder : 'auto' }
-    case 'set-mailboxes':
-      return { kind: 'set-mailboxes', threadIds, add: command.remove, remove: command.add }
-    case 'trash': {
-      const own = mail.mailboxes.filter((mailbox) => mailbox.accountId === before.accountId)
-      const trash = own.find((mailbox) => mailbox.role === 'trash')
-      if (!trash) return null
-      // Back to where it was, Inbox first.
-      const back = own
-        .filter((mailbox) => before.mailboxIds.includes(mailbox.id) && !NOT_BACK.has(mailbox.role))
-        .toSorted((a, b) => Number(b.role === 'inbox') - Number(a.role === 'inbox'))
-        .map((mailbox) => mailbox.id)
-      // A folder account keeps a message in one place, so it goes back to one of them.
-      const multiple = mail.accounts.find((account) => account.id === before.accountId)?.can.multipleMailboxes
-      return { kind: 'set-mailboxes', threadIds, add: multiple ? back : back.slice(0, 1), remove: [trash.id] }
+function said(action: Action, before: ThreadSummary): Said | null {
+  switch (action) {
+    case 'done': {
+      const turn = before.turn.reason === 'set-by-user' ? before.turn.holder : 'auto'
+      return { label: 'Marked done', undo: { kind: 'set-turn', threadIds: [before.id], turn } }
     }
-    default:
+    case 'archive':
+      return { label: 'Archived', undo: null }
+    case 'trash':
+      return { label: 'Moved to Trash', undo: null }
+    case 'flag':
+    case 'unread':
       return null
   }
 }
 
-/** Offers to undo `action`, which the core accepted as `command` for `before`. Other actions offer nothing. */
-export function offerUndo(action: Action, before: ThreadSummary, command: Command, mail: Mail) {
-  if (!isUndoable(action)) return
-  const back = reverse(command, before, mail)
-  if (!back) return
+/** Shows what `action`, which the core accepted, did to `before`. */
+export function notify(action: Action, before: ThreadSummary) {
+  const body = said(action, before)
+  if (!body) return
   serial += 1
-  setOffer({ serial, label: LABELS[action], threadId: before.id, reverse: back })
+  setNotice({ serial, threadId: before.id, ...body })
 }
 
-/** Withdraws the offer. */
-export const withdraw = () => setOffer(null)
+/** Takes the toast down. */
+export const withdraw = () => setNotice(null)
 
-/** Undoes the offered action. Resolves with its conversation once the core accepts, or null. */
+/** Takes the toast down if it is about `threadId`, whose change the core took back. */
+export const withdrawFor = (threadId: ThreadId) => {
+  if (notice?.threadId === threadId) withdraw()
+}
+
+/** Undoes the action on the toast, if it can be undone. Resolves with its conversation once the core accepts, or null. */
 export async function undo() {
-  const taken = offer
-  if (!taken) return null
-  setOffer(null)
-  return (await send(taken.reverse)) ? taken.threadId : null
+  const taken = notice
+  if (!taken?.undo) return null
+  withdraw()
+  return (await send(taken.undo)) ? taken.threadId : null
 }
 
-/** The action on offer, or null. */
-export function useOffer() {
+/** The toast's content, or null. */
+export function useNotice() {
   return useSyncExternalStore(
     (onChange) => {
       watchers.add(onChange)
       return () => void watchers.delete(onChange)
     },
-    () => offer,
+    () => notice,
   )
 }

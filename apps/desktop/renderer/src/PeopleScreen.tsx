@@ -84,7 +84,7 @@ type SectionProps = {
 
 function Section({ title, icon: Icon, slot, ids, selection, empty }: SectionProps) {
   const { selected, select } = selection
-  const rows = useHeld(ids)
+  const { rows, held } = useHeld(ids)
   return (
     <section aria-label={title}>
       <h3 className="flex items-center gap-[7px] px-[18px] pt-3 pb-1.5 text-xs font-semibold text-fg2">
@@ -104,6 +104,7 @@ function Section({ title, icon: Icon, slot, ids, selection, empty }: SectionProp
             selected={id === selected}
             divider={index > 0 && id !== selected && rows[index - 1] !== selected}
             onSelect={select}
+            held={held.has(id)}
           />
         ))}
       </div>

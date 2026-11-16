@@ -98,8 +98,11 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
   const total = slice?.total ?? 0
   const start = Math.max(0, first - OVERSCAN)
   const end = Math.min(total, first + fits + OVERSCAN)
-  // Null for a row the core has not sent yet.
-  const ids = useHeld(Array.from({ length: Math.max(0, end - start) }, (_, index) => idAt(start + index) ?? null))
+  // Null for a row the core has not sent yet. A scroll moves `start`, which ends any exit.
+  const { rows: ids, held } = useHeld(
+    Array.from({ length: Math.max(0, end - start) }, (_, index) => idAt(start + index) ?? null),
+    start,
+  )
 
   return (
     <div
@@ -122,6 +125,7 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
             selected={id === selection.selected}
             divider={start + index > 0 && id !== selection.selected && above !== selection.selected}
             onSelect={selection.select}
+            held={held.has(id)}
           />
         )
       })}

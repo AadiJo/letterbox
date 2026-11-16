@@ -1,13 +1,15 @@
 // The end-to-end UI check, run by `pnpm check:ui` and `pnpm check`.
 //
-// Four runs, each against real cores over the sim provider, in Playwright's Chromium:
+// Five runs, each against real cores over the sim provider, in Playwright's Chromium:
 //   people-first  `pnpm dev` (main.ts) with the people-first seed: People, All mail, the
 //                 reader, HTML bodies, the narrow window, keyboard actions, new mail, a reload
 //                 (ui/people-first.ts)
-//   done          `pnpm dev` with the people-first seed again: the reader at 1920 px, Done and
-//                 archive with their undo toast, an empty Your turn, reduced motion (ui/done.ts)
+//   done          `pnpm dev` with the people-first seed again: the reader at 1920 px, Done
+//                 and its undo, archive and Trash, a late answer and a scroll during an exit,
+//                 an empty Your turn, reduced motion (ui/done.ts)
 //   many          `pnpm dev` with 6,000 conversations: scrolls All mail top to bottom (ui/scroll.ts)
 //   first sync    the dev host's parts in this process, with snapshot pages held (ui/first-sync.ts)
+//   rollback      the same parts, with an archive the provider refuses (ui/rollback.ts)
 // Every process a run started must be gone at its end.
 //
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
@@ -21,6 +23,7 @@ import { checkDone } from './ui/done.ts'
 import { checkFirstSync } from './ui/first-sync.ts'
 import { startDevHost } from './ui/host.ts'
 import { checkPeopleFirst } from './ui/people-first.ts'
+import { checkRollback } from './ui/rollback.ts'
 import { ARTIFACTS, fail, failed, summarize } from './ui/record.ts'
 import { checkScroll } from './ui/scroll.ts'
 
@@ -56,6 +59,7 @@ try {
   await withDevHost('done', 'people-first', 1, browser, checkDone)
   await withDevHost('many', 'many', 1, browser, checkScroll)
   await checkFirstSync(browser).catch(fail)
+  await checkRollback(browser).catch(fail)
 } finally {
   await browser.close()
 }

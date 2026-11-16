@@ -1,11 +1,13 @@
 // Row motion, and the only place the renderer animates an element from script
 // (lint/rules/renderer-motion.ts keeps it that way). A row an action takes out of a list
-// slides right and fades, then folds closed. A row whose action the core refused shakes once.
-// Each step runs once, takes 250 ms or less, and moves only transform, opacity and height.
-// With the system's reduced motion setting every step is instant. styles.css holds the CSS half.
+// slides right and fades, then folds closed. A row whose action the core refused shakes once,
+// and so does a leaving row the core takes back. Each step runs once, takes 250 ms or less,
+// and moves only transform, opacity and height. With the system's reduced motion setting
+// every step is instant. styles.css holds the CSS half.
 
 import type { ThreadId } from '@letterbox/protocol'
-import { type RefCallback, useState, useSyncExternalStore } from 'react'
+import { type RefCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { withdrawFor } from './undo.ts'
 
 const EASE = 'cubic-bezier(0.2, 0.7, 0.2, 1)'
 const SLIDE_MS = 160
@@ -15,7 +17,7 @@ const SHAKE_MS = 120
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** Each row's element while it is on screen. Row registers it with `trackRow`. */
-const rows = new Map<ThreadId, HTMLElement>()
+const elements = new Map<ThreadId, HTMLElement>()
 
 /** Rows that are sliding or folding out. Lists keep them in place until they are gone (`useHeld`). */
 let leaving: ReadonlySet<ThreadId> = new Set()
@@ -35,9 +37,9 @@ export const trackRow =
   (id: ThreadId): RefCallback<HTMLElement> =>
   (element) => {
     if (!element) return
-    rows.set(id, element)
+    elements.set(id, element)
     return () => {
-      if (rows.get(id) === element) rows.delete(id)
+      if (elements.get(id) === element) elements.delete(id)
     }
   }
 
@@ -47,7 +49,7 @@ export const trackRow =
  * motion is reduced, and the row then goes with the list's next update.
  */
 export async function leave(id: ThreadId) {
-  const row = rows.get(id)
+  const row = elements.get(id)
   if (!row || reduced()) return
   setLeaving(id, true)
   const slide = row.animate(
@@ -61,12 +63,14 @@ export async function leave(id: ThreadId) {
       fill: 'forwards',
     },
   )
-  // `restore` cancels the animation, and the row stays.
+  // `release` cancels the animation.
   const slid = await slide.finished.then(
     () => true,
     () => false,
   )
-  if (!slid) return
+  if (!slid || !leaving.has(id)) return
+  // The row went mid-slide, with its screen or window. Nothing is left to fold.
+  if (!row.isConnected) return release(id)
   const { height, paddingTop, paddingBottom } = getComputedStyle(row)
   const fold = row.animate(
     [
@@ -81,9 +85,9 @@ export async function leave(id: ThreadId) {
   )
 }
 
-/** Stops a row leaving and shows it as it was, for an undo that lands while it still moves. */
-export function restore(id: ThreadId) {
-  rows
+/** Stops a row leaving and shows it as it was, as for an undo that lands while it still moves. */
+export function release(id: ThreadId) {
+  elements
     .get(id)
     ?.getAnimations()
     .forEach((animation) => animation.cancel())
@@ -93,7 +97,7 @@ export function restore(id: ThreadId) {
 /** Shakes a row once, 2 px each way, for an action the core refused. */
 export function shake(id: ThreadId) {
   if (reduced()) return
-  rows
+  elements
     .get(id)
     ?.animate(
       [
@@ -130,12 +134,38 @@ const same = <Id>(a: readonly Id[], b: readonly Id[]) =>
 
 /**
  * The rows a list renders: `ids`, plus any row that left `ids` but is still sliding or
- * folding out, where it was. Every list that loses rows to an action renders through this.
+ * folding out, where it was. `held` names those. Every list that loses rows to an action
+ * renders through this, and hands each row whether it is held (`useExit`).
+ *
+ * `frame` names the stretch of the list `ids` covers, such as a windowed list's first row.
+ * When it moves, nothing is held: a leaving row is not placed among rows it never sat beside.
  */
-export function useHeld<Id extends ThreadId | null>(ids: readonly Id[]) {
+export function useHeld<Id extends ThreadId | null>(ids: readonly Id[], frame = 0) {
   const keep = useSyncExternalStore(subscribe, () => leaving)
-  const [shown, setShown] = useState(ids)
-  const next = hold(shown, ids, keep)
-  if (!same(next, shown)) setShown(next)
-  return next
+  const [shown, setShown] = useState({ rows: ids, frame })
+  const rows = shown.frame === frame ? hold(shown.rows, ids, keep) : ids
+  if (shown.frame !== frame || !same(rows, shown.rows)) setShown({ rows, frame })
+  const held: ReadonlySet<ThreadId | null> = new Set(rows.filter((id) => !ids.includes(id)))
+  return { rows, held }
+}
+
+/**
+ * Ends the exit of a row that a list held (`held`) once the list stops holding it. If the
+ * row is still on screen, the list has it again while it was leaving: the core took the
+ * change back, as after a provider refusal. The row then shows as it was, shakes once, and
+ * its toast goes. If the row went (its window scrolled on, or its screen closed), the exit
+ * is released with it.
+ */
+export function useExit(id: ThreadId, held: boolean) {
+  useEffect(() => {
+    if (!held) return
+    return () => {
+      if (!leaving.has(id)) return
+      const back = elements.get(id)?.isConnected === true
+      release(id)
+      if (!back) return
+      shake(id)
+      withdrawFor(id)
+    }
+  }, [id, held])
 }

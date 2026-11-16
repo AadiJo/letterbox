@@ -65,18 +65,28 @@ const isRemote = (url: string) => {
 /**
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
- * in order. The returned promise resolves once the relay holds that `accepted`.
+ * in order. The returned promise resolves once the relay holds that `accepted`. `sees`
+ * resolves once the core sends a message, held or not, that contains `text`.
  */
 async function relayCore(page: Page) {
   let armed: (() => void) | undefined
   let held: string[] | undefined
   let toPage: ((message: string) => void) | undefined
+  const waiters = new Set<{ text: string; resolve: () => void }>()
+  const see = (message: string) => {
+    for (const waiter of waiters) {
+      if (!message.includes(waiter.text)) continue
+      waiters.delete(waiter)
+      waiter.resolve()
+    }
+  }
   await page.routeWebSocket(/\/core$/, (socket) => {
     const core = socket.connectToServer()
     socket.onMessage((message) => core.send(message))
     toPage = (message) => socket.send(message)
     core.onMessage((frame) => {
       const message = frame.toString()
+      see(message)
       if (held) return void held.push(message)
       if (armed && message.includes('"kind":"accepted"')) {
         held = [message]
@@ -89,6 +99,7 @@ async function relayCore(page: Page) {
   })
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
+    sees: (text: string) => new Promise<void>((resolve) => void waiters.add({ text, resolve })),
     resume: () => {
       const queued = held ?? []
       held = undefined
@@ -96,6 +107,9 @@ async function relayCore(page: Page) {
     },
   }
 }
+
+/** The relay `openPage` puts between the page and its core. */
+export type Relay = Awaited<ReturnType<typeof relayCore>>
 
 /**
  * A page at a fixed locale and time zone, so dates read the same on every machine. It
