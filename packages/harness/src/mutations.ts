@@ -225,9 +225,9 @@ const MUTATIONS: Mutation[] = [
   },
   {
     name: 'the core program stops without closing the core',
-    file: 'crates/sim-client/src/main.rs',
-    find: '        core.close().await;\n',
-    replace: '        drop(core);\n',
+    file: 'crates/host/src/lib.rs',
+    find: '    core.close().await;\n',
+    replace: '    drop(core);\n',
     scenarios: 'saved before it exits',
   },
   {

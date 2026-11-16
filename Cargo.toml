@@ -6,8 +6,11 @@
 #   crates/sim-client  adapters that reach the sim provider (packages/sim-provider) over its socket,
 #                      and the `core-sim` program every scenario runs
 #   crates/keychain    the system keychain as the core's secret store, for the desktop and mobile apps
+#   crates/host        the stdio transport both programs run the core through, and `letterbox-core`,
+#                      the program the desktop app spawns: wall clock, system keychain, real Gmail
 #
-# `pnpm scenarios` builds `core-sim` and runs every scenario against it.
+# `pnpm scenarios` builds `core-sim` and runs every scenario against it. `pnpm check:app-host`
+# builds `letterbox-core` and checks it starts, answers and exits.
 
 [workspace]
 resolver = "3"
@@ -23,6 +26,8 @@ publish = false
 letterbox-protocol = { path = "crates/protocol" }
 letterbox-core = { path = "crates/core" }
 letterbox-gmail = { path = "crates/gmail" }
+letterbox-host = { path = "crates/host" }
+letterbox-keychain = { path = "crates/keychain" }
 foldhash = "0.2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 indexmap = { version = "2.14", features = ["serde"] }

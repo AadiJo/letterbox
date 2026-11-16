@@ -1057,6 +1057,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "letterbox-host"
+version = "0.0.0"
+dependencies = [
+ "letterbox-core",
+ "letterbox-gmail",
+ "letterbox-keychain",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "letterbox-keychain"
 version = "0.0.0"
 dependencies = [
@@ -1079,6 +1091,7 @@ version = "0.0.0"
 dependencies = [
  "letterbox-core",
  "letterbox-gmail",
+ "letterbox-host",
  "letterbox-protocol",
  "serde",
  "serde_json",

@@ -13,9 +13,10 @@ path = "src/main.rs"
 letterbox-protocol.workspace = true
 letterbox-core.workspace = true
 letterbox-gmail.workspace = true
+letterbox-host.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net"] }
 tokio-util.workspace = true
 
 [lints]
