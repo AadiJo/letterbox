@@ -78,11 +78,19 @@ const NOT_GMAIL = new Set([
   'a locked keychain fails the sign-in, and at start leaves the account waiting for one',
 ])
 
+/** Characters a transcript's file name may not hold: CI's artifact upload refuses them. */
+const UNSAFE_IN_FILE_NAMES = /[":<>|*?\\/\r\n]/
+
 /**
  * Registers a scenario. It runs once per dialect unless `only` narrows it, and as gmail
  * too when it runs on labels, unless NOT_GMAIL names it.
  */
 export function scenario(name: string, run: (t: Scenario) => Promise<void>, only?: Run[]) {
+  const unsafe = name.match(UNSAFE_IN_FILE_NAMES)
+  if (unsafe)
+    throw new Error(
+      `The scenario "${name}" has ${JSON.stringify(unsafe[0])} in its name. Its transcript is named after it, and CI's artifact upload rejects ${UNSAFE_IN_FILE_NAMES.source.slice(1, -1)} in file names, so write it in words instead (for example "on gmail, …" rather than "gmail: …").`,
+    )
   const dialects = only ?? ['labels', 'folders']
   const gmail = dialects.includes('labels') && !dialects.includes('gmail') && !NOT_GMAIL.has(name)
   definitions.push({ name, dialects: gmail ? [...dialects, 'gmail'] : dialects, run })

@@ -110,7 +110,7 @@ scenario('a reply to a message with a very long Message-ID keeps it as In-Reply-
 })
 
 scenario(
-  'gmail: an account added while every other account is offline can still be reached',
+  'on gmail, an account added while every other account is offline can still be reached',
   async (t) => {
     const away = t.mailbox(standardSeed(t.dialect, { address: 'away@sim.test' }))
     away.setOffline(true)

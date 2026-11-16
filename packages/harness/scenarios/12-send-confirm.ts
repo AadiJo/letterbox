@@ -75,7 +75,7 @@ scenario('a send never found fails as unconfirmed, and a copy that turns up late
 })
 
 scenario(
-  'gmail: a send whose answer is lost in transit is never sent again',
+  'on gmail, a send whose answer is lost in transit is never sent again',
   async (t) => {
     const { core, box, accountId } = await start(t)
     const { threadId, question } = await asked(core)

@@ -79,7 +79,7 @@ scenario('three unconfirmed sends are looked up once each per round, before and 
 })
 
 scenario(
-  'gmail: a check refused for a revoked grant asks for a sign-in, and the send settles after it',
+  'on gmail, a check refused for a revoked grant asks for a sign-in, and the send settles after it',
   async (t) => {
     const { box, change } = await cutOff(t)
     box.releaseSends()
