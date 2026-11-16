@@ -12,8 +12,9 @@ import { equal, root } from './record.ts'
 const START_MS = 600_000
 const STOP_MS = 10_000
 
-/** Starts main.ts with `seed` over `state`. `url` resolves once it prints its line. */
-export function startDevHost(seed: DevSeedName, state: string) {
+/** Starts main.ts with `seed` over a state folder of the run's own. `url` resolves once it prints its line. */
+export function startDevHost(run: string, seed: DevSeedName) {
+  const state = `.letterbox/ui-check-${run}`
   const child = spawn(
     process.execPath,
     ['packages/dev-host/src/main.ts', '--seed', seed, '--port', '0', '--state', state],
@@ -51,18 +52,18 @@ export function startDevHost(seed: DevSeedName, state: string) {
   /** Stops the host and checks it left nothing behind. `cores` is how many cores it should have started. */
   const stopAndCheck = async (cores: number) => {
     const code = await stop()
-    equal(code, 0, `${seed}: the dev host exits cleanly on SIGTERM`)
-    equal(stdout.length, 1, `${seed}: the dev host prints one line`)
+    equal(code, 0, `${run}: the dev host exits cleanly on SIGTERM`)
+    equal(stdout.length, 1, `${run}: the dev host prints one line`)
     // children.ts logs each start and exit. Every child must have exited, and none may still run.
     const log = readFileSync(join(root, state, 'host.log'), 'utf8')
     const started = [...log.matchAll(/^started (\d+) /gm)].map((match) => Number(match[1]))
     const exitedPids = new Set([...log.matchAll(/^exited (\d+)$/gm)].map((match) => Number(match[1])))
     // cargo, the core that signs in, and one core per page load.
-    equal(started.length, 2 + cores, `${seed}: the dev host started cargo and ${1 + cores} cores`)
+    equal(started.length, 2 + cores, `${run}: the dev host started cargo and ${1 + cores} cores`)
     equal(
       started.filter((pid) => !exitedPids.has(pid) || isRunning(pid)),
       [],
-      `${seed}: every process the dev host started has exited`,
+      `${run}: every process the dev host started has exited`,
     )
   }
 

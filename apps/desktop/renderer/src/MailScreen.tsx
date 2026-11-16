@@ -1,10 +1,12 @@
 // All mail, one mailbox or label, or a search: one windowed list for all of them. It renders
 // only the rows on screen plus a small overscan, and subscribes only to that range of the
-// core's threads view, so a mailbox of any size costs the same.
+// core's threads view, so a mailbox of any size costs the same. Spacers above and below the
+// rendered rows stand in for the rest, so a row that leaves can fold and the rows below follow.
 
 import type { Account, ThreadFilter } from '@letterbox/protocol'
 import { useEffect, useRef, useState } from 'react'
 import { leavesMailbox } from './actions.ts'
+import { useHeld } from './motion.ts'
 import { Row, ROW_HEIGHT } from './Row.tsx'
 import { type Chrome, Screen, useSelection } from './Screen.tsx'
 import { type Range, type Slice, useThreadWindow } from './threads.ts'
@@ -96,7 +98,11 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
   const total = slice?.total ?? 0
   const start = Math.max(0, first - OVERSCAN)
   const end = Math.min(total, first + fits + OVERSCAN)
-  const rows = Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index)
+  // Null for a row the core has not sent yet. A scroll moves `start`, which ends any exit.
+  const { rows: ids, held } = useHeld(
+    Array.from({ length: Math.max(0, end - start) }, (_, index) => idAt(start + index) ?? null),
+    start,
+  )
 
   return (
     <div
@@ -107,24 +113,23 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
       onScroll={(event) => setFirst(Math.floor(event.currentTarget.scrollTop / ROW_HEIGHT))}
       className="relative min-h-0 flex-1 overflow-y-auto [scrollbar-color:var(--color-line2)_transparent] [scrollbar-width:thin]"
     >
-      <div style={{ height: total * ROW_HEIGHT }}>
-        {rows.map((index) => {
-          const id = idAt(index)
-          const style = { position: 'absolute', top: index * ROW_HEIGHT, left: 0, right: 0 } as const
-          if (!id) return <div key={`empty ${index}`} data-row="" className="mx-1.5 h-[73px]" style={style} />
-          return (
-            <Row
-              key={id}
-              id={id}
-              slot="time"
-              selected={id === selection.selected}
-              divider={index > 0 && id !== selection.selected && idAt(index - 1) !== selection.selected}
-              onSelect={selection.select}
-              style={style}
-            />
-          )
-        })}
-      </div>
+      <div style={{ height: start * ROW_HEIGHT }} />
+      {ids.map((id, index) => {
+        if (!id) return <div key={`empty ${start + index}`} data-row="" className="mx-1.5 h-[73px]" />
+        const above = index > 0 ? ids[index - 1] : idAt(start - 1)
+        return (
+          <Row
+            key={id}
+            id={id}
+            slot="time"
+            selected={id === selection.selected}
+            divider={start + index > 0 && id !== selection.selected && above !== selection.selected}
+            onSelect={selection.select}
+            held={held.has(id)}
+          />
+        )
+      })}
+      <div style={{ height: Math.max(0, total - end) * ROW_HEIGHT }} />
     </div>
   )
 }

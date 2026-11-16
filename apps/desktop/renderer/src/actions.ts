@@ -67,15 +67,22 @@ export function commandFor(action: Action, thread: ThreadSummary, mail: Mail): C
 }
 
 /**
+ * Sends `command` and resolves with it once the core accepts it, or with null when the core
+ * refuses or is gone. The lists and the reader follow the core's views, which show the
+ * change or its refusal.
+ */
+export async function send<C extends Command>(command: C) {
+  const answer = await client.command(command).catch(() => null)
+  return answer?.kind === 'accepted' ? command : null
+}
+
+/**
  * Sends `action` for `thread` if the account allows it. Resolves with the command once the
  * core accepts it, or null when the account cannot do it, the core refuses, or the core is gone.
  */
 export async function run(action: Action, thread: ThreadSummary, mail: Mail) {
   const command = commandFor(action, thread, mail)
-  if (!command) return null
-  // The lists and the reader follow the core's views, which show the change or its refusal.
-  const answer = await client.command(command).catch(() => null)
-  return answer?.kind === 'accepted' ? command : null
+  return command ? send(command) : null
 }
 
 /** Marks a conversation read when it opens, as Apple Mail does. */

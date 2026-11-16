@@ -10,8 +10,6 @@ import { otherPerson, personName } from './Row.tsx'
 import { useThreadDetail } from './threads.ts'
 import { isLate, messageTime } from './time.ts'
 
-const COLUMN = 'mx-auto max-w-[680px]'
-
 export function Reader({ id, mailboxes }: { id: ThreadId | null; mailboxes: readonly Mailbox[] }) {
   if (!id) return <p className="m-auto text-[13px] text-faint">No conversation selected</p>
   return <Conversation key={id} id={id} mailboxes={mailboxes} />
@@ -29,35 +27,32 @@ function Conversation({ id, mailboxes }: { id: ThreadId; mailboxes: readonly Mai
   const newest = thread.messages.at(-1)?.id
   return (
     <article aria-label="Conversation" className="flex min-h-0 flex-1 flex-col">
-      <header className="border-b border-line px-8 pt-3.5 pb-4">
-        <div className={COLUMN}>
-          <h3 className="text-[22px] leading-[1.25] font-semibold tracking-[-0.015em]" data-field="reader-subject">
-            {thread.subject}
-          </h3>
-          <div className="mt-2 flex items-center gap-1.5 text-[13px] text-muted" data-field="reason">
-            <Turn turn={thread.turn} late={isLate(thread.lastMessageAt, now)} />
-            <span>{reasonText(thread)}</span>
-          </div>
-          <div className="mt-[3px] text-[12.5px] text-faint">
-            {[...labels.map((label) => label.name), count].join(' · ')}
-          </div>
+      {/* The header and messages fill the pane, 40 px in from each side. Only plain-text paragraphs are capped (Body.tsx). */}
+      <header className="mx-10 border-b border-line pt-3.5 pb-4">
+        <h3 className="text-[22px] leading-[1.25] font-semibold tracking-[-0.015em]" data-field="reader-subject">
+          {thread.subject}
+        </h3>
+        <div className="mt-2 flex items-center gap-1.5 text-[13px] text-muted" data-field="reason">
+          <Turn turn={thread.turn} late={isLate(thread.lastMessageAt, now)} />
+          <span>{reasonText(thread)}</span>
+        </div>
+        <div className="mt-[3px] text-[12.5px] text-faint">
+          {[...labels.map((label) => label.name), count].join(' · ')}
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-1 [scrollbar-color:var(--color-line2)_transparent] [scrollbar-width:thin]">
-        <div className={COLUMN}>
-          {thread.messages.map((message) =>
-            message.id === newest || opened.has(message.id) ? (
-              <OpenMessage key={message.id} message={message} now={now} />
-            ) : (
-              <FoldedMessage
-                key={message.id}
-                message={message}
-                now={now}
-                onOpen={() => setOpened(new Set([...opened, message.id]))}
-              />
-            ),
-          )}
-        </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-10 py-1 [scrollbar-color:var(--color-line2)_transparent] [scrollbar-width:thin]">
+        {thread.messages.map((message) =>
+          message.id === newest || opened.has(message.id) ? (
+            <OpenMessage key={message.id} message={message} now={now} />
+          ) : (
+            <FoldedMessage
+              key={message.id}
+              message={message}
+              now={now}
+              onOpen={() => setOpened(new Set([...opened, message.id]))}
+            />
+          ),
+        )}
       </div>
     </article>
   )
@@ -135,7 +130,7 @@ function FoldedMessage({ message, now, onOpen }: { message: Message; now: number
       <Avatar person={message.from} small />
       <span className="flex-none text-[13.5px] font-semibold whitespace-nowrap">{who(message.from)}</span>
       <span className="min-w-0 flex-1 truncate text-[13px] text-muted">{preview}</span>
-      <span className="text-[12.5px] whitespace-nowrap text-muted tabular-nums">
+      <span className="text-[12.5px] whitespace-nowrap text-muted tabular-nums" data-field="message-time">
         {messageTime(message.sentAt, now)}
       </span>
     </button>
@@ -153,7 +148,7 @@ function OpenMessage({ message, now }: { message: Message; now: number }) {
           <div className="truncate text-[13.5px] font-semibold">{who(message.from)}</div>
           {to.length > 0 && <div className="truncate text-[12.5px] text-muted">to {to.join(', ')}</div>}
         </div>
-        <span className="ml-auto text-[12.5px] whitespace-nowrap text-muted tabular-nums">
+        <span className="ml-auto text-[12.5px] whitespace-nowrap text-muted tabular-nums" data-field="message-time">
           {messageTime(message.sentAt, now)}
         </span>
       </div>

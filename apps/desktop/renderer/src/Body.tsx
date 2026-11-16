@@ -40,7 +40,8 @@ export function Body({ body }: { body: MessageBody }) {
         .filter((paragraph) => paragraph.trim() !== '')
         .map((paragraph, index) => (
           // Paragraphs have no identity beyond their place in a body that never changes.
-          <p key={index} className="mb-3 text-[15px] leading-[23px] whitespace-pre-wrap text-body">
+          // Capped near 72 characters a line, a comfortable measure. HTML bodies set their own widths.
+          <p key={index} className="mb-3 max-w-[72ch] text-[15px] leading-[23px] whitespace-pre-wrap text-body">
             {paragraph}
           </p>
         ))}
