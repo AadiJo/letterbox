@@ -287,10 +287,12 @@ impl Inner {
     /// A sync-now's pass. It joins the backfill the pass left or found running while it is
     /// still in the queue, so the backfill cannot end unseen.
     async fn sync_pass(self: Rc<Self>, account_id: AccountId) -> Joined {
+        // Only a linked account can resume. One signed out with its mail kept still holds its
+        // saved snapshot, but no pass can move it on, so following up for it would never end.
         let resumed = {
             let state = self.state.borrow();
             let account = state.world.accounts.get(&account_id);
-            account.is_some_and(|account| account.snapshot.is_some())
+            state.adapters.contains_key(&account_id) && account.is_some_and(|account| account.snapshot.is_some())
         };
         let ran = Rc::clone(&self).pass(account_id.clone(), true).await;
         (ran, self.join_backfill(&account_id), resumed)

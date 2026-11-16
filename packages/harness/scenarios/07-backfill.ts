@@ -201,6 +201,19 @@ scenario('a sign-out during a backfill stops it and writes nothing more', async 
   t.equal((await threads(again)).length, 0, 'the page in flight wrote no mail back')
 })
 
+scenario('a sync-now ends when a sign-out keeps the mail of an unfinished backfill', async (t) => {
+  const { core, box } = await signInHeld(t)
+  const accountId = (await core.query({ view: 'accounts' }))[0]?.id
+  if (!accountId) throw new Error('no account after the sign-in')
+  await nextPage(box)
+  const syncing = core.request({ method: 'sync-now' })
+  const signedOut = await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })
+  t.check(signedOut.ok, 'the sign-out keeps the mail and the saved snapshot')
+  box.releaseSnapshots()
+  // The account has saved progress but no adapter. Passing again for it would loop forever.
+  t.check((await syncing).ok, 'the sync-now is answered')
+})
+
 scenario('a re-snapshot removes deleted mail only once it completes', async (t) => {
   const { core, box } = await start(t, standardSeed(t.dialect, { pageSize: 2 }))
   const kept = await thread(core, 'Can you review the draft?')

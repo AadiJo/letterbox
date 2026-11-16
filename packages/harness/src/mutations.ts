@@ -266,6 +266,13 @@ const MUTATIONS: Mutation[] = [
     scenarios: 'resumes only the last',
   },
   {
+    name: 'a sync-now loops forever for an account signed out in the middle of a backfill',
+    file: core('sync.rs'),
+    find: 'state.adapters.contains_key(&account_id) && account',
+    replace: 'account',
+    scenarios: 'keeps the mail of an unfinished',
+  },
+  {
     name: 'a sign-out waits behind the work already queued for the account',
     file: core('accounts.rs'),
     find: '    pub(crate) fn sign_out(self: &Rc<Self>, id: RequestId, account_id: AccountId, delete_local_mail: bool) {\n',
