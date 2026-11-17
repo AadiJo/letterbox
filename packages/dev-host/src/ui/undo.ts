@@ -92,18 +92,25 @@ async function checkTrashFromSent(page: Page) {
   equal(await looks(), { moving: 0, shown: true }, 'undo after trash shows the row as it was')
 }
 
-/** Archives Inbox's first row and waits for its toast. */
+/**
+ * Archives Inbox's first row and waits for its toast. Returns the row's id. The first row must be
+ * one Inbox holds: a row still folding out of the list is first too, and clicking it opens a
+ * conversation `e` cannot archive. So every check that leaves a row folding waits for it to go.
+ */
 async function archiveFirst(page: Page) {
-  await mailRows(page).first().click()
+  const first = mailRows(page).first()
+  const id = await first.getAttribute('data-row')
+  if (!id) throw new Error('Inbox shows no conversation')
+  await first.click()
   await page.keyboard.press('e')
   await toast(page).filter({ hasText: 'Archived' }).waitFor()
+  return id
 }
 
 /** z while the core has not answered the undo shows "Undoing…", with Undo in place, until it does. */
 async function checkUndoing(page: Page, relay: Relay) {
   await openInbox(page)
-  const id = await mailRows(page).first().getAttribute('data-row')
-  await archiveFirst(page)
+  const id = await archiveFirst(page)
   const paused = relay.pauseAtAccepted()
   await page.keyboard.press('z')
   await paused
@@ -122,14 +129,22 @@ async function checkUndoing(page: Page, relay: Relay) {
   await toast(page).waitFor({ state: 'detached' })
 }
 
-/** Archives Inbox's first row, has the relay refuse its undo with `conflict`, and reads the toast. */
+/**
+ * Archives Inbox's first row, has the relay refuse its undo with `conflict`, and reads the toast.
+ * Returns once the row has left: the refusal keeps the conversation archived, so it folds away.
+ */
 async function refusalSays(page: Page, relay: Relay, conflict: unknown) {
-  await archiveFirst(page)
+  const id = await archiveFirst(page)
   relay.refuseNextUndo(conflict)
   await page.keyboard.press('z')
   const said = toast(page).locator('[data-field="toast"]')
   await page.waitForFunction(() => document.querySelector('[data-field="toast"]')?.textContent !== 'Undoing…')
-  return { text: await said.textContent(), undo: await toast(page).getByRole('button', { name: /^Undo/ }).count() }
+  const result = {
+    text: await said.textContent(),
+    undo: await toast(page).getByRole('button', { name: /^Undo/ }).count(),
+  }
+  await page.locator(`[data-list="mail"] [data-row="${id}"]`).waitFor({ state: 'detached' })
+  return result
 }
 
 /** Every refused undo says why in the toast, naming the mailbox the core names. */
@@ -173,14 +188,9 @@ const NOT_UNDONE = "Lost the connection, so this wasn't undone"
 /** How many undo commands the page has sent its cores. */
 const undos = (relay: Relay) => relay.fromPage().filter((text) => text.includes('"kind":"undo"')).length
 
-/** Archives Inbox's open row and waits until it has left, and the next one has opened. Returns its id. */
+/** Archives Inbox's first row and waits until it has left, and the next one has opened. Returns its id. */
 async function archiveAndWait(page: Page) {
-  // A row the last check archived may still be folding at the top, so the open row is the one archived.
-  await mailRows(page).first().click()
-  const archived = await page.locator('[data-list="mail"] [aria-selected="true"]').getAttribute('data-row')
-  if (!archived) throw new Error('Inbox opened no conversation')
-  await page.keyboard.press('e')
-  await toast(page).filter({ hasText: 'Archived' }).waitFor()
+  const archived = await archiveFirst(page)
   // The next conversation opens as the row folds away, which needs the connection.
   await page.locator(`[data-list="mail"] [data-row="${archived}"]`).waitFor({ state: 'detached' })
   await settle(page)
