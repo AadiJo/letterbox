@@ -1,15 +1,34 @@
-// The sidebar, the darkest of the three flat panes: who is signed in, People, All mail, then
-// each account's mailboxes and labels from the core's mailboxes view. Only places the core can
-// list are here.
+// The sidebar, the darkest of the three flat panes: who is signed in, People with Let go?
+// nested under it, Updates, All mail, then each account's mailboxes and labels from the core's
+// mailboxes view. Only places the core can list are here. People, Let go? and Updates count
+// what needs me: turns, old turns, and senders with unread mail, so no count runs to four digits.
 
 import type { Account, Mailbox, MailboxId, Role } from '@letterbox/protocol'
-import { Archive, FileText, Inbox, type LucideIcon, Mails, OctagonAlert, Send, Trash2, Users } from 'lucide-react'
+import {
+  Archive,
+  FileText,
+  Inbox,
+  type LucideIcon,
+  Mails,
+  Newspaper,
+  OctagonAlert,
+  Send,
+  Trash2,
+  Users,
+} from 'lucide-react'
 import { Fragment, type ReactNode } from 'react'
 import { Avatar } from './Avatar.tsx'
 import { LabelDot } from './Label.tsx'
+import { useLetGo } from './LetGoScreen.tsx'
+import { updatesInbox, useUpdates } from './UpdatesScreen.tsx'
 
 /** Where the list pane is. */
-export type Place = { kind: 'people' } | { kind: 'all' } | { kind: 'mailbox'; id: MailboxId }
+export type Place =
+  | { kind: 'people' }
+  | { kind: 'let-go' }
+  | { kind: 'updates' }
+  | { kind: 'all' }
+  | { kind: 'mailbox'; id: MailboxId }
 
 const ROLES = {
   inbox: { icon: Inbox, order: 0 },
@@ -41,12 +60,13 @@ export function Sidebar({ place, onPlace, accounts, mailboxes, people }: Props) 
   const isOn = (candidate: Place) =>
     candidate.kind === place.kind &&
     (candidate.kind !== 'mailbox' || (place.kind === 'mailbox' && place.id === candidate.id))
-  const nav = (target: Place, label: string, icon: ReactNode, trailing?: ReactNode) => (
-    <Nav label={label} icon={icon} on={isOn(target)} onClick={() => onPlace(target)}>
+  const nav = (target: Place, label: string, icon: ReactNode, trailing?: ReactNode, nested = false) => (
+    <Nav label={label} icon={icon} on={isOn(target)} nested={nested} onClick={() => onPlace(target)}>
       {trailing}
     </Nav>
   )
   const [first, ...rest] = accounts
+  const inbox = updatesInbox(accounts, mailboxes)
   return (
     <nav
       aria-label="Sidebar"
@@ -70,6 +90,8 @@ export function Sidebar({ place, onPlace, accounts, mailboxes, people }: Props) 
           </span>
         ),
       )}
+      {nav({ kind: 'let-go' }, 'Let go?', null, <LetGoCount />, true)}
+      {inbox && nav({ kind: 'updates' }, 'Updates', glyph(Newspaper), <UpdatesCount inbox={inbox} />)}
       {nav({ kind: 'all' }, 'All mail', glyph(Mails))}
       {accounts.map((account) => {
         const own = mailboxes.filter((mailbox) => mailbox.accountId === account.id)
@@ -134,17 +156,37 @@ function AccountRow({ account }: { account: Account }) {
   )
 }
 
-type NavProps = { label: string; icon: ReactNode; on: boolean; onClick: () => void; children: ReactNode }
+/** Old turns in Let go?, once there are any. */
+function LetGoCount() {
+  const total = useLetGo()?.total ?? 0
+  return total > 0 && <span data-field="let-go-count">{total}</span>
+}
 
-function Nav({ label, icon, on, onClick, children }: NavProps) {
+/** Senders in Updates with unread mail, once there are any. */
+function UpdatesCount({ inbox }: { inbox: MailboxId }) {
+  const senders = useUpdates(inbox, 1)?.unreadSenders ?? 0
+  return senders > 0 && <span data-field="updates-count">{senders.toLocaleString()}</span>
+}
+
+type NavProps = {
+  label: string
+  icon: ReactNode
+  on: boolean
+  /** Under the place above it, with no icon: Let go? under People. */
+  nested: boolean
+  onClick: () => void
+  children: ReactNode
+}
+
+function Nav({ label, icon, on, nested, onClick, children }: NavProps) {
   return (
     <button
       type="button"
       aria-current={on ? 'page' : undefined}
       onClick={onClick}
-      className={`mx-2 flex h-[30px] w-[calc(100%-16px)] flex-none items-center gap-2.5 rounded-lg px-2.5 text-left text-row ${on ? 'bg-nav text-fg' : 'text-fg2 hover:bg-hover'}`}
+      className={`mx-2 flex w-[calc(100%-16px)] flex-none items-center gap-2.5 rounded-lg pr-2.5 text-left text-row ${nested ? 'h-7 pl-9' : 'h-[30px] pl-2.5'} ${on ? 'bg-nav text-fg' : `hover:bg-hover ${nested ? 'text-muted' : 'text-fg2'}`}`}
     >
-      <span className={`flex ${on ? 'text-fg' : 'text-muted'}`}>{icon}</span>
+      {icon && <span className={`flex ${on ? 'text-fg' : 'text-muted'}`}>{icon}</span>}
       <span className={`min-w-0 flex-1 truncate ${on ? 'font-medium' : ''}`}>{label}</span>
       <span className="text-meta text-muted tabular-nums">{children}</span>
     </button>

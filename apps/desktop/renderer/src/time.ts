@@ -49,3 +49,21 @@ export function messageTime(time: string, now: number) {
   if (days < 7) return `${weekday.format(at)} ${clock.format(at)}`
   return `${listTime(time, now)}, ${clock.format(at)}`
 }
+
+/** The day `time` falls on, in local days back from now: 0 is today, 1 yesterday. */
+export const dayOf = (time: string, now: number) => daysAgo(Date.parse(time), now)
+
+const monthName = new Intl.DateTimeFormat(undefined, { month: 'long' })
+const monthAndYear = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' })
+
+/** The local month `at` (ms) falls in, as months since year 0, so the month before is one less. */
+export const monthOf = (at: number) => {
+  const date = new Date(at)
+  return date.getFullYear() * 12 + date.getMonth()
+}
+
+/** A month from `monthOf` by name: "October" this year, "October 2025" in another. */
+export function monthTitle(month: number, now: number) {
+  const first = new Date(Math.floor(month / 12), month % 12, 1)
+  return first.getFullYear() === new Date(now).getFullYear() ? monthName.format(first) : monthAndYear.format(first)
+}

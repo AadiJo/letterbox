@@ -304,7 +304,18 @@ export async function capture(page: Page, name: string) {
 }
 
 /** The C2 design's screens, each named for the mock it is compared with: `c2-<screen>.png`. */
-export type C2Screen = 'people-1440' | 'people-1920' | 'done-1440' | 'reply-1440' | 'narrow-1024'
+export type C2Screen =
+  | 'people-1440'
+  | 'people-1920'
+  | 'done-1440'
+  | 'reply-1440'
+  | 'narrow-1024'
+  | 'updates-1440'
+  | 'updates-1024'
+  | 'letgo-1440'
+  | 'letgo-undo-1440'
+  | 'letgo-undo-1024'
+  | 'people-letgo-1440'
 
 const C2_SIZES = {
   'people-1440': SIZES.wide,
@@ -312,6 +323,12 @@ const C2_SIZES = {
   'done-1440': SIZES.wide,
   'reply-1440': SIZES.wide,
   'narrow-1024': SIZES.narrow,
+  'updates-1440': SIZES.wide,
+  'updates-1024': SIZES.narrow,
+  'letgo-1440': SIZES.wide,
+  'letgo-undo-1440': SIZES.wide,
+  'letgo-undo-1024': SIZES.narrow,
+  'people-letgo-1440': SIZES.wide,
 } as const satisfies Record<C2Screen, (typeof SIZES)[keyof typeof SIZES]>
 
 /**
