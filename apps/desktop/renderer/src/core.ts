@@ -108,17 +108,13 @@ export function useView<V extends View>(query: QueryFor<V>): Queries[V]['result'
   return useSyncExternalStore(next.subscribe, next.latest)
 }
 
-/**
- * Why this tab lost the core, or null while it has it. The client rejects a command only once
- * the connection has ended, and this is set before any rejection reaches its caller, so a
- * caller can tell a lost connection from any other failure.
- */
-export const lostReason = () => lost
-
-/** `lostReason`, for React. */
+/** Why this tab lost the core, or null while it has it. */
 export function useLost() {
-  return useSyncExternalStore((onChange) => {
-    lostWatchers.add(onChange)
-    return () => void lostWatchers.delete(onChange)
-  }, lostReason)
+  return useSyncExternalStore(
+    (onChange) => {
+      lostWatchers.add(onChange)
+      return () => void lostWatchers.delete(onChange)
+    },
+    () => lost,
+  )
 }
