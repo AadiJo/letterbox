@@ -16,7 +16,7 @@
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
 // `<scene>-narrow.png`), the C2 screens at twice their pixels to compare with the mocks
 // (`c2-<screen>.png`), a
-// Playwright trace per run, scroll.json and summary.json to artifacts/ui/. Open a trace with
+// Playwright trace per run (a failed run's too), scroll.json and summary.json to artifacts/ui/. Open a trace with
 //   pnpm --filter @letterbox/dev-host exec playwright show-trace "$PWD/artifacts/ui/trace-people-first.zip"
 
 import { mkdirSync, rmSync } from 'node:fs'
@@ -27,11 +27,17 @@ import { startDevHost } from './ui/host.ts'
 import { checkPeopleFirst } from './ui/people-first.ts'
 import { checkReply } from './ui/reply.ts'
 import { checkRollback } from './ui/rollback.ts'
-import { ARTIFACTS, fail, failed, summarize } from './ui/record.ts'
+import { ARTIFACTS, closeLeftOpen, fail, failed, summarize } from './ui/record.ts'
 import { checkScroll } from './ui/scroll.ts'
 
 rmSync(ARTIFACTS, { recursive: true, force: true })
 mkdirSync(ARTIFACTS, { recursive: true })
+
+/** Runs one check and records its failure. A page it left open by failing part way still saves its trace. */
+async function runCheck(check: () => Promise<void>) {
+  await check().catch(fail)
+  await closeLeftOpen()
+}
 
 /** Runs `check` against a fresh `pnpm dev` with `seed`, then stops the host and checks what it left. `cores` is its page loads. */
 async function withDevHost(
@@ -42,11 +48,7 @@ async function withDevHost(
   check: (browser: Browser, url: string) => Promise<void>,
 ) {
   const host = startDevHost(run, seed)
-  try {
-    await check(browser, await host.url)
-  } catch (error) {
-    fail(error)
-  }
+  await runCheck(async () => check(browser, await host.url))
   try {
     await host.stopAndCheck(cores)
   } catch (error) {
@@ -62,9 +64,9 @@ try {
   // The undo checks end the connection twice, and reload each time to connect again.
   await withDevHost('done', 'people-first', 3, browser, checkDone)
   await withDevHost('many', 'many', 1, browser, checkScroll)
-  await checkFirstSync(browser).catch(fail)
-  await checkRollback(browser).catch(fail)
-  await checkReply(browser).catch(fail)
+  await runCheck(() => checkFirstSync(browser))
+  await runCheck(() => checkRollback(browser))
+  await runCheck(() => checkReply(browser))
 } finally {
   await browser.close()
 }
