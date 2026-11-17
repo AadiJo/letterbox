@@ -4,7 +4,8 @@
 //! when it is accepted, each field it changed with both ends. For a message: the mailboxes it
 //! put it in (it was out of them before) and took it out of (it was in them), and the read and
 //! flag state it had before, for each of the two it changed (it set the other value). For a
-//! conversation: the turn the user had set before, and the one set now. The records are built
+//! conversation: the turn the user had set before, and the one set now, as they held then (see
+//! `held_override` in turns.rs), and when its newest message was sent. The records are built
 //! only by `MessageEffect::new` and `TurnEffect::new`, which read the world as the user sees it
 //! then. A message the change named but did not alter is left out, so its undo never touches it.
 //!
@@ -15,12 +16,14 @@
 //! here or at the provider. What a change did at the provider counts only once the provider
 //! confirmed it: by its answers, or by a sync after them (`MessageEffect::landed`).
 
-use letterbox_protocol::{ChangeId, MailboxId, MessageId, ThreadId, Turn, UndoConflict, UndoField};
+use letterbox_protocol::{ChangeId, MailboxId, MessageId, ThreadId, Time, Turn, UndoConflict, UndoField};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::changes::{Pending, overlay};
+use crate::clock::parse;
 use crate::maps::IndexSet;
 use crate::outbox::Outbound;
+use crate::turns::{held_override, newest_held};
 use crate::world::{MailboxMode, MessageState, Op, World};
 
 /// What one change does. Its kind decides how an undo answers (see undo.rs).
@@ -81,12 +84,21 @@ impl Effect {
                     altered.unheld(now.map(|record| pending.view_state(record)).as_deref())
                 })
             }
+            // A turn no longer holds what was set once the conversation moved: a message sent
+            // after the change's newest. Its undo would put back a turn over that message.
             Effect::Turns(effect) => effect
                 .altered
                 .iter()
                 .find(|altered| {
-                    let now = world.threads.get(&altered.thread_id);
-                    now.is_none_or(|thread| thread.turn_override != altered.now)
+                    let Some(thread) = world.threads.get(&altered.thread_id) else {
+                        return true;
+                    };
+                    let newest = newest_held(world, &altered.thread_id);
+                    let moved = newest
+                        .as_ref()
+                        .zip(altered.newest.as_ref())
+                        .is_some_and(|(newest, then)| parse(newest) > parse(then));
+                    moved || held_override(thread, newest.as_ref()) != altered.now
                 })
                 .map(|altered| UndoField::Turn {
                     thread_id: altered.thread_id.clone(),
@@ -361,13 +373,17 @@ pub struct TurnEffect {
 }
 
 /// One conversation whose turn a correction changed: the turn the user had set before, and
-/// the one it set (None: the rule's).
+/// the one it set (None: the rule's), and when its newest message the provider held was sent
+/// then: empty when it held none. None for a change recorded before this was kept, whose undo
+/// then cannot tell whether the conversation moved, and checks only the turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnAltered {
     thread_id: ThreadId,
     was: Option<Turn>,
     now: Option<Turn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    newest: Option<Time>,
 }
 
 impl TurnEffect {
@@ -376,11 +392,13 @@ impl TurnEffect {
         let altered = sets
             .iter()
             .filter_map(|(id, value)| {
-                let was = world.threads.get(id)?.turn_override;
+                let newest = newest_held(world, id);
+                let was = held_override(world.threads.get(id)?, newest.as_ref());
                 (was != *value).then(|| TurnAltered {
                     thread_id: id.clone(),
                     was,
                     now: *value,
+                    newest: Some(newest.unwrap_or_default()),
                 })
             })
             .collect();

@@ -18,6 +18,7 @@ import { type Mutation, runBreaks } from './breaks.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
+import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
@@ -409,4 +410,11 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...UNDO_MUTATIONS, ...GMAIL_MUTATIONS, ...FORWARD_MUTATIONS])
+runBreaks([
+  ...MUTATIONS,
+  ...SEND_MUTATIONS,
+  ...UNDO_MUTATIONS,
+  ...GMAIL_MUTATIONS,
+  ...TURN_MUTATIONS,
+  ...FORWARD_MUTATIONS,
+])
