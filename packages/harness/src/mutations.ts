@@ -319,8 +319,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'an open list keeps a thread after it leaves the filter',
     file: core('live_view.rs'),
-    find: 'moved |= listed.remove(&place(before));',
-    replace: 'moved |= listed.contains(&place(before));',
+    find: 'moved |= listed.remove(&place(&before.summary));',
+    replace: 'moved |= listed.contains(&place(&before.summary));',
     scenarios: 'open list follows',
   },
   {
