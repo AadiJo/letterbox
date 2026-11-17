@@ -1,0 +1,48 @@
+# Scenarios whose transcripts are known to differ from run to run, one name per line.
+# `pnpm scenarios` runs every scenario twice, side by side, and fails when a scenario's two
+# transcripts differ, unless its name is here (see packages/harness/src/drift.ts).
+#
+# This list only shrinks. When a scenario's order is fixed, delete its line. Never add one:
+# make the transcript the same on every run instead, by holding a provider call so the order
+# is fixed (never a sleep or a retry).
+
+# A second change accepted while the provider is offline. Its push meets the offline provider
+# and saves twice, before or after the next step, at a different rev. The first change's push
+# is waited for through the account going offline, but a second one changes no status, so
+# nothing shows when it has run.
+an undo of a change waiting behind another on its way keeps it from the provider
+changes made offline replay in order when the provider is back
+a lost move settles from the whole refresh, and its undo waits for that
+
+# One change accepted while the provider is offline: the same race as above. Waiting for the
+# account to show offline after the accept, as 02-commands does, should fix it, but it drifted
+# only once in 40 runs under heavy load and never alone, so the fix could not be shown.
+a gmail change still reaches the messages of a conversation that remain after one is deleted
+
+# A core is killed or stopped, then restarted. The `welcome` rev after the restart moves by one
+# or two: the core before it saved more or less before it ended. Which save is not traced.
+# Rare: about once in 40 runs under heavy load.
+three unconfirmed sends are looked up once each per round, before and after restarts
+a last lookup that fails after the window ends still fails the send as unconfirmed
+a lookup that fails is tried again, and the send settles once its copy is found
+a restart after an unconfirmed send’s window ended fails it at once
+a core killed in the middle of a delivery sends it once after the restart
+a copy a sync finds while lookups still miss it settles the send as done, once
+a send cut off by a crash is looked up, never sent again, and settles when its copy shows
+a restart inside the undo window loses nothing and sends once
+undo after a restart past the deadline is refused
+undo after the deadline is refused even before the window’s timer has run
+
+# A restarted core sends the `settled` of a send its start-up lookup found before or after its
+# `welcome`. The core may send before it answers `hello`, which the protocol allows. Lookups
+# (`find`) cannot be held, so the scenario cannot fix the order.
+a restart while a send is unconfirmed picks its lookups up again
+the turn waits for the provider, so an unconfirmed reply leaves the turn mine until its copy shows
+
+# A send's `settled`, from a lookup, comes before or after a `sync-now` response, at a
+# different rev. The lookup runs beside the sync's pass, and lookups cannot be held.
+a send never found fails as unconfirmed, and a copy that turns up later takes its place
+on gmail, a send whose answer is lost in transit is never sent again
+
+# The accounts view gets one update fewer in some runs, after the refused grant. Not traced.
+on gmail, a check refused for a revoked grant asks for a sign-in, and the send settles after it

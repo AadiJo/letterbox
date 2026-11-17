@@ -94,9 +94,15 @@ scenario('undoing done gives back the turn the user set, not the one the rule gi
 scenario('an undo is refused when a later change altered the same field', async (t) => {
   const { core, box } = await start(t)
   const row = await targetRow(core)
+  // The read's call is held at the provider until all three are accepted, so no change settles
+  // between them. Unheld, the read could settle before or after the later two are accepted,
+  // and the transcript would change from run to run.
+  box.holdApplies()
   const read = await accept(t, core, { kind: 'set-flags', threadIds: [row.id], unread: false }, 'marking read')
+  await box.applyHeld()
   const flag = await accept(t, core, { kind: 'set-flags', threadIds: [row.id], flagged: true }, 'flagging')
   const unread = await accept(t, core, { kind: 'set-flags', threadIds: [row.id], unread: true }, 'marking unread')
+  box.releaseApplies()
   for (const change of [read, flag, unread]) await core.settled(change)
   const refused = await core.command({ kind: 'undo', change: read })
   t.equal(
