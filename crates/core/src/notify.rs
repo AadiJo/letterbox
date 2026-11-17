@@ -3,7 +3,7 @@
 //! Only a change set brings new mail worth telling: a snapshot lists what the provider holds,
 //! which on the first sync, a backfill or a resync is mail the user never waited for. So
 //! sync.rs asks here only on the `changes` path, before and after its commit:
-//!   - `Arrivals::before` notes the refs the change set adds that the core does not hold,
+//!   - `Inner::arrivals` notes the refs the change set adds that the core does not hold,
 //!     and the messages its removed refs name, which a move brings back under a new ref;
 //!   - `Inner::tell_your_turns` then finds the messages those refs name that are new, and
 //!     sends one `your-turn` for each conversation where the newest of them, in the inbox,
@@ -11,10 +11,26 @@
 //!
 //! The turn rule already says no for mail from a machine, mail the user is only copied on,
 //! and the user's own sends, so this adds only "new", "newest" and "in the inbox".
+//!
+//! A core that starts over a saved cursor catches up first: its first change set for that
+//! account is all the mail that came while the app was quit. Telling each conversation would
+//! put a pile of notifications on screen at once, and the badge already counts them, so that
+//! change set tells nothing (`catching_up`). Later change sets tell as usual. An account
+//! that catches up through a snapshot instead tells from the change set after it.
 
 use std::rc::Rc;
 
 use letterbox_protocol::{AccountId, CoreMessage, MessageId, Role, ThreadId, Turn, TurnReason, YourTurn};
+
+/// The accounts a starting core catches up for: signed in, with a saved cursor, so their first
+/// pull is a change set of what came while the app was quit. lib.rs keeps them in its state.
+pub(crate) fn catching_up(world: &World) -> HashSet<AccountId> {
+    let resumes = world
+        .accounts
+        .values()
+        .filter(|account| account.signed_in && account.cursor.is_some());
+    resumes.map(|account| account.id.clone()).collect()
+}
 
 use crate::Inner;
 use crate::adapter::{ChangeSet, MessageRef};
@@ -31,8 +47,7 @@ pub(crate) struct Arrivals {
 }
 
 impl Arrivals {
-    /// Notes what `set` may bring that is new, for `tell_your_turns` after the commit.
-    pub(crate) fn before(world: &World, account_id: &AccountId, set: &ChangeSet) -> Arrivals {
+    fn before(world: &World, account_id: &AccountId, set: &ChangeSet) -> Arrivals {
         let held = |r#ref: &MessageRef| world.message_by_ref.get(&scoped(account_id, r#ref.as_str())).cloned();
         let added = set.added.iter().map(|message| &message.state.r#ref);
         Arrivals {
@@ -43,6 +58,23 @@ impl Arrivals {
 }
 
 impl Inner {
+    /// Notes, before its commit, what the change set `set` for `account_id` may bring that is
+    /// new, for `tell_your_turns` after it. None for the change set an account catches up with
+    /// after the core starts, which tells nothing.
+    pub(crate) fn arrivals(&self, account_id: &AccountId, set: &ChangeSet) -> Option<Arrivals> {
+        let mut state = self.state.borrow_mut();
+        if state.catching_up.remove(account_id) {
+            return None;
+        }
+        Some(Arrivals::before(&state.world, account_id, set))
+    }
+
+    /// Notes that `account_id` catches up through a snapshot, which tells nothing anyway, so
+    /// the change set after it tells as usual.
+    pub(crate) fn caught_up_by_snapshot(&self, account_id: &AccountId) {
+        self.state.borrow_mut().catching_up.remove(account_id);
+    }
+
     /// Sends `your-turn` for each conversation the change set the core just committed for
     /// `account_id` made the user's turn with new mail (see the module docs).
     pub(crate) fn tell_your_turns(self: &Rc<Self>, account_id: &AccountId, arrivals: Arrivals) {

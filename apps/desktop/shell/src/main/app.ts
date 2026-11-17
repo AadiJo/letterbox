@@ -10,11 +10,12 @@
 import { join } from 'node:path'
 import { getCompileCacheDir } from 'node:module'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, shell, type WebFrameMain } from 'electron'
+import type { ThreadId } from '@letterbox/protocol'
 import type { Channel } from '../shared/channels.ts'
 import { coreCommand, readConfig } from './config.ts'
 import { type CoreHooks, type CoreSession, startCore, STOP_MS } from './core.ts'
 import { log, logTo } from './log.ts'
-import { notifyYourTurn, showBadge } from './notify.ts'
+import { applyBadge, notifyYourTurn, openFromNotifications, showBadge } from './notify.ts'
 import { createWindow, lockNavigation, pageOrigin, registerScheme, serveRenderer } from './window.ts'
 
 /** Opens a sign-in page from the core in the browser. Only https: anything else stays shut. */
@@ -42,11 +43,30 @@ if (!read.ok) {
   // Windows shows a desktop app's notifications only under an app id.
   if (process.platform === 'win32') app.setAppUserModelId(process.execPath)
 
+  /** The window, until it closes. macOS keeps the app and its core running without one. */
   let window: BrowserWindow | undefined
+  /** Opens the window. Set once the app is ready. */
+  let open: (() => void) | undefined
+
+  /**
+   * Brings the window forward and has its page open `threadId`. With no window, as on macOS
+   * once the last one has closed, opens one first. Its page has not loaded yet, so its preload
+   * holds the id until the page listens for it.
+   */
+  const openConversation = (threadId: ThreadId) => {
+    if (!window) open?.()
+    if (!window) return
+    if (window.isMinimized()) window.restore()
+    window.show()
+    window.focus()
+    window.webContents.send('conversation:open' satisfies Channel, threadId)
+  }
+  openFromNotifications(openConversation)
+
   /** What main does with what each core tells it. The window is read when they run. */
   const hooks: CoreHooks = {
     openUrl,
-    yourTurn: (event) => notifyYourTurn(event, () => window),
+    yourTurn: (event) => notifyYourTurn(event, openConversation),
     badge: (count) => showBadge(count, window),
   }
   /** The core, and whether a page has it yet. Undefined between stopping one and starting the next. */
@@ -100,12 +120,18 @@ if (!read.ok) {
   lockNavigation(origin)
   void app.whenReady().then(() => {
     const url = serveRenderer(config.renderer)
-    const open = () => {
-      window = createWindow(url, import.meta.dirname)
+    open = () => {
+      const opened = createWindow(url, import.meta.dirname)
+      window = opened
+      opened.on('closed', () => {
+        if (window === opened) window = undefined
+      })
+      // The badge's count may have come before this window, which Windows shows it on.
+      applyBadge(opened)
     }
     open()
     // macOS keeps an app running with no window. Opening one gives its page a new core.
-    app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && open())
+    app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && open?.())
   })
 
   app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit())

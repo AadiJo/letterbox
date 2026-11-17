@@ -17,6 +17,8 @@ declare global {
       sync(): Promise<void>
       /** The id of the conversation with this subject. */
       threadOf(subject: string): Promise<ThreadId>
+      /** Marks the conversation with this subject read, and resolves once the core has answered everything before. */
+      markRead(subject: string): Promise<void>
     }
   }
 }
@@ -46,6 +48,13 @@ export function installDevHooks(client: Client) {
       const found = list.threads.find((thread) => thread.subject === subject)
       if (!found) throw new Error(`no conversation is called "${subject}"`)
       return found.id
+    },
+    markRead: async (subject) => {
+      const threadId = await window.letterboxDev?.threadOf(subject)
+      if (threadId === undefined) throw new Error('the dev hooks are gone')
+      const answer = await client.command({ kind: 'set-flags', threadIds: [threadId], unread: false })
+      if (answer.kind !== 'accepted') throw new Error(`marking read was rejected: ${answer.reason}`)
+      await window.letterboxDev?.settle()
     },
     signIn: async (address, password) => {
       const options = await client.query({ view: 'sign-in-options' })

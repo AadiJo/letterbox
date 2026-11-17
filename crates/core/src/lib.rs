@@ -176,6 +176,7 @@ impl Core {
             })
             .collect();
 
+        let catching_up = crate::notify::catching_up(&world);
         let core = Core {
             inner: Rc::new(Inner {
                 store,
@@ -199,6 +200,7 @@ impl Core {
                     checks: HashSet::default(),
                     pushing: HashSet::default(),
                     held_undos: Vec::new(),
+                    catching_up,
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -281,6 +283,8 @@ struct State {
     pushing: HashSet<ChangeId>,
     /// Undos that wait for a change a pass is carrying (see undo.rs).
     held_undos: Vec<crate::undo::HeldUndo>,
+    /// Accounts that started with a saved cursor and have not pulled since (see notify.rs).
+    catching_up: HashSet<AccountId>,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }
