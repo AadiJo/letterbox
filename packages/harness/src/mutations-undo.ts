@@ -133,8 +133,9 @@ export const UNDO_MUTATIONS: Mutation[] = [
   {
     name: 'a conversation merged into another is passed over, so its undo of done reverses nothing',
     file: core('effect.rs'),
-    find: '                    now.is_none_or(|thread| thread.turn_override != altered.now)',
-    replace: '                    now.is_some_and(|thread| thread.turn_override != altered.now)',
+    find: '                    let Some(thread) = world.threads.get(&altered.thread_id) else {\n                        return true;',
+    replace:
+      '                    let Some(thread) = world.threads.get(&altered.thread_id) else {\n                        return false;',
     scenarios: 'merge moved',
   },
   {

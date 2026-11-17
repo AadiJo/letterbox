@@ -25,7 +25,8 @@
 //!     stops during it, leaves it due. Only the text is saved: the files join it in memory
 //!     (`attach` in mime.rs) under the same headers, so every try sends the same message. A file
 //!     that is gone fails the send. A forward of a send of the user's that the provider does
-//!     not hold yet waits, due, until it does: then a pass is queued to carry it (`waiting_on`).
+//!     not hold yet waits, due, until that send settles: then a pass is queued, which carries
+//!     it, or fails it with its original (`waiting_on`).
 
 use std::rc::Rc;
 
@@ -207,9 +208,12 @@ impl Inner {
         }
     }
 
-    /// Queues a pass for the account of `change`, a send the provider now holds, when a forward
-    /// of its message waits for that (see `Contents::Waiting`).
-    fn waiting_on(self: &Rc<Self>, change: &ChangeId) {
+    /// Queues a pass for the account of `change` when it is a send that just settled, so the
+    /// provider holds it or it failed, and a forward of its message waits for that (see
+    /// `Contents::Waiting`). The pass sends the forward, or fails it with its original. Every
+    /// way a send settles calls this: `delivered`, `announce` and `settle`. For a change that is
+    /// not a send it does nothing.
+    pub(crate) fn waiting_on(self: &Rc<Self>, change: &ChangeId) {
         let waiting = {
             let state = self.state.borrow();
             let changes = &state.world.changes;

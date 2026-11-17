@@ -5,7 +5,7 @@
 import type { ChangeId } from '@letterbox/protocol'
 import type { Dialect, SimMailbox } from '@letterbox/sim-provider/contract'
 import type { CoreClient } from '../src/client.ts'
-import { fromBen, mailbox, start, sync, thread, threads, truthOf } from '../src/fixtures.ts'
+import { fromBen, mailbox, start, sync, thread, threads, truthOf, untilAccounts } from '../src/fixtures.ts'
 import { type Scenario, scenario } from '../src/scenario.ts'
 import { accept, allTruth, targetRow } from '../src/undoing.ts'
 
@@ -197,7 +197,10 @@ scenario('a change whose messages need different steps settles when the messages
   const lunch = await thread(core, 'Lunch on Friday?')
   // The question leaves Inbox and the answer leaves Sent, or keeps it with labels: two steps.
   box.setOffline(true)
+  const accounts = core.subscribe({ view: 'accounts' })
   const trash = await accept(t, core, { kind: 'trash', threadIds: [lunch.id] }, 'the trash')
+  // Its push finds the provider unreachable. Waiting for that keeps the order of the next steps fixed.
+  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
   box.expunge('lunch-answer')
   box.setOffline(false)
   await sync(core)
