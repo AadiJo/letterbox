@@ -134,3 +134,23 @@ scenario('an attachment over 50 MiB is refused without asking the provider', asy
   t.equal((await fetchFile(core, disk, 0)).answer, 'too-large', 'it is refused too-large')
   t.equal(box.calls().attachment, 0, 'the provider was never asked for it')
 })
+
+// One run is enough: the check is the core's, whatever adapter brought the bytes, and each
+// run moves 50 MiB through the provider's socket.
+scenario(
+  'an attachment that arrives larger than 50 MiB is refused, though it was listed small',
+  async (t) => {
+    const seed = standardSeed(t.dialect)
+    const liar = fromBen('liar', 'A small file', '2025-12-07T09:00:00.000Z', {
+      attachments: [{ name: 'small.txt', mime: 'text/plain', size: 1000, served: 50 * 1024 * 1024 + 1 }],
+    })
+    const { core, box } = await start(t, { ...seed, messages: [...seed.messages, liar] })
+    const [small] = await filesOf(core, 'A small file')
+    if (!small) throw new Error('the message lists no file')
+    t.equal(small.size, 1000, 'the conversation shows the size the provider listed')
+    const fetched = await fetchFile(core, small, 0)
+    t.equal(fetched.answer, 'too-large', 'it is refused too-large')
+    t.equal(box.calls().attachment, 1, 'the provider was asked, and sent more than it listed')
+  },
+  ['folders'],
+)

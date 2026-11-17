@@ -7,7 +7,8 @@
 //! Opening or saving puts the file on the user's disk anyway. And a copy would have to follow
 //! every sign-out and every message the provider removes, or deleted mail would linger.
 //! The limit is MAX_BYTES: a file the body lists as larger is refused `too-large`, and the
-//! provider is never asked for it.
+//! provider is never asked for it. A file the body lists as smaller but whose bytes come back
+//! larger is refused `too-large` too, with no chunks, so a UI never gets more than the limit.
 //!
 //! The bytes go out as `chunk` messages of at most CHUNK_BYTES each, in order, and then the
 //! response. No line carries a whole large file.
@@ -24,9 +25,10 @@ use crate::adapter::{Adapter, AttachmentResult, BodyResult, MessageRef, Outcome,
 use crate::world::blob_id_of;
 use crate::{Inner, State};
 
-/// The largest attachment the core fetches. An adapter holds a whole file in memory, and the
-/// core holds it again while it sends the chunks, so this bounds what one fetch costs. Gmail
-/// takes messages of at most 50 MB with their encoding, so no Gmail attachment is refused.
+/// The largest attachment the core fetches or sends. An adapter holds a whole file in memory,
+/// and the core holds it again while it sends the chunks, so the listed size bounds what one
+/// fetch costs whenever the provider tells the truth. Gmail takes messages of at most 50 MB
+/// with their encoding, so no Gmail attachment is refused.
 const MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 /// The most bytes one `chunk` message carries. The protocol docs name this size.
@@ -102,6 +104,8 @@ impl Inner {
             // that fails to load reads as offline the same way (subscriptions.rs).
             Err(_) => Err(AttachmentError::Offline),
             Ok(AttachmentResult::Gone) => Err(AttachmentError::Gone),
+            // The provider listed it as smaller. What came is in memory already, but goes no further.
+            Ok(AttachmentResult::Bytes(data)) if data.len() as u64 > MAX_BYTES => Err(AttachmentError::TooLarge),
             Ok(AttachmentResult::Bytes(data)) => {
                 for chunk in data.chunks(CHUNK_BYTES) {
                     self.send(CoreMessage::Chunk {

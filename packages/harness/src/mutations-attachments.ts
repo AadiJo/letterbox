@@ -71,4 +71,11 @@ export const ATTACHMENT_MUTATIONS: Mutation[] = [
     replace: '            Ok(None) => return Err(AdapterFailure::Offline),',
     scenarios: 'is answered gone',
   },
+  {
+    name: 'an attachment that arrives larger than it was listed goes out whole, however large',
+    file: core('attachments.rs'),
+    find: '            Ok(AttachmentResult::Bytes(data)) if data.len() as u64 > MAX_BYTES => Err(AttachmentError::TooLarge),\n',
+    replace: '',
+    scenarios: 'arrives larger than 50 MiB',
+  },
 ]

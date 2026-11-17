@@ -3,7 +3,8 @@
 // the bytes (core.ts), and the name and type come from the core, not the page.
 //
 //   save  fetches the file to a private temp folder, asks where to save it with the native
-//         dialog, copies it there, and removes the temp copy.
+//         dialog, copies it into a hidden file beside the chosen path and renames that over
+//         it, so a failed copy leaves a file it would replace as it was, and removes the temp copy.
 //   open  fetches the file into a temp folder of its own, under its cleaned name, then hands
 //         it to the OS, which opens it with the app it picks for that type. Main never runs a
 //         file. A type that can run code (files.ts) gets a native warning first, and opens
@@ -16,8 +17,9 @@
 // dialogs and the OS call stubbed.
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
@@ -57,14 +59,29 @@ export async function saveAttachment(session: CoreSession, window: BrowserWindow
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     })
     if (chosen.canceled || chosen.filePath === undefined) return { ok: false, reason: 'cancelled' } as const
-    // A new file gets the user's usual permissions, without an execute bit.
-    await pipeline(createReadStream(join(folder, 'download')), createWriteStream(chosen.filePath))
+    await replaceWith(join(folder, 'download'), chosen.filePath)
     return { ok: true } as const
   } catch (error) {
     log(`could not save an attachment: ${String(error)}`)
     return { ok: false, reason: 'failed' } as const
   } finally {
     rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Copies `from` to `to` without ever leaving `to` half written: into a hidden file beside it,
+ * then renamed over it, which replaces it in one step. A copy that fails part way, as on a
+ * full disk, leaves `to` as it was, and the hidden file is removed.
+ */
+async function replaceWith(from: string, to: string) {
+  const part = join(dirname(to), `.${basename(to)}.${randomUUID()}.part`)
+  try {
+    // 'wx' makes a new file, with the user's usual permissions and no execute bit.
+    await pipeline(createReadStream(from), createWriteStream(part, { flags: 'wx' }))
+    renameSync(part, to)
+  } finally {
+    rmSync(part, { force: true })
   }
 }
 

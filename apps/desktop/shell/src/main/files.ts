@@ -18,26 +18,34 @@ const INVISIBLE = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/g
 /** Path separators and the characters Windows refuses in a name. */
 const RESERVED = /[/\\:*?"<>|]/g
 
+/** The longest extension a cut keeps, dot included. ".settingcontent-ms", among the risky ones, is 18. */
+const MAX_EXTENSION = 32
+
+/** Drops a leading dot, which hides a file or makes "..", and trailing dots and spaces, which Windows drops itself. */
+const trimmed = (name: string) => name.replace(/^[\s.]+|[\s.]+$/g, '')
+
+/** Cuts a name to MAX_BYTES from the end of its stem, keeping its extension. */
+function shorten(name: string): string {
+  const dot = name.lastIndexOf('.')
+  const extension = dot > 0 && name.length - dot <= MAX_EXTENSION ? name.slice(dot) : ''
+  let stem = Array.from(name.slice(0, name.length - extension.length))
+  while (stem.length > 0 && Buffer.byteLength(stem.join('') + extension) > MAX_BYTES) stem = stem.slice(0, -1)
+  return stem.join('') + extension
+}
+
 /**
  * A file name that is safe to create in a folder main picked: one name, never a path, never
- * hidden, never a device, at most MAX_BYTES, with its extension kept. Falls back to "attachment".
+ * hidden, never a device, at most MAX_BYTES (one more for the device guard), with its
+ * extension kept, and nothing at its end that Windows drops. That last part matters after a
+ * cut: "setup.exe." reads as having no extension, and Windows creates "setup.exe". The name
+ * this gives is the one written to disk, so `runsCode` reads that. Falls back to "attachment".
  */
 export function safeName(name: string): string {
-  let clean = name
-    .normalize('NFC')
-    .replace(INVISIBLE, '')
-    .replace(RESERVED, '_')
-    // A leading dot hides a file, or makes "..". Windows drops trailing dots and spaces.
-    .replace(/^[\s.]+|[\s.]+$/g, '')
-  if (DEVICE_NAMES.test(clean)) clean = `_${clean}`
-  if (Buffer.byteLength(clean) > MAX_BYTES) {
-    const dot = clean.lastIndexOf('.')
-    const extension = dot > 0 && clean.length - dot <= 16 ? clean.slice(dot) : ''
-    let stem = Array.from(clean.slice(0, clean.length - extension.length))
-    while (stem.length > 0 && Buffer.byteLength(stem.join('') + extension) > MAX_BYTES) stem = stem.slice(0, -1)
-    clean = stem.join('') + extension
-  }
-  return clean === '' ? 'attachment' : clean
+  const clean = trimmed(name.normalize('NFC').replace(INVISIBLE, '').replace(RESERVED, '_'))
+  // A cut can leave a dot or a space at the end again, so the name is trimmed once more after it.
+  const cut = trimmed(Buffer.byteLength(clean) > MAX_BYTES ? shorten(clean) : clean)
+  if (cut === '') return 'attachment'
+  return DEVICE_NAMES.test(cut) ? `_${cut}` : cut
 }
 
 /**
@@ -49,7 +57,7 @@ const RUNS_CODE = new Set(
   [
     // Windows programs, installers, scripts and shortcuts.
     'exe com scr pif cpl msi msix msixbundle appx msp msc bat cmd',
-    'ps1 psm1 vbs vbe js jse wsf wsh hta lnk url scf reg inf',
+    'ps1 psm1 vbs vbe js jse ws wsf wsc wsh sct hta lnk url scf reg inf',
     'application appref-ms gadget library-ms settingcontent-ms chm jar',
     // macOS apps, installers and scripts.
     'app pkg mpkg command tool workflow scpt applescript terminal',
@@ -58,8 +66,8 @@ const RUNS_CODE = new Set(
     'py pyw pl rb php',
     // Disk images, which the OS mounts so the files inside open without its usual checks.
     'iso img vhd vhdx dmg',
-    // Office documents with macros.
-    'docm dotm xlsm xltm xlam pptm potm ppsm',
+    // Office documents with macros, and Excel add-ins.
+    'docm dotm xlsm xltm xlam xll pptm potm ppsm',
   ]
     .join(' ')
     .split(' '),
