@@ -19,6 +19,7 @@ import { ATTACHMENT_MUTATIONS } from './mutations-attachments.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
+import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
@@ -415,6 +416,7 @@ runBreaks([
   ...SEND_MUTATIONS,
   ...UNDO_MUTATIONS,
   ...GMAIL_MUTATIONS,
+  ...TURN_MUTATIONS,
   ...FORWARD_MUTATIONS,
   ...ATTACHMENT_MUTATIONS,
 ])

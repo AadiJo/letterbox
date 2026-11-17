@@ -11,6 +11,8 @@
 //!   - A change the provider confirmed is reversed by a new change: the undo itself. It puts
 //!     back what the change altered on each message and nothing else, and goes through the
 //!     pipeline like any change. A turn correction is reversed the same way, and settles at once.
+//!     It is refused `changed` once the conversation got a message sent after the change's newest
+//!     one: the turn it set no longer holds (see `held_override` in turns.rs).
 //!   - It is refused `conflict`, `outcome-unknown`, while the provider has not confirmed what
 //!     the change did (`uncertain` in push.rs), or what another change to its messages did: a
 //!     call reached the provider and the change has not settled, or it failed after part of it

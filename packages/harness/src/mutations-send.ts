@@ -44,8 +44,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'a reply moves the turn as soon as it is written, so one held, refused or unconfirmed shows waiting on them',
     file: core('rows.rs'),
-    find: '            .filter(|record| record.provider_ref().is_some())\n            .map(|record| TurnMessage {',
-    replace: '            .map(|record| TurnMessage {',
+    find: '        .iter()\n        .filter(|record| record.provider_ref().is_some())\n        .collect();\n    let newest',
+    replace: '        .iter()\n        .collect();\n    let newest',
     scenarios: 'the turn waits for the provider',
   },
   {
