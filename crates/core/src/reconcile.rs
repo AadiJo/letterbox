@@ -95,6 +95,7 @@ pub fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountI
                 id: id.clone(),
                 account_id: account_id.clone(),
                 turn_override: None,
+                override_since: None,
             },
         );
         return id;
@@ -117,16 +118,20 @@ pub fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountI
                 },
             );
         }
+        // A turn the user set on either keeps the time it was set against, so a merge
+        // ends it only if it brought a message sent after that (see `held_override`).
         let kept = world.threads.get(&winner).cloned();
-        let turn_override = world.threads.get(&loser).and_then(|thread| thread.turn_override);
-        if let (Some(kept), Some(turn_override)) = (kept, turn_override)
+        let lost = world.threads.get(&loser).cloned();
+        if let (Some(kept), Some(lost)) = (kept, lost)
             && kept.turn_override.is_none()
+            && lost.turn_override.is_some()
         {
             put_thread(
                 world,
                 tx,
                 ThreadRecord {
-                    turn_override: Some(turn_override),
+                    turn_override: lost.turn_override,
+                    override_since: lost.override_since,
                     ..kept
                 },
             );
