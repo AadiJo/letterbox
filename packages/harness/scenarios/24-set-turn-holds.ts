@@ -90,14 +90,43 @@ scenario('a reply of mine still in its undo window leaves done, and undoing it k
   t.equal((await thread(core, ASKED)).turn, DONE, 'and done still holds')
 })
 
-scenario('a turn let go after 30 days comes back to my turn when they reply', async (t) => {
+scenario('a turn let go after 30 days comes back to Your turn when they reply', async (t) => {
   const { core, box } = await start(t)
   // Ana's photos are 42 days old on the core's clock, and her question is still mine to answer.
+  const lists = [
+    ['Your turn', { turn: 'mine', retired: false }],
+    ['Let go?', { turn: 'mine', retired: true }],
+  ] as const
+  const open = lists.map(([name, filter]) => ({
+    name,
+    filter,
+    list: core.subscribe({ view: 'threads', filter, offset: 0, limit: 50 }),
+  }))
+  await Promise.all(open.map(({ list }) => list.next()))
+  /** Both open lists' subjects, each checked against the same list opened now. */
+  const shown = async (when: string) => {
+    const subjects: Record<string, string[]> = {}
+    for (const { name, filter, list } of open) {
+      const fresh = await core.query({ view: 'threads', filter, offset: 0, limit: 50 })
+      t.equal(list.latest(), fresh, `${when}: the open ${name} list shows what a new one would`)
+      subjects[name] = fresh.threads.map((row) => row.subject)
+    }
+    return subjects
+  }
+  t.equal(
+    await shown('synced'),
+    { 'Your turn': [ASKED], 'Let go?': ['Trip photos'] },
+    "the photos wait in Let go?, and Ben's review, 29 days old, in Your turn",
+  )
+
   const photos = await thread(core, 'Trip photos')
-  t.equal(photos.turn, MINE, 'the old photos are my turn')
   const letGo = await accept(t, core, { kind: 'set-turn', threadIds: [photos.id], turn: 'none' }, 'letting it go')
   t.equal((await core.settled(letGo)).result, 'done', 'letting go settles')
-  t.equal((await thread(core, 'Trip photos')).turn, DONE, 'it is let go')
+  t.equal(
+    await shown('let go'),
+    { 'Your turn': [ASKED], 'Let go?': [] },
+    'the photos leave Let go? and do not go to Your turn',
+  )
 
   box.deliver({
     key: 'photos-again',
@@ -110,12 +139,12 @@ scenario('a turn let go after 30 days comes back to my turn when they reply', as
     replyTo: ['photos'],
   })
   await sync(core)
-  const after = await thread(core, 'Trip photos')
   t.equal(
-    [after.turn, after.lastMessageAt],
-    [MINE, '2025-12-31T09:00:00.000Z'],
-    'Ana wrote again, so it is my turn, and its last message is a day old, so it is not one to let go',
+    await shown('Ana wrote again'),
+    { 'Your turn': ['Trip photos', ASKED], 'Let go?': [] },
+    'her reply, a day old, brings the photos back to Your turn, newest first, and not to Let go?',
   )
+  t.equal((await thread(core, 'Trip photos')).turn, MINE, 'it is my turn because she wrote last')
 })
 
 scenario('undoing done after they replied is refused, as is undoing a hand-back', async (t) => {
