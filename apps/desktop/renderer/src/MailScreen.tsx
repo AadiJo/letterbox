@@ -12,12 +12,12 @@ import { type Chrome, Screen, useSelection } from './Screen.tsx'
 import { type Range, type Slice, useThreadWindow } from './threads.ts'
 
 /** Rows rendered above and below the screen. */
-const OVERSCAN = 6
+export const OVERSCAN = 6
 /** The subscribed range moves in steps of this many rows, so a scroll of a few rows reuses it. */
 const STEP = 10
 
-/** The range to subscribe to while rows `first` to `first + count` are on screen. */
-const rangeFor = (first: number, count: number): Range => {
+/** The range to subscribe to while rows `first` to `first + count` are on screen. Updates windows its lists by it too. */
+export const rangeFor = (first: number, count: number): Range => {
   const offset = Math.max(0, Math.floor((first - OVERSCAN) / STEP) * STEP)
   const end = Math.ceil((first + count + OVERSCAN) / STEP) * STEP
   return { offset, limit: end - offset }

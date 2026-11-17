@@ -41,7 +41,7 @@ export function Avatar({ who, size }: { who: Who; size: keyof typeof SIZES }) {
       aria-hidden
       data-avatar={initials(who)}
       style={tint(personHue(shownAs(who)))}
-      className={`inline-flex flex-none items-center justify-center bg-tint leading-none font-semibold text-tint-fg ${SIZES[size]}`}
+      className={`inline-flex flex-none items-center justify-center bg-avatar leading-none font-semibold text-avatar-fg ${SIZES[size]}`}
     >
       {initials(who)}
     </span>

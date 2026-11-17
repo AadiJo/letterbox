@@ -20,7 +20,7 @@ import { Fragment, type ReactNode } from 'react'
 import { Avatar } from './Avatar.tsx'
 import { LabelDot } from './Label.tsx'
 import { useLetGo } from './LetGoScreen.tsx'
-import { updatesInbox, useUpdates } from './UpdatesScreen.tsx'
+import { updatesInbox, useUnreadSenders } from './UpdatesScreen.tsx'
 
 /** Where the list pane is. */
 export type Place =
@@ -164,7 +164,7 @@ function LetGoCount() {
 
 /** Senders in Updates with unread mail, once there are any. */
 function UpdatesCount({ inbox }: { inbox: MailboxId }) {
-  const senders = useUpdates(inbox, 1)?.unreadSenders ?? 0
+  const senders = useUnreadSenders(inbox) ?? 0
   return senders > 0 && <span data-field="updates-count">{senders.toLocaleString()}</span>
 }
 

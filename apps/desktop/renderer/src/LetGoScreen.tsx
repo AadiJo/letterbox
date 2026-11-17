@@ -1,6 +1,6 @@
 // Let go?: conversations where my turn has waited 30 days or more, which the core moves out
 // of Your turn (`retired: true`), newest first, grouped by the month they last moved: last
-// month, the month before, then the rest. Let go takes Done's place in the toolbar, with
+// month, the month before, then the rest, where a month too small for a heading joins the rest. Let go takes Done's place in the toolbar, with
 // its key d: it hands the turn to nobody, and the toast's Undo (or z) brings it back.
 
 import type { Account, ThreadFilter, ThreadId } from '@letterbox/protocol'
@@ -23,27 +23,45 @@ export const useLetGo = () => useThreadSection(LET_GO, LIMIT)
 
 type Month = { title: string; ids: readonly ThreadId[]; count: number }
 
+/** The local month a turn last moved in (time.ts `monthOf`). */
+const monthOfEntry = (entry: Entry) => monthOf(Date.parse(entry.lastMessageAt))
+
+/** A month keeps a heading of its own only with this many turns. A smaller one joins the older ones. */
+const OWN_MONTH = 3
+
 /**
- * The pile by month: last month, the month before, then "… and older", which counts every
- * older one, listed or not. A turn waits 30 days to get here, so last month holds the newest,
- * and the groups stay put as turns leave. Months with nothing are left out.
+ * The pile by month: last month and the month before, each with a heading of its own, then
+ * "… and older", which counts every older turn, listed or not. A turn waits 30 days to get
+ * here, so last month holds the newest, and the headings stay put as turns leave. A month
+ * with nothing is left out. From the first month with fewer than OWN_MONTH turns, the rest
+ * go under "… and older", so no heading stands over one or two rows.
  */
 function byMonth(entries: readonly Entry[], total: number, now: number): Month[] {
-  const newest = monthOf(now) - 1
-  const ids = (keep: (month: number) => boolean) =>
-    entries.filter((entry) => keep(monthOf(Date.parse(entry.lastMessageAt)))).map((entry) => entry.id)
-  // On the 31st, a turn from the 1st has waited 30 days, so last month's group takes it too.
-  const latest = ids((month) => month >= newest)
-  const before = ids((month) => month === newest - 1)
-  return [
-    { title: monthTitle(newest, now), ids: latest, count: latest.length },
-    { title: monthTitle(newest - 1, now), ids: before, count: before.length },
-    {
-      title: `${monthTitle(newest - 2, now)} and older`,
-      ids: ids((month) => month < newest - 1),
-      count: total - latest.length - before.length,
-    },
-  ].filter((month) => month.count > 0)
+  // On the 31st, a turn from the 1st has waited 30 days, so last month's heading takes it too.
+  const last = monthOf(now) - 1
+  const months: Month[] = []
+  let older = last - 2
+  for (const month of [last, last - 1]) {
+    const ids = entries
+      .filter((entry) => (month === last ? monthOfEntry(entry) >= last : monthOfEntry(entry) === month))
+      .map((entry) => entry.id)
+    if (ids.length === 0) continue
+    if (ids.length < OWN_MONTH) {
+      older = month
+      break
+    }
+    months.push({ title: monthTitle(month, now), ids, count: ids.length })
+  }
+  const taken = new Set(months.flatMap((month) => month.ids))
+  const rest = entries.filter((entry) => !taken.has(entry.id))
+  const shown = months.reduce((sum, month) => sum + month.count, 0)
+  if (total > shown)
+    months.push({
+      title: `${monthTitle(older, now)} and older`,
+      ids: rest.map((entry) => entry.id),
+      count: total - shown,
+    })
+  return months
 }
 
 export function LetGoScreen({ chrome, accounts }: { chrome: Chrome; accounts: readonly Account[] }) {

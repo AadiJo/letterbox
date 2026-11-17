@@ -134,6 +134,9 @@
   --color-tint: hsl(var(--hue) 70% 60% / 16%);
   --color-tint-fg: hsl(var(--hue) 75% 75%);
   --color-tint-dot: hsl(var(--hue) 72% 70%);
+  /* An avatar's tile and initials: opaque, so the initials read at 5.3:1 or more on every hue. */
+  --color-avatar: hsl(var(--hue) 40% 22%);
+  --color-avatar-fg: hsl(var(--hue) 75% 75%);
 }
 
 /* Styles for the macOS app, where the shell draws the traffic lights over the page (main.tsx sets the platform). */

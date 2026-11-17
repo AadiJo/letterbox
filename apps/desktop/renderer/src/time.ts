@@ -31,6 +31,9 @@ const midnight = (at: number) => new Date(at).setHours(0, 0, 0, 0)
 /** Whole local days between the day of `time` and the day of `now`. 0 is today, 1 yesterday. */
 const daysAgo = (time: number, now: number) => Math.round((midnight(now) - midnight(time)) / DAY)
 
+/** The time of day `time` was: "10:42 AM". */
+export const clockTime = (time: string) => clock.format(Date.parse(time))
+
 /** The one time a list row shows: "10:42 AM" today, then "Yesterday", "Mon", "Oct 30" and "Oct 30, 2025". */
 export function listTime(time: string, now: number) {
   const at = Date.parse(time)

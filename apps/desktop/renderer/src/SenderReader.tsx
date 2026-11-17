@@ -1,22 +1,27 @@
 // The reader for a sender in Updates: Mark read and Archive all for all of its mail, its name
-// and volume, its newest message open in full, then the rest of its conversations folded to
-// one line each and grouped by day: Today, Yesterday and Earlier. A folded line opens in
-// place, like a folded message in a conversation, and opening one marks it read.
+// and volume, one conversation open in full (its newest, until another is picked), then every
+// other conversation folded to one line, grouped by day: Today and Yesterday with the time of
+// day, then Earlier with the day. Opening a conversation marks it read and shows it on top.
+// Earlier is windowed like All mail, so every conversation it counts has a line to scroll to.
 
-import type { MailboxId, SenderSummary, ThreadId } from '@letterbox/protocol'
+import type { MailboxId, SenderSummary, ThreadFilter, ThreadId } from '@letterbox/protocol'
 import { Archive, ChevronRight, MailOpen } from 'lucide-react'
-import { Fragment, type ReactNode, useState } from 'react'
+import { Fragment, type ReactNode, type RefObject, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Mail, markRead } from './actions.ts'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
 import { useNow } from './clock.ts'
+import { rangeFor } from './MailScreen.tsx'
 import type { Chrome } from './Screen.tsx'
-import { threadRecord, useThread, useThreadDetail, useThreadSection } from './threads.ts'
-import { dayOf, listTime, messageTime } from './time.ts'
+import { type Entry, threadRecord, useThread, useThreadDetail, useThreadSection, useThreadWindow } from './threads.ts'
+import { clockTime, dayOf, listTime, messageTime } from './time.ts'
 import { rate, Strip } from './Volume.tsx'
 
-/** The most conversations of one sender the reader lists. */
-const LIMIT = 50
+/** The newest conversations the reader groups into Today and Yesterday. More in two days is rare. */
+const RECENT = 200
+/** A folded line's height, and a day heading's, in px. Earlier's window places lines by them. */
+const LINE = 40
+const HEADING = 36
 
 type Props = {
   /** The open sender, or undefined for none. */
@@ -50,7 +55,11 @@ export function SenderReader({ sender, inbox, most, chrome, onMarkRead, onArchiv
           <button type="button" disabled={!sender} onClick={() => sender && onArchive(sender)} className={outlined}>
             <Archive className="size-4" strokeWidth={1.75} aria-hidden />
             Archive all
-            {sender && <span className="font-normal text-muted tabular-nums">{sender.threads}</span>}
+            {sender && (
+              <span className="font-normal text-muted tabular-nums" data-field="archive-count">
+                {sender.threads}
+              </span>
+            )}
           </button>
           <span className="flex-1" />
           {chrome.search}
@@ -69,23 +78,41 @@ type MailProps = { sender: SenderSummary; inbox: MailboxId; most: number; mail: 
 
 function SenderMail({ sender, inbox, most, mail }: MailProps) {
   const now = useNow()
-  const section = useThreadSection({ mailboxId: inbox, sender: sender.id }, LIMIT)
-  const [newest, ...rest] = section?.entries ?? []
-  const today = rest.filter((entry) => dayOf(entry.lastMessageAt, now) <= 0)
-  const yesterday = rest.filter((entry) => dayOf(entry.lastMessageAt, now) === 1)
-  const earlier = rest.filter((entry) => dayOf(entry.lastMessageAt, now) > 1)
-  // Earlier counts every older conversation the sender has, not only the ones listed.
-  const days = [
-    { title: 'Today', entries: today, count: today.length },
-    { title: 'Yesterday', entries: yesterday, count: yesterday.length },
-    {
-      title: 'Earlier',
-      entries: earlier,
-      count: (section?.total ?? 0) - 1 - today.length - yesterday.length,
-    },
-  ].filter((day) => day.count > 0)
+  const filter: ThreadFilter = { mailboxId: inbox, sender: sender.id }
+  const recent = useThreadSection(filter, RECENT)
+  const scroller = useRef<HTMLDivElement>(null)
+  const [picked, setPicked] = useState<ThreadId | null>(null)
+  const newest = recent?.entries[0]?.id
+  const open = picked ?? newest
+  // The lines leave out the newest while it is the open one. Another open one keeps its line.
+  const skip = newest !== undefined && open === newest ? 1 : 0
+  const listed = (recent?.entries ?? []).slice(skip)
+  const today = listed.filter((entry) => dayOf(entry.lastMessageAt, now) <= 0)
+  const yesterday = listed.filter((entry) => dayOf(entry.lastMessageAt, now) === 1)
+  const earlierFrom = skip + today.length + yesterday.length
+  const earlierCount = Math.max(0, (recent?.total ?? 0) - earlierFrom)
+
+  // Opening a conversation marks it read, as opening one anywhere does: once per opening.
+  const markOpened = useEffectEvent((id: ThreadId) => {
+    const record = threadRecord(id)
+    if (record) markRead(record, mail)
+  })
+  useEffect(() => {
+    if (open) markOpened(open)
+  }, [open])
+
+  const pick = (id: ThreadId) => {
+    setPicked(id)
+    scroller.current?.scrollTo({ top: 0 })
+  }
+  const line = (entry: Entry, time: string) => (
+    <Folded key={entry.id} id={entry.id} time={time} current={entry.id === open} onOpen={pick} />
+  )
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-6 [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin] wide:px-10">
+    <div
+      ref={scroller}
+      className="relative min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-6 [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin] wide:px-10"
+    >
       <article aria-label="Sender" className="reading-column">
         <header>
           <h3 className="cap-top text-title font-semibold tracking-[-0.02em]" data-field="reader-subject">
@@ -107,25 +134,111 @@ function SenderMail({ sender, inbox, most, mail }: MailProps) {
           </div>
         </header>
         <div className="mt-3 border-t border-line wide:mt-6">
-          {newest && <Newest id={newest.id} sender={sender} now={now} />}
-          {days.map((day) => (
-            <section key={day.title} aria-label={day.title}>
-              <h4
-                className="flex h-9 items-center border-b border-line pt-1.5 text-caption font-semibold text-section"
-                data-field="day"
-              >
-                {day.title}
-                <span className="ml-auto font-normal text-muted tabular-nums" data-field="count">
-                  {day.count}
-                </span>
-              </h4>
-              {day.entries.map((entry) => (
-                <Folded key={entry.id} id={entry.id} sender={sender} mail={mail} now={now} />
-              ))}
-            </section>
-          ))}
+          {open && <OpenMessage key={open} id={open} sender={sender} now={now} />}
+          {today.length > 0 && (
+            <Day title="Today" count={today.length}>
+              {today.map((entry) => line(entry, clockTime(entry.lastMessageAt)))}
+            </Day>
+          )}
+          {yesterday.length > 0 && (
+            <Day title="Yesterday" count={yesterday.length}>
+              {yesterday.map((entry) => line(entry, clockTime(entry.lastMessageAt)))}
+            </Day>
+          )}
+          {earlierCount > 0 && (
+            <Day title="Earlier" count={earlierCount}>
+              <Earlier
+                filter={filter}
+                from={earlierFrom}
+                count={earlierCount}
+                scroller={scroller}
+                render={(entry) => line(entry, listTime(entry.lastMessageAt, now))}
+              />
+            </Day>
+          )}
         </div>
       </article>
+    </div>
+  )
+}
+
+/** One day's heading and its lines. */
+function Day({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+  return (
+    <section aria-label={title}>
+      <h4
+        className="flex items-center border-b border-line pt-1.5 text-caption font-semibold text-section"
+        style={{ height: HEADING }}
+        data-field="day"
+      >
+        {title}
+        <span className="ml-auto font-normal text-muted tabular-nums" data-field="count">
+          {count}
+        </span>
+      </h4>
+      {children}
+    </section>
+  )
+}
+
+type EarlierProps = {
+  filter: ThreadFilter
+  /** Where Earlier starts in the sender's list, and how many it holds. */
+  from: number
+  count: number
+  scroller: RefObject<HTMLDivElement | null>
+  render: (entry: Entry) => ReactNode
+}
+
+/**
+ * Earlier's lines on screen plus a small overscan, with spacers for the rest. It follows the
+ * reader's scroll, and subscribes only to the lines it shows.
+ */
+function Earlier({ filter, from, count, scroller, render }: EarlierProps) {
+  const { slice, show } = useThreadWindow(filter)
+  const body = useRef<HTMLDivElement>(null)
+  const [first, setFirst] = useState(0)
+  const [fits, setFits] = useState(0)
+
+  // Follows the reader's scroll and height, which set the lines on screen.
+  useEffect(() => {
+    const element = scroller.current
+    if (!element) return
+    const follow = () => {
+      const top = body.current?.offsetTop ?? 0
+      setFirst(Math.max(0, Math.floor((element.scrollTop - top) / LINE)))
+      setFits(Math.ceil(element.clientHeight / LINE) + 1)
+    }
+    follow()
+    const observer = new ResizeObserver(follow)
+    observer.observe(element)
+    element.addEventListener('scroll', follow)
+    return () => {
+      observer.disconnect()
+      element.removeEventListener('scroll', follow)
+    }
+  }, [scroller])
+
+  const range = rangeFor(first, fits)
+  useEffect(() => {
+    show({ offset: from + range.offset, limit: range.limit })
+  }, [show, from, range.offset, range.limit])
+
+  const start = Math.min(count, range.offset)
+  const end = Math.min(count, range.offset + range.limit)
+  const at = (index: number) => (slice ? slice.entries[from + index - slice.offset] : undefined)
+  return (
+    <div ref={body}>
+      <div style={{ height: start * LINE }} />
+      {Array.from({ length: Math.max(0, end - start) }, (_, index) => {
+        const entry = at(start + index)
+        return entry ? (
+          render(entry)
+        ) : (
+          <div key={`empty ${start + index}`} className="border-b border-line" style={{ height: LINE }} />
+        )
+      })}
+      <div style={{ height: Math.max(0, count - end) * LINE }} />
     </div>
   )
 }
@@ -147,7 +260,7 @@ function Dotted({ parts }: { parts: readonly ReactNode[] }) {
 }
 
 /** A conversation's newest message, open: the sender's mark, the subject in the name's place, then the body. */
-function Newest({ id, sender, now }: { id: ThreadId; sender: SenderSummary; now: number }) {
+function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary; now: number }) {
   const thread = useThreadDetail(id)
   const message = thread?.messages.at(-1)
   if (!thread || !message) return null
@@ -157,7 +270,9 @@ function Newest({ id, sender, now }: { id: ThreadId; sender: SenderSummary; now:
         <Avatar who={{ name: sender.name, address: sender.address }} size="sender-open" />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-3">
-            <span className="min-w-0 truncate text-subject font-semibold">{thread.subject}</span>
+            <span className="min-w-0 truncate text-subject font-semibold" data-field="open-subject">
+              {thread.subject}
+            </span>
             <span className="ml-auto text-meta whitespace-nowrap text-muted tabular-nums" data-field="message-time">
               {messageTime(message.sentAt, now)}
             </span>
@@ -172,22 +287,24 @@ function Newest({ id, sender, now }: { id: ThreadId; sender: SenderSummary; now:
   )
 }
 
-/** One older conversation, folded to its subject and time. A click opens it in place and marks it read. */
-function Folded({ id, sender, mail, now }: { id: ThreadId; sender: SenderSummary; mail: Mail; now: number }) {
+type FoldedProps = { id: ThreadId; time: string; current: boolean; onOpen: (id: ThreadId) => void }
+
+/**
+ * One conversation, folded to its subject and time. The unread dot has its own slot and the
+ * time a right-aligned column as wide as "12:00 PM", so neither moves with the other's width.
+ */
+function Folded({ id, time, current, onOpen }: FoldedProps) {
   const thread = useThread(id)
-  const [open, setOpen] = useState(false)
-  if (open) return <Newest id={id} sender={sender} now={now} />
-  if (!thread) return <div className="h-9 border-b border-line wide:h-10" />
+  if (!thread) return <div className="border-b border-line" style={{ height: LINE }} />
   return (
     <button
       type="button"
-      onClick={() => {
-        setOpen(true)
-        const record = threadRecord(id)
-        if (record) markRead(record, mail)
-      }}
-      className="flex h-9 w-full items-center gap-2.5 border-b border-line text-left wide:h-10"
+      aria-current={current || undefined}
+      onClick={() => onOpen(id)}
+      className={`flex w-full items-center gap-2.5 border-b border-line text-left ${current ? 'bg-hover' : ''}`}
+      style={{ height: LINE }}
       data-message="folded"
+      data-thread={id}
       data-unread={thread.unread}
     >
       <span className="flex w-4 flex-none justify-center text-muted">
@@ -199,9 +316,14 @@ function Folded({ id, sender, mail, now }: { id: ThreadId; sender: SenderSummary
       >
         {thread.subject}
       </span>
-      {thread.unread && <span className="size-2 flex-none rounded-full bg-blue" data-field="unread" />}
-      <span className="text-meta whitespace-nowrap text-muted tabular-nums" data-field="message-time">
-        {listTime(thread.lastMessageAt, now)}
+      <span className="flex w-2 flex-none justify-center">
+        {thread.unread && <span className="size-2 rounded-full bg-blue" data-field="unread" />}
+      </span>
+      <span
+        className="min-w-[58px] text-right text-meta whitespace-nowrap text-muted tabular-nums"
+        data-field="message-time"
+      >
+        {time}
       </span>
     </button>
   )
