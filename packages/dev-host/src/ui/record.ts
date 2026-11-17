@@ -78,6 +78,7 @@ const closeOptions = (code: number | undefined, reason: string | undefined) => (
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
  * in order, or until `drop` ends the connection with them still unsent. The returned promise resolves once the relay holds that `accepted`.
+ * After `failNextUndo`, the page's next undo ends the connection instead of reaching the core.
  * After `holdNextUndoAnswer`, the page's next undo reaches the core, and the core's answer to
  * it waits until `releaseUndoAnswer`, or for good, while everything else passes. `sees`
  * resolves once the core sends a message, held or not, that contains `text`. It rejects
@@ -92,6 +93,8 @@ async function relayCore(page: Page) {
   let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
+  // True once `failNextUndo` is called: the page's next undo ends the connection, and the core never sees it.
+  let failUndo = false
   // Armed by `holdNextUndoAnswer`: the change id of the page's next undo, once sent, and the core's answer to it, once held.
   let undoAnswer: { change: string | null; answer: string | null; held: () => void } | undefined
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
@@ -144,6 +147,10 @@ async function relayCore(page: Page) {
         const rejected = { kind: 'rejected', change, reason: 'conflict', ...(conflict ? { conflict } : {}) }
         return void socket.send(JSON.stringify(rejected))
       }
+      if (failUndo && text.includes('"kind":"undo"')) {
+        failUndo = false
+        return void close?.()
+      }
       if (undoAnswer?.change === null && text.includes('"kind":"undo"'))
         undoAnswer.change = (JSON.parse(text) as { change: string }).change
       core.send(message)
@@ -185,6 +192,10 @@ async function relayCore(page: Page) {
     /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. It never reaches the core. */
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }
+    },
+    /** Ends the connection both ways when the page sends its next undo, which never reaches the core. */
+    failNextUndo: () => {
+      failUndo = true
     },
     /**
      * Passes the page's next undo to the core and holds the core's answer to it, and only that,
