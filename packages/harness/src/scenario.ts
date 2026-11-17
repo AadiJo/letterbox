@@ -1,14 +1,15 @@
 // How a scenario is written and run. A scenario starts a sim provider and a
 // real core process, acts as the UI and as "another device", and checks what
-// the core says. Every run writes a transcript of each message to
-// artifacts/scenarios/, so a person can read what happened.
+// the core says. Every run keeps a transcript of each message, which run.ts writes to
+// artifacts/scenarios/, so a person can read what happened. A transcript must be the same on
+// every run: run.ts runs each scenario twice and compares them (drift.ts).
 //
 // Each scenario runs once per dialect, and once more as `gmail` when it runs on labels:
 // the core then signs in through the Gmail adapter (crates/gmail) to the fake Gmail
 // server, whose accounts are labels mailboxes. The same scenario then checks the Gmail
 // adapter's mapping from end to end.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -96,7 +97,15 @@ export function scenario(name: string, run: (t: Scenario) => Promise<void>, only
   definitions.push({ name, dialects: gmail ? [...dialects, 'gmail'] : dialects, run })
 }
 
-export type Result = { name: string; dialect: Run; passed: boolean; failure: string | null; edges: Edge[] }
+export type Result = {
+  name: string
+  dialect: Run
+  passed: boolean
+  failure: string | null
+  edges: Edge[]
+  /** One JSON line per entry. run.ts writes it to ARTIFACTS. */
+  transcript: string
+}
 
 /**
  * Where transcripts go. LETTERBOX_ARTIFACTS moves them, so the break test can run
@@ -170,7 +179,7 @@ async function startBackend(run: Run, folder: string, record: (entry: Transcript
   }
 }
 
-/** Runs one scenario against one dialect, or as gmail, and writes its transcript. */
+/** Runs one scenario against one dialect, or as gmail. Runs may go side by side: each has its own folder, provider and core. */
 export async function runOne(definition: Definition, dialect: Run): Promise<Result> {
   const folder = mkdtempSync(join(tmpdir(), 'letterbox-'))
   const data = join(folder, 'data')
@@ -276,8 +285,13 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
     failure = [failure, ...broken].filter((line) => line !== null).join('\n')
   }
 
-  mkdirSync(ARTIFACTS, { recursive: true })
   const lines = transcript.map((entry) => JSON.stringify(entry)).join('\n')
-  writeFileSync(join(ARTIFACTS, `${definition.name}.${dialect}.jsonl`), `${lines}\n`)
-  return { name: definition.name, dialect, passed: failure === null, failure, edges: cycle.edges }
+  return {
+    name: definition.name,
+    dialect,
+    passed: failure === null,
+    failure,
+    edges: cycle.edges,
+    transcript: `${lines}\n`,
+  }
 }

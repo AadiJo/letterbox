@@ -411,7 +411,7 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([
+await runBreaks([
   ...MUTATIONS,
   ...SEND_MUTATIONS,
   ...UNDO_MUTATIONS,

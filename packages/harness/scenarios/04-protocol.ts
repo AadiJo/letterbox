@@ -54,7 +54,10 @@ scenario('a wrong password ends the sign-in with an answer and no account', asyn
 })
 
 scenario('a second sign-in ends the first one, and each gets its own answer', async (t) => {
-  t.mailbox(standardSeed(t.dialect))
+  const box = t.mailbox(standardSeed(t.dialect))
+  // The first sync waits at its first page until the accounts are checked. Unheld, it could
+  // write before or after the check, and the transcript would change from run to run.
+  box.holdSnapshots()
   const core = t.startCore()
   await core.hello()
   const option = (await core.query({ view: 'sign-in-options' })).find((candidate) => candidate.method === 'oauth')
@@ -71,11 +74,13 @@ scenario('a second sign-in ends the first one, and each gets its own answer', as
   t.provider.approveSignIn(secondUrl.url, ME)
   const secondAnswer = await second.done
   t.check(secondAnswer.ok, 'the second attempt signs in')
+  await box.snapshotHeld()
   t.equal(
     (await core.query({ view: 'accounts' })).map((account) => account.address),
     [ME],
     'one account exists',
   )
+  box.releaseSnapshots()
 
   const third = core.begin({ method: 'sign-in', option: option.id })
   t.provider.denySignIn((await core.take('open-url')).url)

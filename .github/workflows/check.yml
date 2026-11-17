@@ -1,5 +1,6 @@
 # Runs every check on each pull request and on main: format, types, lint, the lint
-# self-test, the scenarios, the break test, the UI check and the Electron check. It is
+# self-test, the scenarios (each run twice, to catch a transcript that changes from run to
+# run), the break test, the UI check and the Electron check. It is
 # `pnpm check`, the same command a person runs locally, split into parallel jobs: the
 # `checks` job runs everything but the break test, and the `breaks` jobs share out the break
 # test, which alone takes most of the time. The `check` job passes only when they all pass.
@@ -59,7 +60,8 @@ jobs:
         run: node lint/commit-title.ts --title "$TITLE"
 
       # On a pull request, the file-size check compares the baseline with the base commit's,
-      # so the baseline can only shrink. A shallow checkout lacks that commit, so fetch it.
+      # and the scenarios compare packages/harness/drift-allowed.txt with it, so both can only
+      # shrink. A shallow checkout lacks that commit, so fetch it.
       - if: github.event_name == 'pull_request'
         run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
 
@@ -71,6 +73,7 @@ jobs:
       - run: xvfb-run -a pnpm check:without-breaks
         env:
           FILE_SIZE_BASE: ${{ github.event.pull_request.base.sha }}
+          DRIFT_BASE: ${{ github.event.pull_request.base.sha }}
 
       # One transcript per scenario run, and the UI and Electron checks' screenshots, trace and logs.
       # Uploaded on failure too, when it matters most.
