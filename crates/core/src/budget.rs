@@ -252,7 +252,7 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
             json!({ "view": "threads", "filter": {}, "offset": 0, "limit": 50 }),
             json!({ "view": "threads", "filter": { "turn": "mine", "retired": false }, "offset": 0, "limit": 50 }),
             json!({ "view": "threads", "filter": { "turn": "mine", "retired": true }, "offset": 0, "limit": 50 }),
-            json!({ "view": "senders", "mailboxId": inbox, "offset": 0, "limit": 50 }),
+            json!({ "view": "senders", "mailboxId": inbox, "zone": "America/Chicago", "offset": 0, "limit": 50 }),
         ];
         for (index, query) in views.into_iter().enumerate() {
             receive(json!({ "kind": "subscribe", "sub": format!("sub_{index}"), "query": query }));
