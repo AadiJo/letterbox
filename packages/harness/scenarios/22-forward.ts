@@ -272,8 +272,11 @@ scenario('a forward is refused until the original has loaded, and when it also a
     'a draft that both answers and forwards is invalid',
   )
   t.equal(box.sent(), [], 'nothing went out')
-  box.releaseBodies()
+  // The view closes, and a query after it is answered, before the body is let go, so the
+  // core has unsubscribed it by the time the body lands and no update for it races the end.
   watch.close()
+  await core.query({ view: 'accounts' })
+  box.releaseBodies()
 })
 
 scenario("a core killed while it fetches a forward's files sends the forward once after the restart", async (t) => {
@@ -399,4 +402,36 @@ scenario('a forward of my forward whose answer was lost goes out as soon as a lo
   open.close()
   t.equal(box.sent().length, 2, 'the provider got each forward once')
   t.equal(filesOf(box.sent()[1]?.raw ?? ''), expectedFiles(FILES), "the second carries the first one's files whole")
+})
+
+scenario('a forward of my forward that is never found fails with it, with no sync', async (t) => {
+  // The default confirm window takes no real time, so every lookup of the first forward runs.
+  const { core, box, accountId, original } = await startWithContract(t)
+  box.holdSends()
+  const earlier = await core.command({ kind: 'send', draft: forward(accountId, original.id) })
+  await box.sendHeld()
+  const row = await thread(core, 'Fwd: The contract')
+  const mine = (await readThread(core, row.id))?.messages[0]
+  if (!mine) throw new Error('the first forward has no message')
+  const again = forward(accountId, mine.id, { to: ['erin@example.com'], subject: 'Fwd: Fwd: The contract' })
+  const later = await core.command({ kind: 'send', draft: again })
+  // Wait until its undo window has ended, so it waits for the first before the first is looked up.
+  const open = await openThread(core, (await thread(core, 'Fwd: Fwd: The contract')).id)
+  while (open.latest()?.messages[0]?.delivery?.state !== 'sending') await open.next()
+  open.close()
+
+  // The first one's answer is lost, and the provider's search never finds it in its window.
+  box.setSearchLag(true)
+  box.damageNextSendAnswer('disconnect')
+  box.releaseSends()
+  t.equal(
+    [(await core.settled(earlier.change)).result, (await core.settled(later.change)).result],
+    [{ failed: 'unconfirmed' }, { failed: 'unknown-target' }],
+    'the first fails as unconfirmed, and the second, which waited for it, fails with it',
+  )
+  t.equal(
+    [box.calls().attachment, box.sent().length],
+    [FILES.length, 1],
+    "only the first forward's files were fetched, and the second never went",
+  )
 })
