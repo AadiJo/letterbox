@@ -67,14 +67,13 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   {
     name: 'a forward whose files are gone goes out without them',
     file: core('outbox.rs'),
-    find: '                AttachmentResult::Gone => return Ok(None),',
+    find: '                AttachmentResult::Gone => return Ok(Contents::Gone),',
     replace: '                AttachmentResult::Gone => continue,',
     also: [
       {
         file: core('outbox.rs'),
-        find: '        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {\n            return Ok(None);',
-        replace:
-          '        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {\n            return Ok(Some(Vec::new()));',
+        find: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),',
+        replace: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Ready(Vec::new())),',
       },
     ],
     scenarios: 'original is gone before it goes out',
