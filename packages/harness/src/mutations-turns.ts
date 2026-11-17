@@ -59,6 +59,13 @@ export const TURN_MUTATIONS: Mutation[] = [
     scenarios: 'a merge keeps done',
   },
   {
+    name: "a merge keeps the survivor's done though the merged mail ended it, and drops the newer conversation's",
+    file: core('reconcile.rs'),
+    find: '            && held_override(&kept, newest.as_ref()).is_none()\n            && held_override(&lost, newest.as_ref()).is_some()',
+    replace: '            && kept.turn_override.is_none()\n            && lost.turn_override.is_some()',
+    scenarios: 'marked done',
+  },
+  {
     name: 'an undo of a turn change ignores mail that came after it, so undoing a hand-back buries their reply',
     file: core('effect.rs'),
     find: '                    moved || held_override(thread, newest.as_ref()) != altered.now',

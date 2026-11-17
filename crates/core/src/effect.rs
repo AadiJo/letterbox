@@ -96,7 +96,8 @@ impl Effect {
                     let newest = newest_held(world, &altered.thread_id);
                     let moved = newest
                         .as_ref()
-                        .is_some_and(|newest| parse(newest) > parse(&altered.newest));
+                        .zip(altered.newest.as_ref())
+                        .is_some_and(|(newest, then)| parse(newest) > parse(then));
                     moved || held_override(thread, newest.as_ref()) != altered.now
                 })
                 .map(|altered| UndoField::Turn {
@@ -373,15 +374,16 @@ pub struct TurnEffect {
 
 /// One conversation whose turn a correction changed: the turn the user had set before, and
 /// the one it set (None: the rule's), and when its newest message the provider held was sent
-/// then. Empty when it held none, and for a change recorded before this was kept.
+/// then: empty when it held none. None for a change recorded before this was kept, whose undo
+/// then cannot tell whether the conversation moved, and checks only the turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnAltered {
     thread_id: ThreadId,
     was: Option<Turn>,
     now: Option<Turn>,
-    #[serde(default)]
-    newest: Time,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    newest: Option<Time>,
 }
 
 impl TurnEffect {
@@ -396,7 +398,7 @@ impl TurnEffect {
                     thread_id: id.clone(),
                     was,
                     now: *value,
-                    newest: newest.unwrap_or_default(),
+                    newest: Some(newest.unwrap_or_default()),
                 })
             })
             .collect();

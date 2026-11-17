@@ -4,9 +4,9 @@
 // the one waiting. Mail that arrives late but was sent before, as a backfill brings, does not
 // end it. Every scenario starts from the standard mailbox, where Ben's review is my turn.
 
-import type { TurnState, UndoConflict } from '@letterbox/protocol'
+import type { ThreadId, TurnState, UndoConflict } from '@letterbox/protocol'
 import { fromBen, ME, start, sync, thread, threads } from '../src/fixtures.ts'
-import { HELD_WINDOW, scenario } from '../src/scenario.ts'
+import { HELD_WINDOW, scenario, type Scenario } from '../src/scenario.ts'
 import { ASKED, asked, draft, startWith } from '../src/sending.ts'
 import { accept } from '../src/undoing.ts'
 
@@ -191,5 +191,77 @@ scenario('a merge keeps done until a message sent after it, then their reply mak
     (await lunches()).map((row) => row.turn),
     [MINE],
     'Ben wrote after the message done was set against, so it is my turn',
+  )
+})
+
+/**
+ * Two lunch conversations about to merge: Ana's, where I answered on Dec 1, and Ben's own
+ * message of Dec 5, each marked done. Ana's holds the oldest message, so it survives the
+ * merge. `anaAgain` has Ana write again on Dec 3, after hers is marked, which ends that done.
+ */
+async function twoLunches(t: Scenario, anaAgain: boolean) {
+  const { core, box } = await start(t)
+  const lunches = async () => (await threads(core)).filter((row) => row.subject === 'Lunch on Friday?')
+  const markDone = async (threadId: ThreadId, what: string) => {
+    const done = await accept(t, core, { kind: 'set-turn', threadIds: [threadId], turn: 'none' }, what)
+    t.equal((await core.settled(done)).result, 'done', `${what} settles`)
+  }
+  const [ana] = await lunches()
+  if (!ana) throw new Error("Ana's lunch conversation is missing")
+  await markDone(ana.id, "done on Ana's lunch")
+  if (anaAgain) {
+    box.deliver({
+      key: 'lunch-ana',
+      mailboxes: ['inbox'],
+      from: { name: 'Ana', address: 'ana@example.com' },
+      to: [ME],
+      subject: 'Re: Lunch on Friday?',
+      text: 'Noon at the usual place?',
+      sentAt: '2025-12-03T09:00:00.000Z',
+      replyTo: ['lunch-answer'],
+    })
+    await sync(core)
+    t.equal((await thread(core, 'Lunch on Friday?')).turn, MINE, 'Ana wrote again, so done on hers no longer holds')
+  }
+  box.deliver(fromBen('lunch-again', 'Lunch on Friday?', '2025-12-05T09:00:00.000Z'))
+  await sync(core)
+  const ben = (await lunches()).find((row) => row.id !== ana.id)
+  if (!ben) throw new Error("Ben's lunch message is not a conversation of its own")
+  await markDone(ben.id, "done on Ben's lunch")
+
+  // A message that answers both joins them. It was sent before Ben's lunch message, so the
+  // merged conversation's newest message is his: later than done on Ana's, the one done on
+  // his was set against.
+  box.deliver(
+    fromBen('lunch-both', 'Re: Lunch on Friday?', '2025-12-04T09:00:00.000Z', {
+      replyTo: ['lunch-ask', 'lunch-again'],
+    }),
+  )
+  await sync(core)
+  return { core, box, lunches }
+}
+
+scenario('a merge of two conversations both marked done stays done until a reply', async (t) => {
+  const { core, box, lunches } = await twoLunches(t, false)
+  t.equal(
+    (await lunches()).map((row) => [row.messageCount, row.turn]),
+    [[4, DONE]],
+    "one conversation, still done: done on Ben's still holds against the merged mail",
+  )
+  box.deliver(fromBen('lunch-reply', 'Re: Lunch on Friday?', '2025-12-07T09:00:00.000Z', { replyTo: ['lunch-again'] }))
+  await sync(core)
+  t.equal(
+    (await lunches()).map((row) => row.turn),
+    [MINE],
+    'Ben wrote after it, so it is my turn',
+  )
+})
+
+scenario('a merge takes done from the newer conversation over a done a reply already ended', async (t) => {
+  const { lunches } = await twoLunches(t, true)
+  t.equal(
+    (await lunches()).map((row) => [row.messageCount, row.turn]),
+    [[5, DONE]],
+    "one conversation, done: Ana's ended done stays ended, and done on Ben's carries on",
   )
 })
