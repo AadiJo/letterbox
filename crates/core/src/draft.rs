@@ -12,8 +12,8 @@ use letterbox_protocol::{AccountId, BlobId, Draft, MessageId, Refusal, Role, Tim
 
 use crate::adapter::{BodyResult, RemoteAddress, RemoteAttachment, RemoteBody, RemoteFacts, RemoteHeaders};
 use crate::clock::{iso, parse};
+use crate::forward::Forward;
 use crate::mime::{Letter, Threading, is_plain_address, write};
-use crate::outbox::Forward;
 use crate::world::{MessageRecord, MessageState, World, blob_id_of};
 
 /// A send that passed every check, ready to store.

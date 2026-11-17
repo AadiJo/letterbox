@@ -48,7 +48,7 @@ export type MailboxEntry = {
   /** Goes into the session string, so `resume` can rebuild the adapter. */
   session: Session
   isOffline(): boolean
-  /** Answers one adapter call through `reply`. A body, apply, send or snapshot call waits while its method is held. */
+  /** Answers one adapter call through `reply`. A body, attachment, apply, send or snapshot call waits while its method is held. */
   respond(call: Call, reply: (result: CallResult, damage?: AnswerDamage) => void): void
 }
 
@@ -122,7 +122,13 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let searchLags = false
   // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
   let generation = 0
-  const holds = { body: createHold(), apply: createHold(), snapshot: createHold(), send: createHold() }
+  const holds = {
+    body: createHold(),
+    attachment: createHold(),
+    apply: createHold(),
+    snapshot: createHold(),
+    send: createHold(),
+  }
 
   if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`sim provider: pageSize ${pageSize} is not usable`)
 
@@ -279,6 +285,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     holdSends: holds.send.hold,
     sendHeld: holds.send.held,
     releaseSends: holds.send.release,
+    holdAttachments: holds.attachment.hold,
+    attachmentHeld: holds.attachment.held,
+    releaseAttachments: holds.attachment.release,
     truth: () =>
       [...store.messages.values()].map((message) => ({
         key: message.key,
@@ -440,8 +449,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         else applyDamage = null
         reply(result, damage)
       }
-      const unheld = call.method === 'changes' || call.method === 'find' || call.method === 'attachment'
-      const hold = unheld || offline ? null : holds[call.method]
+      const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
       if (!hold?.keep(answerNow)) answerNow()
     },
   }

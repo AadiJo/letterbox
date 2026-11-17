@@ -3,7 +3,7 @@
 // names and types, fetched from the provider when the send goes out, never through the UI.
 // A forward waits out its undo window and goes out exactly once, like a reply. Each scenario
 // is one way a forward could lose the original, its files or its MIME, thread into the
-// original's conversation, or go out twice.
+// original's conversation, go out twice, or never go out.
 
 import type { AccountId, Draft, Message, MessageId } from '@letterbox/protocol'
 import type { Seed, SeedAttachment, SeedMessage, SimMailbox } from '@letterbox/sim-provider/contract'
@@ -12,6 +12,7 @@ import { placeholderContent } from '@letterbox/sim-provider/store'
 import type { CoreClient } from '../src/client.ts'
 import {
   ME,
+  openThread,
   PASSWORD,
   readThread,
   signIn,
@@ -82,8 +83,8 @@ async function begin(t: Scenario, options: CoreOptions = {}) {
 }
 
 /** Starts with the contract delivered, and opens it so its body is there to forward. */
-async function startWithContract(t: Scenario, undoWindow?: number) {
-  const started = await begin(t, undoWindow === undefined ? {} : { undoWindow })
+async function startWithContract(t: Scenario, options: CoreOptions = {}) {
+  const started = await begin(t, options)
   const row = await thread(started.core, 'The contract')
   const original = (await readThread(started.core, row.id))?.messages[0]
   if (original?.body.state !== 'ready') throw new Error('the contract did not load')
@@ -178,7 +179,7 @@ scenario('a forward of a forward carries the same files from the copy the provid
 })
 
 scenario('a forward undone in its window never goes out, and no file is fetched', async (t) => {
-  const { core, box, accountId, original } = await startWithContract(t, HELD_WINDOW)
+  const { core, box, accountId, original } = await startWithContract(t, { undoWindow: HELD_WINDOW })
   const send = await core.command({ kind: 'send', draft: forward(accountId, original.id) })
   const row = await thread(core, 'Fwd: The contract')
   const held = (await readThread(core, row.id))?.messages[0]
@@ -276,7 +277,7 @@ scenario('a forward is refused until the original has loaded, and when it also a
 })
 
 scenario('a forward without some of the original files carries only the rest, and fetches only those', async (t) => {
-  const { core, box, accountId, original } = await startWithContract(t, HELD_WINDOW)
+  const { core, box, accountId, original } = await startWithContract(t, { undoWindow: HELD_WINDOW })
   // The first file comes off, so a file fetched by its place among those carried would be the wrong one.
   const without = original.attachments.slice(0, 1).map((file) => file.blobId)
   const send = await core.command({ kind: 'send', draft: forward(accountId, original.id, { forwardWithout: without }) })
@@ -323,3 +324,128 @@ scenario(
     t.equal(box.sent(), [], 'nothing went out')
   },
 )
+
+scenario("a core killed while it fetches a forward's files sends the forward once after the restart", async (t) => {
+  const first = await startWithContract(t)
+  first.box.holdAttachments()
+  const send = await first.core.command({ kind: 'send', draft: forward(first.accountId, first.original.id) })
+  await first.box.attachmentHeld()
+  await first.core.kill()
+  first.box.releaseAttachments()
+  t.equal(first.box.sent(), [], 'the core stopped before it sent anything')
+
+  // A start runs no pass of its own, so the restart must carry the forward it found due.
+  const core = t.startCore()
+  await core.hello()
+  t.equal((await core.settled(send.change)).result, 'done', 'the restarted core sends it, with no sync')
+  const { raw } = delivered(t, first.box)
+  t.equal(filesOf(raw), expectedFiles(FILES), 'with every file')
+  t.equal(first.box.calls().send, 1, 'in one send')
+})
+
+scenario(
+  'a forward of my forward the provider may not hold yet waits for it, then goes out with its files',
+  async (t) => {
+    // Checks come an hour apart in a four-hour window, which core-sim holds back, so only the
+    // first lookup of the first forward happens.
+    const { core, box, accountId, original } = await startWithContract(t, { confirmWindow: 4 * HELD_WINDOW })
+    box.holdSends()
+    const earlier = await core.command({ kind: 'send', draft: forward(accountId, original.id) })
+    await box.sendHeld()
+    const row = await thread(core, 'Fwd: The contract')
+    const mine = (await readThread(core, row.id))?.messages[0]
+    if (!mine) throw new Error('the first forward has no message')
+    const again = forward(accountId, mine.id, { to: ['erin@example.com'], subject: 'Fwd: Fwd: The contract' })
+    const later = await core.command({ kind: 'send', draft: again })
+    t.equal(later.kind, 'accepted', 'a forward of the first forward is accepted: its text is here')
+    // Wait until its undo window has ended, so its pass comes before the first one's lookup.
+    const open = await openThread(core, (await thread(core, 'Fwd: Fwd: The contract')).id)
+    while (open.latest()?.messages[0]?.delivery?.state !== 'sending') await open.next()
+    open.close()
+
+    // The provider takes the first forward, its answer is lost, and the provider is gone before
+    // the core can look it up. So the core cannot tell where the first forward is.
+    const accounts = core.subscribe({ view: 'accounts' })
+    box.damageNextSendAnswer('disconnect')
+    box.releaseSends()
+    box.setOffline(true)
+    await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
+    const waiting = await thread(core, 'Fwd: Fwd: The contract')
+    t.equal(
+      [(await readThread(core, waiting.id))?.messages[0]?.delivery?.state, box.sent().length],
+      ['sending', 1],
+      'the second forward waits, unsent and not failed, while the first has no copy the core knows of',
+    )
+
+    box.setOffline(false)
+    await sync(core)
+    t.equal(
+      [(await core.settled(earlier.change)).result, (await core.settled(later.change)).result],
+      ['done', 'done'],
+      'once a sync finds the first forward, both settle done',
+    )
+    t.equal(box.sent().length, 2, 'the provider got each forward once')
+    t.equal(filesOf(box.sent()[1]?.raw ?? ''), expectedFiles(FILES), "the second carries the first one's files whole")
+  },
+)
+
+scenario('a forward leaves out a Message-ID too long for its line, and goes out', async (t) => {
+  const { core, box, accountId } = await begin(t)
+  // 972 characters fit after "X-Forwarded-Message-Id: <" and before ">" within 998. 973 do not.
+  const fits = `${'a'.repeat(963)}@sim.test`
+  const over = `${'b'.repeat(964)}@sim.test`
+  for (const [key, messageId] of [
+    ['fits', fits],
+    ['over', over],
+  ] as const) {
+    box.deliver({ ...CONTRACT, key, subject: `Id that ${key}`, attachments: 0, messageId })
+  }
+  await sync(core)
+  for (const [index, subject] of ['Id that fits', 'Id that over'].entries()) {
+    const row = await thread(core, subject)
+    const original = (await readThread(core, row.id))?.messages[0]
+    if (!original) throw new Error(`${subject} did not arrive`)
+    const send = await core.command({
+      kind: 'send',
+      draft: forward(accountId, original.id, { subject: `Fwd: ${subject}` }),
+    })
+    t.equal((await core.settled(send.change)).result, 'done', `the forward of "${subject}" goes out`)
+    const lines = (box.sent()[index]?.raw ?? '').split('\r\n')
+    t.check(
+      lines.every((line) => line.length <= 998),
+      `no line of the forward of "${subject}" is longer than 998 characters`,
+    )
+  }
+  const named = box
+    .sent()
+    .map((copy) => copy.raw.split('\r\n').filter((line) => line.startsWith('X-Forwarded-Message-Id:')))
+  t.equal(named, [[`X-Forwarded-Message-Id: <${fits}>`], []], 'the id that fits is named, the longer one left out')
+})
+
+scenario('a forward of my forward whose answer was lost goes out as soon as a lookup finds the first', async (t) => {
+  // Its checks come an hour apart, which core-sim holds back, so only the first lookup happens.
+  const { core, box, accountId, original } = await startWithContract(t, { confirmWindow: 4 * HELD_WINDOW })
+  box.holdSends()
+  const earlier = await core.command({ kind: 'send', draft: forward(accountId, original.id) })
+  await box.sendHeld()
+  const row = await thread(core, 'Fwd: The contract')
+  const mine = (await readThread(core, row.id))?.messages[0]
+  if (!mine) throw new Error('the first forward has no message')
+  const again = forward(accountId, mine.id, { to: ['erin@example.com'], subject: 'Fwd: Fwd: The contract' })
+  const later = await core.command({ kind: 'send', draft: again })
+  // Wait until its undo window has ended, so it is due while the first is still on its way.
+  const open = await openThread(core, (await thread(core, 'Fwd: Fwd: The contract')).id)
+  while (open.latest()?.messages[0]?.delivery?.state !== 'sending') await open.next()
+
+  box.damageNextSendAnswer('disconnect')
+  box.releaseSends()
+  t.equal((await core.settled(earlier.change)).result, 'done', 'the lookup finds the first forward')
+  t.equal(
+    (await core.settled(later.change)).result,
+    'done',
+    'and the second, which waited for it, goes out at once, with no sync',
+  )
+  open.close()
+  t.equal(box.sent().length, 2, 'the provider got each forward once')
+  t.equal(filesOf(box.sent()[1]?.raw ?? ''), expectedFiles(FILES), "the second carries the first one's files whole")
+})
