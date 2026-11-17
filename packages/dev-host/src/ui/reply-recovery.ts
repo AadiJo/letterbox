@@ -110,9 +110,10 @@ export async function checkMergedConversation(page: Page, relay: Relay) {
   await body(page).fill(ROUTE)
   await openWith(page, 'trip in May', 'Kit Ashworth', 'Are you coming')
 
-  // The merge. The renderer looks for where the reply went, and the relay holds the core's
-  // answers from that search on. Meanwhile Undo shows, but cannot run.
-  const searching = relay.pauseAfterPageSends('Bike trip in May"')
+  // The merge. The renderer looks for where the reply went, reading every conversation with a
+  // send on its way, and the relay holds the core's answers from that search on. No list on
+  // this screen asks for every conversation. Meanwhile Undo shows, but cannot run.
+  const searching = relay.pauseAfterPageSends('"query":{"view":"threads","filter":{}')
   // Not awaited: the core answers this only after the updates the relay holds.
   const merged = page.evaluate(() => window.letterboxDev?.deliver(1))
   await Promise.race([

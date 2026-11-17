@@ -79,7 +79,7 @@ export async function checkComposeRecovery(page: Page, relay: Relay, mailbox: Si
   // a reload keeps following it.
   const finding = { subject: 'Lamp for the studio', said: 'I found a lamp that would suit the studio.' }
   await write(page, finding.subject, finding.said)
-  const looking = relay.pauseAfterPageSends('"query":{"view":"threads"')
+  const looking = relay.pauseAfterPageSends('"query":{"view":"threads","filter":{}')
   await page.keyboard.press('Control+Enter')
   await looking
   equal(
@@ -97,7 +97,7 @@ export async function checkComposeRecovery(page: Page, relay: Relay, mailbox: Si
   // While it is being found, the toast says so and Undo waits. Then Undo is offered.
   const looked = { subject: 'Plinth for the vase', said: 'The plinth is ready for the vase.' }
   await write(page, looked.subject, looked.said)
-  const held = relay.pauseAfterPageSends('"query":{"view":"threads"')
+  const held = relay.pauseAfterPageSends('"query":{"view":"threads","filter":{}')
   await page.keyboard.press('Control+Enter')
   await held
   equal(
