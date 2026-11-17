@@ -40,6 +40,8 @@ ids!(
     MessageId = "Id<'Message'>",
     BlobId = "Id<'Blob'>",
     SignInOptionId = "Id<'SignInOption'>",
+    /// One per sender in Updates, in one account.
+    SenderId = "Id<'Sender'>",
     /// One per subscription.
     SubscriptionId = "Id<'Subscription'>",
     /// One per command.
@@ -61,6 +63,7 @@ macro_rules! minted_by_core {
 }
 
 minted_by_core!(AccountId, MailboxId, ThreadId, MessageId, BlobId, SignInOptionId);
+minted_by_core!(SenderId);
 
 /// Ids a client makes, one per subscription, command or request, so it can match the answers.
 macro_rules! minted_by_client {

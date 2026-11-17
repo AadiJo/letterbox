@@ -1,4 +1,4 @@
-// How times read in the UI, and the two turn thresholds. Every function takes "now" from
+// How times read in the UI, and when a turn is late. Every function takes "now" from
 // the caller, who reads it from clock.ts, so these stay pure.
 
 const MINUTE = 60_000
@@ -7,11 +7,8 @@ const DAY = 24 * HOUR
 
 /** A turn that has waited longer than this is late, and shows in amber. */
 const LATE_AFTER = 7 * DAY
-/** A conversation whose last message is older than this leaves People. */
-const RETIRED_AFTER = 30 * DAY
 
 export const isLate = (time: string, now: number) => now - Date.parse(time) > LATE_AFTER
-export const isRetired = (time: string, now: number) => now - Date.parse(time) > RETIRED_AFTER
 
 /** How long ago `time` (ISO 8601) was, in its largest whole unit: "now", "5m", "3h", "16d" or "2y". */
 export function age(time: string, now: number) {

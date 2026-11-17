@@ -5,14 +5,14 @@ use std::sync::LazyLock;
 
 use letterbox_protocol::{
     Account, AccountId, AccountStatus, Attachment, Body, Mailbox, Message, Person, SignInOption, ThreadDetail,
-    ThreadFilter, ThreadId, ThreadPage, ThreadSummary, Unavailable,
+    ThreadFilter, ThreadId, ThreadPage, Time, Unavailable,
 };
 use regex::Regex;
 
 use crate::adapter::{BodyResult, RemoteAddress};
 use crate::changes::Pending;
 use crate::outbox::delivery;
-use crate::rows::Rows;
+use crate::rows::{Listed, Rows};
 use crate::world::{AccountRecord, MessageRecord, World, blob_id_of, messages_of, scoped};
 
 /// The parts of an answer that live outside the world: what is in flight right now.
@@ -21,6 +21,9 @@ pub trait Live {
     /// The body state for a message whose body is not stored yet.
     fn missing_body(&self, record: &MessageRecord) -> Body;
     fn options(&self) -> &[SignInOption];
+    /// The time a list that splits on age goes by (see live_view.rs). It is read from the clock
+    /// only when such a list opens and when a wake runs (see subscriptions.rs).
+    fn now(&self) -> Time;
 }
 
 pub fn same(a: &str, b: &str) -> bool {
@@ -40,8 +43,10 @@ static REMOTE_CONTENT: LazyLock<Regex> = LazyLock::new(|| {
         .expect("a valid pattern")
 });
 
-/// True when a thread's row passes a list's filter.
-pub fn matches(summary: &ThreadSummary, filter: &ThreadFilter) -> bool {
+/// True when a thread's row passes a list's filter. `retired` reads the clock, so the
+/// list applies it to the threads that pass here (see `window` in live_view.rs).
+pub fn matches(listed: &Listed, filter: &ThreadFilter) -> bool {
+    let summary = &listed.summary;
     if filter.account_id.as_ref().is_some_and(|id| summary.account_id != *id) {
         return false;
     }
@@ -56,6 +61,11 @@ pub fn matches(summary: &ThreadSummary, filter: &ThreadFilter) -> bool {
         return false;
     }
     if filter.unread.is_some_and(|unread| summary.unread != unread) {
+        return false;
+    }
+    if let Some(sender) = &filter.sender
+        && listed.sender.as_ref().is_none_or(|from| from.id != *sender)
+    {
         return false;
     }
     if let Some(text) = &filter.text {
