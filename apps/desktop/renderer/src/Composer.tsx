@@ -53,7 +53,7 @@ export function Dock({ thread }: { thread: ThreadDetail }) {
     if (pending) return <PendingReply pending={pending} />
     return undone ? (
       <div className="flex-none px-10 pt-2 pb-4">
-        <UndoneNotice undone={undone} over={false} />
+        <UndoneNotice undone={undone} over={false} busy={false} />
       </div>
     ) : null
   }
@@ -127,7 +127,7 @@ function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Composer, { 
           <AddressLine id={id} field="bcc" label="Bcc" reply={reply} problem={problem} />
         </>
       )}
-      {undone && <UndoneNotice undone={undone} over />}
+      {undone && <UndoneNotice undone={undone} over busy={busy} />}
       {/* Lines wrap at the 72ch of a message body (Body.tsx), and the scrollbar stays at the box's edge. */}
       <textarea
         aria-label="Message"
@@ -278,7 +278,7 @@ function PendingReply({ pending }: { pending: Pending }) {
  * A reply the core took back while this conversation had a draft with text. Neither is lost
  * until the user picks: restore it over the draft, or discard it.
  */
-function UndoneNotice({ undone, over }: { undone: Undone; over: boolean }) {
+function UndoneNotice({ undone, over, busy }: { undone: Undone; over: boolean; busy: boolean }) {
   return (
     <div
       data-field="undone-notice"
@@ -287,8 +287,10 @@ function UndoneNotice({ undone, over }: { undone: Undone; over: boolean }) {
       <p className="min-w-0 flex-1 truncate text-[12.5px] text-fg2">Undid your earlier reply.</p>
       <button
         type="button"
+        // While the draft waits on the core, nothing can replace it.
+        disabled={busy}
         onClick={() => restoreUndone(undone.change)}
-        className="inline-flex h-7 flex-none items-center rounded-[7px] border border-key bg-pill px-2.5 text-[12.5px] font-medium text-fg hover:bg-hover"
+        className="inline-flex h-7 flex-none items-center rounded-[7px] border border-key bg-pill px-2.5 text-[12.5px] font-medium text-fg enabled:hover:bg-hover disabled:opacity-50"
       >
         {over ? 'Restore it (replaces this draft)' : 'Restore it'}
       </button>

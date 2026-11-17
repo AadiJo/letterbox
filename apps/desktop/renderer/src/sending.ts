@@ -18,7 +18,6 @@
 
 import type { ChangeId, Message, Refusal, ThreadDetail, ThreadId } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
-import { send } from './actions.ts'
 import { client, command } from './core.ts'
 import {
   check,
@@ -34,6 +33,7 @@ import {
   unsure,
 } from './drafts.ts'
 import { threadsMatching, watchThreadDetail } from './threads.ts'
+import { sayTooLate } from './undo.ts'
 
 /** Why a reply did not go, in words, for the editor and for a message marked Not sent. */
 export const REFUSALS = {
@@ -268,15 +268,16 @@ async function deliver(id: ThreadId, reply: Reply, change: ChangeId | undefined)
   follow(id, sent.change, answer.rev)
 }
 
-for (const stored of readStored()) {
-  if (stored.phase === 'undone') {
-    const { change, threadId, reply } = stored
-    undone = new Map([...undone, [change, { change, threadId, reply }]])
-    continue
-  }
-  replies.set(stored.change, { threadId: stored.threadId, reply: stored.reply })
-  if (stored.phase === 'followed') follow(stored.threadId, stored.change, -1)
-  else void deliver(stored.threadId, stored.reply, stored.change)
+// Every stored row is read before any is followed or sent again, since those write storage
+// back, and a row not read yet would be left out.
+const boot = readStored()
+for (const { change, threadId, reply, phase } of boot) {
+  if (phase === 'undone') undone = new Map([...undone, [change, { change, threadId, reply }]])
+  else replies.set(change, { threadId, reply })
+}
+for (const { change, threadId, reply, phase } of boot) {
+  if (phase === 'followed') follow(threadId, change, -1)
+  else if (phase === 'unknown') void deliver(threadId, reply, change)
 }
 
 /**
@@ -348,15 +349,23 @@ export async function undoSend(change?: ChangeId) {
   const offer = change ? pending.get(change) : [...pending.values()].findLast(isOffer)
   if (!offer || !isOffer(offer) || !offer.located) return null
   const held = await client.query({ view: 'thread', threadId: offer.threadId }).catch(() => null)
-  const here = held?.messages.some((message) => message.delivery?.change === offer.change)
-  if (!held || !here) {
+  const delivery = held?.messages.find((message) => message.delivery?.change === offer.change)?.delivery
+  // Past its window already: an undo could only be refused.
+  if (held && delivery && delivery.state !== 'held') {
+    sayTooLate(held.id)
+    return null
+  }
+  if (!held || !delivery) {
     // It moved since the last update. Undo waits until it is found again.
     const current = pending.get(offer.change)
     if (current) setPending(offer.change, { ...current, located: false })
     void relocate(offer.change, -1)
     return null
   }
-  if (!(await send({ kind: 'undo', change: offer.change }))) return null
+  const answer = await client.command({ kind: 'undo', change: offer.change }).catch(() => null)
+  // The core refuses an undo once the window has ended, though the update saying so is still on its way.
+  if (answer?.kind === 'rejected' && answer.reason === 'conflict') sayTooLate(held.id)
+  if (answer?.kind !== 'accepted') return null
   const reply = replies.get(offer.change)?.reply
   replies.delete(offer.change)
   hidePending(held.id)
@@ -379,9 +388,8 @@ export function useUndone(threadId: ThreadId) {
 /** Puts the undone reply `change` in the editor, over the conversation's draft. The user chose this. */
 export function restoreUndone(change: ChangeId) {
   const kept = undone.get(change)
-  if (!kept) return
-  dropUndone(change)
-  restore(kept.threadId, kept.reply)
+  // Kept until it lands: a draft waiting on the core takes nothing (drafts.ts `restore`).
+  if (kept && restore(kept.threadId, kept.reply)) dropUndone(change)
 }
 
 /** Throws the undone reply `change` away. The user chose this. */

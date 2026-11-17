@@ -175,12 +175,14 @@ export function openReply(thread: ThreadDetail, all: boolean) {
 /**
  * Puts one reply back in the editor, exactly as it was: its people, its text and the message
  * it answers, as after an undo or for "Edit and send again". A conversation holds at most one
- * reply on its way (sending.ts), so nothing else is there to merge with or lose.
+ * reply on its way (sending.ts), so nothing else is there to merge with or lose. Returns
+ * whether it landed: a draft waiting on the core takes nothing.
  */
 export function restore(id: ThreadId, reply: Reply) {
-  if (isBusy(drafts.get(id))) return
+  if (isBusy(drafts.get(id))) return false
   opening = id
   set(id, { state: 'open', reply, extra: reply.cc.length > 0 || reply.bcc.length > 0, problem: null })
+  return true
 }
 
 /** Changes the open draft. Any problem shown goes, since the user is fixing it. */

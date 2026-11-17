@@ -15,7 +15,11 @@ export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
     return (
       // A new offer is a new toast, so it rises again.
       <Frame key={notice.serial} undo={notice.undo ? 'ready' : 'none'} onUndo={onUndo}>
-        <Check className="size-3.5 text-green" strokeWidth={2} aria-hidden />
+        {notice.label === "Too late to undo. It's sending." ? (
+          <Clock className="size-3.5 text-fg2" strokeWidth={2} aria-hidden />
+        ) : (
+          <Check className="size-3.5 text-green" strokeWidth={2} aria-hidden />
+        )}
         <span data-field="toast">{notice.label}</span>
       </Frame>
     )
