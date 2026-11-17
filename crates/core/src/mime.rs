@@ -27,7 +27,8 @@ pub struct Letter<'a> {
     pub html: Option<&'a str>,
     /// The Message-ID of the message this forwards, without angle brackets. It goes in
     /// X-Forwarded-Message-Id, as Thunderbird writes it, and not in References: a forward
-    /// does not answer the original, so it starts a conversation of its own.
+    /// does not answer the original, so it starts a conversation of its own. An id too long
+    /// for a line of its own (`MAX_FORWARDED`) is left out.
     pub forwards: Option<&'a str>,
 }
 
@@ -57,6 +58,9 @@ const WORD_BYTES: usize = 39;
 const MAX_REFERENCE: usize = 900;
 /// The longest Message-ID that fits on an In-Reply-To line: 998 less `In-Reply-To: <` and `>`.
 const MAX_IN_REPLY_TO: usize = 998 - 15;
+/// The longest Message-ID that fits on an X-Forwarded-Message-Id line: 998 less
+/// `X-Forwarded-Message-Id: <` and `>`. A longer one is left out.
+const MAX_FORWARDED: usize = 998 - 26;
 
 /// What a reply says about the messages it answers, as it is written. Message-IDs have no
 /// place to fold inside them, so a long one is left out instead: of References past
@@ -121,7 +125,7 @@ pub fn write(letter: &Letter<'_>) -> String {
         let ids: Vec<String> = letter.threading.references.iter().map(|id| format!("<{id}>")).collect();
         push(&mut out, "References", &ids.join("\r\n "));
     }
-    if let Some(original) = letter.forwards.filter(|id| id.len() <= MAX_IN_REPLY_TO) {
+    if let Some(original) = letter.forwards.filter(|id| id.len() <= MAX_FORWARDED) {
         push(&mut out, "X-Forwarded-Message-Id", &format!("<{original}>"));
     }
     push(&mut out, "MIME-Version", "1.0");

@@ -67,14 +67,13 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   {
     name: 'a forward whose files are gone goes out without them',
     file: core('outbox.rs'),
-    find: '                AttachmentResult::Gone => return Ok(None),',
+    find: '                AttachmentResult::Gone => return Ok(Contents::Gone),',
     replace: '                AttachmentResult::Gone => continue,',
     also: [
       {
         file: core('outbox.rs'),
-        find: '        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {\n            return Ok(None);',
-        replace:
-          '        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {\n            return Ok(Some(Vec::new()));',
+        find: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),',
+        replace: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Ready(Vec::new())),',
       },
     ],
     scenarios: 'original is gone before it goes out',
@@ -170,5 +169,47 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     find: '            shown.contains(key) || (',
     replace: '            false || (',
     scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: 'a restart leaves a due send for the next sync, so a forward stopped while fetching its files sits there',
+    file: core('outbox.rs'),
+    find: '        for account_id in due {\n',
+    replace: '        for account_id in due.into_iter().filter(|_| false) {\n',
+    scenarios: "killed while it fetches a forward's files",
+  },
+  {
+    name: 'a forward of a send the provider may not hold yet fails as if its original were gone',
+    file: core('outbox.rs'),
+    find: '                    return Ok(if pending { Contents::Waiting } else { Contents::Gone });',
+    replace: '                    return Ok(if pending { Contents::Gone } else { Contents::Gone });',
+    scenarios: 'may not hold yet',
+  },
+  {
+    name: 'a forward that waits for its original is not carried when a sync finds the original',
+    file: core('outbox.rs'),
+    find: '        for change in arrived.0 {\n            self.waiting_on(&change);\n',
+    replace: '        for change in arrived.0 {\n',
+    scenarios: 'may not hold yet',
+  },
+  {
+    name: 'a forward that waits for its original is not carried when a lookup finds the original',
+    file: core('outbox.rs'),
+    find: '        self.waiting_on(&id);\n',
+    replace: '',
+    scenarios: 'as soon as a lookup finds the first',
+  },
+  {
+    name: 'a forwarded Message-ID of 973 to 983 characters makes a line longer than 998',
+    file: core('mime.rs'),
+    find: 'letter.forwards.filter(|id| id.len() <= MAX_FORWARDED)',
+    replace: 'letter.forwards.filter(|id| id.len() <= MAX_FORWARDED + 11)',
+    scenarios: 'too long for its line',
+  },
+  {
+    name: 'an address in both To and Cc counts as two messages to them',
+    file: core('suggestions.rs'),
+    find: '            for who in everyone.filter(|who| named.insert(who.address.to_lowercase())) {',
+    replace: '            for who in everyone.filter(|who| named.insert(who.address.clone()) || true) {',
+    scenarios: 'put people I wrote to first',
   },
 ]
