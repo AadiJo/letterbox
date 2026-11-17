@@ -2,15 +2,24 @@
 //! and after each one `flush` rebuilds the rows the commit touched (see rows.rs), answers
 //! again every subscription whose view says the commit could change its answer (see
 //! live_view.rs), sends the answers that did change, then starts loading the bodies a
-//! subscribed conversation shows.
+//! subscribed conversation shows. A list that splits on age changes with time alone, so
+//! flush also books a wake for when the next conversation crosses (`book_wake`).
+//!
+//! Such a list reads the time from `State::views_now`, which the clock sets only when one
+//! opens and when a wake runs. No conversation crosses between two wakes, since one is booked
+//! for each crossing, and the real clock's wait reads the wall clock every minute, so a suspend
+//! or a clock set forward or back ends it on time. The commits in between need not read the clock. A fixed clock moves
+//! on every read, so reading it per commit would move it too, under the scenarios' feet.
 
 use std::rc::Rc;
 
 use letterbox_protocol::{
     AccountErrorReason, AccountId, AccountStatus, Body, CoreMessage, MessageId, Query, Rev, SignInOption,
-    SubscriptionId, Unavailable,
+    SubscriptionId, Time, Unavailable,
 };
+use tokio::task::spawn_local;
 
+use crate::clock::parse;
 use crate::live_view::LiveView;
 use crate::maps::{HashMap, HashSet};
 use crate::store::Transaction;
@@ -24,6 +33,8 @@ struct LiveState<'a> {
     unreachable_bodies: &'a HashSet<MessageId>,
     adapters: &'a HashMap<AccountId, Linked>,
     options: &'a [SignInOption],
+    /// The time as the views last read it (see the module docs).
+    now: &'a Time,
 }
 
 impl Live for LiveState<'_> {
@@ -66,6 +77,10 @@ impl Live for LiveState<'_> {
     fn options(&self) -> &[SignInOption] {
         self.options
     }
+
+    fn now(&self) -> Time {
+        self.now.clone()
+    }
 }
 
 impl Inner {
@@ -84,7 +99,7 @@ impl Inner {
     pub(crate) fn flush(self: &Rc<Self>) {
         let rev = self.store.rev();
         let mut fetches = Vec::new();
-        {
+        let wake = {
             let mut state = self.state.borrow_mut();
             let State {
                 world,
@@ -95,13 +110,19 @@ impl Inner {
                 syncing,
                 loading_bodies,
                 unreachable_bodies,
+                views_now,
                 ..
             } = &mut *state;
+            let mut opening = subscriptions.values().filter(|entry| entry.view.is_none());
+            if opening.any(|entry| LiveView::splits_on_age(&entry.query)) {
+                *views_now = self.env.now();
+            }
             let live = LiveState {
                 syncing: &*syncing,
                 unreachable_bodies: &*unreachable_bodies,
                 adapters: &*adapters,
                 options: &self.options,
+                now: &*views_now,
             };
             let touched = world.take_touched();
             let refresh = rows.refresh(world, touched, &self.meter);
@@ -146,10 +167,47 @@ impl Inner {
                     fetches.push((record.account_id.clone(), record.id.clone()));
                 }
             }
+            let views = subscriptions.values().filter_map(|entry| entry.view.as_ref());
+            views.filter_map(|view| view.wakes_at(&live)).min_by_key(parse)
+        };
+        if let Some(at) = wake {
+            self.book_wake(at);
         }
         for (account_id, id) in fetches {
             self.background(&account_id, Rc::clone(self).fetch_body(id));
         }
+    }
+
+    /// Flushes again at `at`, when a conversation crosses a list's cut (see live_view.rs), unless
+    /// a wake at or before `at` is booked already. A later wake is booked when that one runs.
+    /// It also runs early if the clock is set back before `views_now`, which the lists' cut was
+    /// worked out from (see `until_or_back` in clock.rs). Like a send's undo window, the wait is
+    /// not work the core finishes before it closes.
+    fn book_wake(self: &Rc<Self>, at: Time) {
+        let since = {
+            let mut state = self.state.borrow_mut();
+            if state.wake_at.as_ref().is_some_and(|booked| parse(booked) <= parse(&at)) {
+                return;
+            }
+            state.wake_at = Some(at.clone());
+            state.views_now.clone()
+        };
+        let wait = self.env.until_or_back(&at, &since);
+        let core = Rc::clone(self);
+        spawn_local(async move {
+            wait.await;
+            if core.work.is_closed() {
+                return;
+            }
+            {
+                let mut state = core.state.borrow_mut();
+                if state.wake_at.as_ref() == Some(&at) {
+                    state.wake_at = None;
+                }
+                state.views_now = core.env.now();
+            }
+            core.flush();
+        });
     }
 
     /// The only way the world changes.

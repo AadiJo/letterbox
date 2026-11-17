@@ -13,6 +13,7 @@ pub enum Command {
     /// Correct the rule, or hand the thread back to it with `auto`. A turn set holds until the
     /// conversation gets a message sent after its newest one then, from anyone, once the provider
     /// holds it. Then the rule decides again: their reply to a conversation marked done is my turn.
+    /// `none` is Done, and is how a turn in Let go? is let go: it leaves Your turn and Let go? both.
     SetTurn {
         thread_ids: Vec<ThreadId>,
         turn: TurnChoice,

@@ -125,19 +125,60 @@ accountId?: AccountId, mailboxId?: MailboxId, turn?: Turn, unread?: boolean,
 /**
  * Full-text search over the local index.
  */
-text?: string, };
+text?: string, 
+/**
+ * True lists only conversations whose last message is 30 days old or more, false only the
+ * newer ones. With `turn: mine` these are Let go? and Your turn. The core's clock decides,
+ * so a conversation moves from one list to the other while the app runs. Leave out for both.
+ */
+retired?: boolean, 
+/**
+ * Only the conversations Updates groups under this sender (see `SenderSummary`).
+ */
+sender?: SenderId, };
 
 /**
  * Every live view. Add a variant here and a matching one to `Update`.
  */
-export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "view": "mailboxes", accountId?: AccountId, } | { "view": "threads", filter: ThreadFilter, offset: number, limit: number, } | { "view": "thread", threadId: ThreadId, } | { "view": "recipients", accountId: AccountId, prefix: string, limit: number, };
+export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "view": "mailboxes", accountId?: AccountId, } | { "view": "threads", filter: ThreadFilter, offset: number, limit: number, } | { "view": "thread", threadId: ThreadId, } | { "view": "senders", accountId?: AccountId, mailboxId?: MailboxId, offset: number, limit: number, } | { "view": "recipients", accountId: AccountId, prefix: string, limit: number, };
 
 /**
  * The answer to a query. A threads update replaces the whole window.
  */
-export type Update = { "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "recipients", data: Array<Recipient>, };
+export type Update = { "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, };
 
 export type ThreadPage = { total: number, threads: Array<ThreadSummary>, };
+
+/**
+ * One per sender in Updates, in one account.
+ */
+export type SenderId = Id<'Sender'>;
+
+/**
+ * One row of Updates: every automated conversation from one sender, in one account. A
+ * conversation is automated when its newest message from someone else is (see turns.rs in
+ * the core). Its sender is that message's address, compared without case, so news@ and
+ * no-reply@ of one company are two senders. To act on all of a sender's conversations, list
+ * them with `sender` in a threads filter and send one command naming their ids.
+ */
+export type SenderSummary = { id: SenderId, accountId: AccountId, 
+/**
+ * The name and address the newest conversation's message came from.
+ */
+name: string | null, address: string, 
+/**
+ * How many conversations, how many messages are in them, and how many of those are unread.
+ */
+threads: number, messages: number, unread: number, 
+/**
+ * The newest conversation's subject, and when its last message came.
+ */
+subject: string, lastMessageAt: string, };
+
+/**
+ * One window of Updates, newest sender first. `total` counts every sender in it.
+ */
+export type SenderPage = { total: number, senders: Array<SenderSummary>, };
 
 /**
  * Someone a `recipients` view suggests for a recipient field on `account_id`: a person the
@@ -290,6 +331,6 @@ export type AttachmentError = "offline" | "gone" | "too-large";
 
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "recipients", data: Array<Recipient>, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
 
 export type ProtocolErrorReason = "version-mismatch" | "malformed";

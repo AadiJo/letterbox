@@ -27,6 +27,7 @@ mod answer;
 mod attachment;
 mod command;
 mod ids;
+mod lists;
 mod outcome;
 mod recipients;
 mod send;
@@ -36,7 +37,10 @@ use std::num::NonZeroU64;
 pub use answer::{Answer, Empty, False, Never, True};
 pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
 pub use command::{Command, TurnChoice};
-pub use ids::{AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SignInOptionId, SubscriptionId, ThreadId};
+pub use ids::{
+    AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SenderId, SignInOptionId, SubscriptionId, ThreadId,
+};
+pub use lists::{SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use recipients::Recipient;
 pub use send::{Delivery, Draft};
@@ -249,28 +253,6 @@ pub struct Attachment {
 
 // ---------------------------------------------------------------- subscribe
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadFilter {
-    /// Leave out to list every account together.
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub account_id: Option<AccountId>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub mailbox_id: Option<MailboxId>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub turn: Option<Turn>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub unread: Option<bool>,
-    /// Full-text search over the local index.
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub text: Option<String>,
-}
-
 /// Every live view. Add a variant here and a matching one to `Update`.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "view", rename_all = "kebab-case", rename_all_fields = "camelCase")]
@@ -291,6 +273,17 @@ pub enum Query {
     Thread {
         thread_id: ThreadId,
     },
+    /// Updates: the automated conversations in the account and mailbox given, grouped by sender.
+    Senders {
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        account_id: Option<AccountId>,
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        mailbox_id: Option<MailboxId>,
+        offset: u64,
+        limit: NonZeroU64,
+    },
     /// People to suggest in a recipient field, best first (see `Recipient`).
     Recipients {
         account_id: AccountId,
@@ -308,6 +301,7 @@ pub enum Update {
     Mailboxes { data: Vec<Mailbox> },
     Threads { data: ThreadPage },
     Thread { data: Option<ThreadDetail> },
+    Senders { data: SenderPage },
     Recipients { data: Vec<Recipient> },
 }
 

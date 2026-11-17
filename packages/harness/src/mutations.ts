@@ -18,6 +18,7 @@ import { type Mutation, runBreaks } from './breaks.ts'
 import { ATTACHMENT_MUTATIONS } from './mutations-attachments.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
+import { PEOPLE_MUTATIONS } from './mutations-people.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
 import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
@@ -321,8 +322,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'an open list keeps a thread after it leaves the filter',
     file: core('live_view.rs'),
-    find: 'moved |= listed.remove(&place(before));',
-    replace: 'moved |= listed.contains(&place(before));',
+    find: 'moved |= listed.remove(&place(&before.summary));',
+    replace: 'moved |= listed.contains(&place(&before.summary));',
     scenarios: 'open list follows',
   },
   {
@@ -416,6 +417,7 @@ await runBreaks([
   ...SEND_MUTATIONS,
   ...UNDO_MUTATIONS,
   ...GMAIL_MUTATIONS,
+  ...PEOPLE_MUTATIONS,
   ...TURN_MUTATIONS,
   ...FORWARD_MUTATIONS,
   ...ATTACHMENT_MUTATIONS,
