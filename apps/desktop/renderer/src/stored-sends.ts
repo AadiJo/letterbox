@@ -1,14 +1,20 @@
-// The sends sending.ts keeps across a reload, in session storage: their rows, how a row is
-// checked when read, and the read and the write. Storage may be missing or refuse, and then
-// nothing is kept. sending.ts decides what the rows hold and what each phase means.
+// What the renderer keeps across a reload, in session storage: the sends sending.ts follows,
+// and the compose page's draft (drafts.ts). Here are their rows, how a row is checked when
+// read, and the read and the write. Storage may be missing or refuse, and then nothing is
+// kept. sending.ts and drafts.ts decide what the rows hold and what each phase means.
 
 import type { ChangeId, ThreadId } from '@letterbox/protocol'
 import type { Reply } from './drafts.ts'
 
 const KEY = 'letterbox.sends'
+const PAGE_KEY = 'letterbox.page'
 
-/** One send in storage, by the phase it was in. Each phase is one way sending.ts follows or keeps it. */
-export type Stored = { change: ChangeId; threadId: ThreadId; reply: Reply } & (
+/**
+ * One send in storage, by the phase it was in. Each phase is one way sending.ts follows or
+ * keeps it. `threadId` is the conversation that holds it, or null for a new conversation the
+ * core has not shown yet.
+ */
+export type Stored = { change: ChangeId; threadId: ThreadId | null; reply: Reply } & (
   | { phase: 'unknown' | 'followed' | 'undone' }
   | { phase: 'undoing'; undo: ChangeId }
 )
@@ -23,20 +29,23 @@ const isRecipients = (value: unknown) =>
       (person.name === null || typeof person.name === 'string'),
   )
 
-/** A stored send, as `saveStored` wrote it. Anything else in storage is ignored. */
-function isStored(value: unknown): value is Stored {
-  if (!isObject(value) || typeof value.change !== 'string' || typeof value.threadId !== 'string') return false
-  const { phase } = value
-  const known =
-    phase === 'unknown' ||
-    phase === 'followed' ||
-    phase === 'undone' ||
-    (phase === 'undoing' && typeof value.undo === 'string')
-  if (!known) return false
-  const { reply } = value
+const isForwarding = (value: unknown) =>
+  isObject(value) &&
+  typeof value.of === 'string' &&
+  typeof value.threadId === 'string' &&
+  Array.isArray(value.without) &&
+  value.without.every((blob) => typeof blob === 'string')
+
+/**
+ * A reply as drafts.ts holds it. One kept before forwards and new messages has no `forward`,
+ * and reads as a reply (`withDefaults`).
+ */
+function isReply(reply: unknown): reply is Reply {
   return (
     isObject(reply) &&
-    ['accountId', 'inReplyTo', 'subject', 'text'].every((key) => typeof reply[key] === 'string') &&
+    ['accountId', 'subject', 'text'].every((key) => typeof reply[key] === 'string') &&
+    (reply.inReplyTo === null || typeof reply.inReplyTo === 'string') &&
+    (reply.forward === undefined || reply.forward === null || isForwarding(reply.forward)) &&
     isRecipients(reply.to) &&
     isRecipients(reply.cc) &&
     isRecipients(reply.bcc) &&
@@ -45,11 +54,31 @@ function isStored(value: unknown): value is Stored {
   )
 }
 
+/** `reply` with the fields a row from before they existed leaves out. */
+const withDefaults = (reply: Reply): Reply => ({ ...reply, forward: reply.forward ?? null })
+
+/** A stored send, as `saveStored` wrote it. Anything else in storage is ignored. */
+function isStored(value: unknown): value is Stored {
+  if (!isObject(value) || typeof value.change !== 'string') return false
+  if (value.threadId !== null && typeof value.threadId !== 'string') return false
+  const { phase } = value
+  const known =
+    phase === 'unknown' ||
+    phase === 'followed' ||
+    phase === 'undone' ||
+    (phase === 'undoing' && typeof value.undo === 'string')
+  // A row without a conversation is a new one's, which never answers a message.
+  return known && isReply(value.reply) && (value.threadId !== null || value.reply.inReplyTo !== null)
+}
+
 /** The rows the last load saved, at boot. Empty when storage is missing, refuses, or holds nothing of ours. */
 export function readStored(): Stored[] {
   try {
     const parsed: unknown = JSON.parse(sessionStorage.getItem(KEY) ?? '[]')
-    return Array.isArray(parsed) ? parsed.filter(isStored) : []
+    // Freshly parsed, so each row can take its defaults in place.
+    return Array.isArray(parsed)
+      ? parsed.filter(isStored).map((row) => Object.assign(row, { reply: withDefaults(row.reply) }))
+      : []
   } catch {
     return []
   }
@@ -61,5 +90,30 @@ export function saveStored(rows: readonly Stored[]) {
     sessionStorage.setItem(KEY, JSON.stringify(rows))
   } catch {
     // Without storage, a reload finds held replies only as the reader shows them.
+  }
+}
+
+/** The compose page's draft, and whether the page was up. */
+export type StoredPage = { reply: Reply; open: boolean }
+
+/** The page's draft the last load kept, or null. */
+export function readStoredPage(): StoredPage | null {
+  try {
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(PAGE_KEY) ?? 'null')
+    if (!isObject(parsed) || typeof parsed.open !== 'boolean' || !isReply(parsed.reply)) return null
+    // The page holds new messages and forwards only.
+    return parsed.reply.inReplyTo === null ? { reply: withDefaults(parsed.reply), open: parsed.open } : null
+  } catch {
+    return null
+  }
+}
+
+/** Keeps `page` for the next load, or nothing. */
+export function saveStoredPage(page: StoredPage | null) {
+  try {
+    if (page) sessionStorage.setItem(PAGE_KEY, JSON.stringify(page))
+    else sessionStorage.removeItem(PAGE_KEY)
+  } catch {
+    // Without storage, a reload starts the page empty.
   }
 }
