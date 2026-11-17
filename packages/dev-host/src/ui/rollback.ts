@@ -11,7 +11,7 @@ import type { Browser } from 'playwright'
 import { logChildrenTo, stopChildren } from '../children.ts'
 import { buildCore, type Paths } from '../core.ts'
 import { startServer } from '../server.ts'
-import { equal, openPage, root } from './record.ts'
+import { equal, openPage, root, ROW_HEIGHT } from './record.ts'
 
 const seed = devSeeds['people-first']
 const STATE = join(root, '.letterbox/ui-check-rollback')
@@ -95,7 +95,7 @@ export async function checkRollback(browser: Browser) {
           look()
         }),
     )
-    equal(settled, { animations: 0, opacity: '1', height: 73 }, 'the row the core put back shows whole')
+    equal(settled, { animations: 0, opacity: '1', height: ROW_HEIGHT }, 'the row the core put back shows whole')
     equal(await page.getByRole('status').filter({ hasText: 'Archived' }).count(), 0, 'its "Archived" toast goes')
   } finally {
     await opened.close()

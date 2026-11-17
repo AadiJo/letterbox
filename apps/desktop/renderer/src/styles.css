@@ -2,44 +2,92 @@
 @import '@fontsource-variable/inter';
 
 /*
- * T3 Code's Graphite theme, dark, in a macOS Tahoe window. Dark mode only.
- * Text uses four neutral steps: fg (245), fg2 (210), muted (165), faint (140).
- * Blue is only for unread and progress. Amber is only for turns that waited past 7 days.
- * Green is only for finished: the undo toast and an empty Your turn.
- * Blue is also the one Send button, the only filled button in the window.
- * Red is only for what did not work: an address the core cannot send to and a reply that was not sent.
- * The default palette is cleared, so every color in the renderer is one of these.
+ * C2: flat surfaces in clear lightness steps, and elevation only on what floats. Dark mode only.
+ * Sidebar, list and reader are three flat steps. Only the selected row, the toast and tooltips
+ * are raised. The reply field and the reply bar are wells, sunk into the reader.
+ *
+ * Text uses four neutral steps: fg, fg2, muted (all secondary information) and faint (decoration
+ * only: keycap text). Blue is unread and the one Send button. Amber is only for turns that waited
+ * past 7 days. Green is only for finished. Red is only for what did not work.
+ * People and labels are tinted by hue (hue.ts), never orange, through the `tint` colors below.
+ *
+ * The default palette, type scale and shadows are cleared, so every color, size and shadow in the
+ * renderer is one of these. lint/rules/renderer-design-tokens.ts keeps raw values out of the code.
  */
 @theme {
   --color-*: initial;
   --color-desk: #000;
-  --color-win: #141415;
-  --color-panel: #1c1c1e;
-  --color-raised: #212123;
-  --color-hover: #252528;
-  --color-line: #262627;
-  --color-line2: #333335;
-  --color-hair: #1f1f21;
-  --color-key: #3a3a3c;
+  --color-side: #0f0f11;
+  --color-list: #151517;
+  --color-reader: #1b1b1e;
+  --color-sel: #2a2a2f;
+  --color-float: #2b2b30;
+  --color-well: #121214;
+  --color-line: rgb(255 255 255 / 6%);
+  --color-hover: rgb(255 255 255 / 8%);
+  --color-pill: rgb(255 255 255 / 8%);
+  --color-nav: rgb(255 255 255 / 7%);
+  --color-keycap: rgb(255 255 255 / 12%);
   --color-fg: #f5f5f5;
   --color-fg2: #d2d2d2;
-  --color-muted: #a5a5a5;
-  --color-faint: #8c8c8c;
-  --color-body: #e2e2e2;
-  --color-blue: #4d9cff;
+  --color-muted: #a3a3a3;
+  --color-faint: #767676;
+  --color-section: #8f8f8f;
+  --color-sep: #4f4f4f;
+  --color-read: #b9b9b9;
+  --color-read2: #cfcfcf;
+  --color-prose: #e4e4e4;
+  --color-blue: #2f7cf6;
+  --color-blue-deep: #1f5fc9;
   --color-amber: #ff905e;
-  --color-green: #3fb871;
+  --color-green: #3fcf7d;
   --color-red: #ff6a63;
-  --color-sel: #2c2c31;
-  --color-pill: #2c2c2e;
-  --color-pill-sel: #3e3e44;
   --color-paper: #fff;
 
   --font-sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
 
+  /* The type scale. Each size carries its line height. */
+  --text-*: initial;
+  /* Initials in an avatar. */
+  --text-tiny: 10px;
+  --text-tiny--line-height: 1;
+  --text-key: 11px;
+  --text-key--line-height: 16px;
+  --text-caption: 11.5px;
+  --text-caption--line-height: 16px;
+  --text-meta: 12px;
+  --text-meta--line-height: 16px;
+  --text-addr: 12.5px;
+  --text-addr--line-height: 18px;
+  --text-row: 13px;
+  --text-row--line-height: 18px;
+  --text-subject: 14px;
+  --text-subject--line-height: 20px;
+  --text-body: 16px;
+  --text-body--line-height: 26px;
+  --text-head: 17px;
+  --text-head--line-height: 22px;
+  --text-title: 25px;
+  --text-title--line-height: 32px;
+
+  /* The only shadows. Raised floats over the list, float over everything, well sinks in. */
+  --shadow-*: initial;
+  --shadow-raised:
+    inset 0 0 0 1px rgb(255 255 255 / 8%), inset 0 1px 0 rgb(255 255 255 / 5%), 0 1px 2px rgb(0 0 0 / 50%),
+    0 6px 18px rgb(0 0 0 / 35%);
+  --shadow-float:
+    inset 0 0 0 1px rgb(255 255 255 / 10%), inset 0 1px 0 rgb(255 255 255 / 5%), 0 2px 6px rgb(0 0 0 / 40%),
+    0 16px 40px rgb(0 0 0 / 55%);
+  --shadow-well: inset 0 0 0 1px rgb(255 255 255 / 7.5%), inset 0 1px 2px rgb(0 0 0 / 50%);
+  --shadow-outline: inset 0 0 0 1px rgb(255 255 255 / 14%);
+  /* Under the band above a scrolled conversation: soft, and gone within 10 px. */
+  --shadow-band: 0 2px 8px rgb(0 0 0 / 35%);
+
   /* Below this width the sidebar collapses behind a toggle and search shrinks to an icon. */
   --breakpoint-wide: 1100px;
+  /* From this width the list pane takes its widest size. */
+  --breakpoint-full: 1600px;
 
   /*
    * Motion, with motion.ts. Tailwind's own animations are cleared: they loop (spin, ping, pulse).
@@ -71,6 +119,50 @@
       transform: translateY(4px);
     }
   }
+}
+
+/*
+ * A person's or a label's color, from the `--hue` an element sets (hue.ts). Inline, so each
+ * element's own hue fills in: a fill, the text on it, and a dot.
+ */
+@theme inline {
+  --color-tint: hsl(var(--hue) 70% 60% / 16%);
+  --color-tint-fg: hsl(var(--hue) 75% 75%);
+  --color-tint-dot: hsl(var(--hue) 72% 70%);
+}
+
+/* Styles for the macOS app, where the shell draws the traffic lights over the page (main.tsx sets the platform). */
+@custom-variant mac (&:where([data-platform='darwin'] *));
+
+/*
+ * The band across the top of every pane: the sidebar's account, the list's title and the
+ * reader's toolbar. Each starts its first element on one line, 36 px down: the Done button's
+ * outline, the account's avatar and the title's capitals (`cap-top`) all touch it. That leaves
+ * room for a toolbar tooltip above its button. The desktop shell puts macOS's traffic lights on
+ * the same line (apps/desktop/shell/src/main/window.ts).
+ */
+@utility top-band {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  height: 76px;
+  padding-top: 36px;
+}
+
+/* Trims the space above a line's capitals, so text tops line up with boxes beside them. */
+@utility cap-top {
+  text-box: trim-start cap alphabetic;
+}
+
+/*
+ * The reading column: 720 px at most, and never more than 24 px further from the list than
+ * the reader's own padding, so in a wide window it stays by the list instead of floating mid-pane.
+ * The toolbar, the subject, the messages and the reply all sit in it.
+ */
+@utility reading-column {
+  width: 100%;
+  max-width: 720px;
+  margin-left: min(24px, max(0px, calc((100% - 720px) / 2)));
 }
 
 /* Reduced motion makes every step instant. motion.ts checks the same setting. */

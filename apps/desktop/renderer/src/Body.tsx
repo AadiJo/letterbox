@@ -20,6 +20,7 @@ const POLICY = "default-src 'none'; img-src data: cid:; font-src data:; style-sr
  */
 const htmlDocument = (html: string) =>
   `<!doctype html><meta http-equiv="Content-Security-Policy" content="${POLICY}"><meta charset="utf-8"><base target="_blank">` +
+  // oxlint-disable-next-line letterbox/renderer-design-tokens -- the frame is its own light document, which the app's tokens never reach
   '<style>html{color-scheme:light}body{margin:0;padding:16px;font:15px/23px -apple-system,system-ui,sans-serif;color:#1d1d1f;overflow-wrap:anywhere}img{max-width:100%;height:auto}</style>' +
   html
 
@@ -30,8 +31,8 @@ const UNAVAILABLE = {
 } as const
 
 export function Body({ body }: { body: MessageBody }) {
-  if (body.state === 'loading') return <p className="text-[13px] text-muted">Loading the message</p>
-  if (body.state === 'unavailable') return <p className="text-[13px] text-muted">{UNAVAILABLE[body.reason]}</p>
+  if (body.state === 'loading') return <p className="text-row text-muted">Loading the message</p>
+  if (body.state === 'unavailable') return <p className="text-row text-muted">{UNAVAILABLE[body.reason]}</p>
   if (body.html !== null) return <HtmlBody html={body.html} />
   return (
     <div data-field="body">
@@ -40,8 +41,8 @@ export function Body({ body }: { body: MessageBody }) {
         .filter((paragraph) => paragraph.trim() !== '')
         .map((paragraph, index) => (
           // Paragraphs have no identity beyond their place in a body that never changes.
-          // Capped near 72 characters a line, a comfortable measure. HTML bodies set their own widths.
-          <p key={index} className="mb-3 max-w-[72ch] text-[15px] leading-[23px] whitespace-pre-wrap text-body">
+          // Capped at 62 characters a line at 16/26, a calm measure. HTML bodies set their own widths.
+          <p key={index} className="mb-4 max-w-[62ch] text-body whitespace-pre-wrap text-prose last:mb-0">
             {paragraph}
           </p>
         ))}

@@ -21,24 +21,36 @@ export const ROUTE = 'Which route are we taking?'
 export const GROUP = {
   key: 'group-1',
   mailboxes: ['inbox'],
-  from: { name: 'Maya Lindqvist', address: 'maya@lindqvist.example' },
+  from: { name: 'Maya Lindqvist', address: 'maya@haldenstudio.test' },
   to: [
     { name: 'Robin Vale', address: ME },
-    { name: 'Tomas Okafor', address: 'tomas.okafor@fernway.example' },
+    { name: 'Tomas Okafor', address: 'tomas.okafor@fernmail.test' },
   ],
-  cc: [{ name: 'Priya Raman', address: 'priya@ramanstudio.example' }],
+  cc: [{ name: 'Priya Raman', address: 'priya@ramanpress.test' }],
   subject: 'Picnic on Sunday',
   text: 'Hi all, can each of you bring something on Sunday?',
   sentAt: new Date(Date.parse(seed.now) - 10 * 60_000).toISOString(),
+}
+
+/** The user's own message, sent only to Cc: Reply all is the one way to answer it. */
+export const CC_ONLY = {
+  key: 'cc-only-1',
+  mailboxes: ['sent'],
+  from: { name: 'Robin Vale', address: ME },
+  to: [],
+  cc: [{ name: 'Owen Hale', address: 'owen.hale@studiohale.test' }],
+  subject: 'Studio party list',
+  text: 'Copying you in on the list for Friday.',
+  sentAt: new Date(Date.parse(seed.now) - 20 * 60_000).toISOString(),
 }
 
 /** Tomas answers GROUP, everyone still on it, while a reply to Maya waits in its window. */
 export const TOMAS = {
   key: 'group-2',
   mailboxes: ['inbox'],
-  from: { name: 'Tomas Okafor', address: 'tomas.okafor@fernway.example' },
+  from: { name: 'Tomas Okafor', address: 'tomas.okafor@fernmail.test' },
   to: [
-    { name: 'Maya Lindqvist', address: 'maya@lindqvist.example' },
+    { name: 'Maya Lindqvist', address: 'maya@haldenstudio.test' },
     { name: 'Robin Vale', address: ME },
   ],
   cc: GROUP.cc,
@@ -102,6 +114,7 @@ export const lastSend = (relay: Relay) =>
 
 export const dock = (page: Page) => page.locator('section[aria-label="Reply"]')
 export const bar = (page: Page) => page.locator('[data-field="reply-bar"]')
+export const replyAll = (page: Page) => page.getByRole('button', { name: 'Reply all', exact: true })
 export const body = (page: Page) => dock(page).getByRole('textbox', { name: 'Message' })
 export const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
 export const reason = (page: Page) => page.locator('[data-field="reason"]').textContent()

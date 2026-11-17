@@ -12,6 +12,9 @@ export const ARTIFACTS = join(root, 'artifacts/ui')
 /** The longest any one wait in a check may take. */
 export const WAIT_MS = 15_000
 
+/** A list row's height in px: the renderer's ROW_HEIGHT (apps/desktop/renderer/src/Row.tsx). */
+export const ROW_HEIGHT = 78
+
 /** The window sizes every scene is captured at. */
 export const SIZES = {
   wide: { width: 1440, height: 900 },
@@ -229,3 +232,52 @@ export async function capture(page: Page, name: string) {
   await shot(SIZES.narrow, `${name}-narrow.png`)
   await page.setViewportSize(SIZES.wide)
 }
+
+/** The C2 design's screens, each named for the mock it is compared with: `c2-<screen>.png`. */
+export type C2Screen = 'people-1440' | 'people-1920' | 'done-1440' | 'reply-1440' | 'narrow-1024'
+
+const C2_SIZES = {
+  'people-1440': SIZES.wide,
+  'people-1920': SIZES.full,
+  'done-1440': SIZES.wide,
+  'reply-1440': SIZES.wide,
+  'narrow-1024': SIZES.narrow,
+} as const satisfies Record<C2Screen, (typeof SIZES)[keyof typeof SIZES]>
+
+/**
+ * Screenshots the page as `c2-<screen>.png` at the screen's size and twice its pixels, as the
+ * mocks are, then gives the page back its own size. `before` runs once the page is at that
+ * size, for a hover that must land on the final layout.
+ */
+export async function captureC2(page: Page, screen: C2Screen, before?: () => Promise<void>) {
+  const size = C2_SIZES[screen]
+  const cdp = await page.context().newCDPSession(page)
+  await page.setViewportSize(size)
+  await cdp.send('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 2, mobile: false })
+  await before?.()
+  // Every one-shot animation finished, as `capture` has them. Playwright's own screenshot
+  // keeps its scale of 1, so the page takes this one itself.
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().map((animation) => animation.finished)))
+  const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' })
+  writeFileSync(join(ARTIFACTS, `c2-${screen}.png`), Buffer.from(data, 'base64'))
+  await cdp.send('Emulation.clearDeviceMetricsOverride')
+  await cdp.detach()
+  // Playwright sends its own size again, which the override replaced.
+  await page.setViewportSize(SIZES.wide)
+}
+
+/** A box on screen, as `boxOf` reads it. */
+export type Box = { left: number; top: number; right: number; bottom: number }
+
+/** Where `selector`'s first match is on screen. Throws if nothing matches or it is hidden. */
+export async function boxOf(page: Page, selector: string): Promise<Box> {
+  const found = await page.locator(selector).first().boundingBox()
+  if (!found) throw new Error(`the page shows no ${selector}`)
+  return { left: found.x, top: found.y, right: found.x + found.width, bottom: found.y + found.height }
+}
+
+/** True when two boxes share any area. */
+export const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+/** A box's vertical middle, to the nearest half pixel. */
+export const middle = (box: Box) => Math.round(box.top + box.bottom) / 2

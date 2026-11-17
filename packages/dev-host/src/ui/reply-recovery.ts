@@ -26,7 +26,7 @@ import {
 export async function checkBccAfterReload(page: Page) {
   // A reload that cannot read session storage rebuilds a held reply from its message, which
   // keeps no Bcc. Undo brings it back saying so, and Send waits until the user has looked.
-  await open(page, 'Invoice question')
+  await open(page, 'Invoice 2291, line 4')
   await page.keyboard.press('r')
   await dock(page).getByRole('button', { name: 'Cc Bcc' }).click()
   await dock(page).locator('input[data-line="bcc"]').fill('ledger@harbourlane.example')
@@ -36,7 +36,7 @@ export async function checkBccAfterReload(page: Page) {
   await heldInvoice.waitFor()
   await page.evaluate(() => void (window.name = 'no-session-storage'))
   await page.reload()
-  await open(page, 'Invoice question')
+  await open(page, 'Invoice 2291, line 4')
   await heldInvoice.waitFor()
   await toast(page).getByRole('button', { name: /^Undo/ }).click()
   await heldInvoice.waitFor({ state: 'detached' })
@@ -46,6 +46,19 @@ export async function checkBccAfterReload(page: Page) {
     [(await bccNotice.count()) === 1 ? await bccNotice.textContent() : '', await sendButton(page).isDisabled()],
     ["Bcc wasn't kept after the reload. Check recipients before sending.", true],
     'a reply rebuilt without its Bcc says so, and Send waits',
+  )
+  // With a draft taller than the dock, the notice stays in view above the footer, and the
+  // footer says why Send waits. Nothing scrolls it into view first.
+  await body(page).fill(`${INVOICE}\n\n${'One more line.\n'.repeat(30)}`)
+  const shown = await bccNotice.evaluate((notice) => {
+    const box = notice.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return Boolean(hit && notice.contains(hit))
+  })
+  equal(
+    [shown, await dock(page).locator('footer [role="status"]').textContent()],
+    [true, 'Check the recipients before sending'],
+    'with a long draft, the Bcc notice stays in view and the footer says why Send waits',
   )
   await bccNotice.click()
   equal(

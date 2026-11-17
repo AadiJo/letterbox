@@ -11,6 +11,7 @@ import noProviderNames from './rules/no-provider-names.ts'
 import noStdoutInCore from './rules/no-stdout-in-core.ts'
 import noUiInShell from './rules/no-ui-in-shell.ts'
 import rendererClock from './rules/renderer-clock.ts'
+import rendererDesignTokens from './rules/renderer-design-tokens.ts'
 import rendererMotion from './rules/renderer-motion.ts'
 import rendererThreadLists from './rules/renderer-thread-lists.ts'
 import requireSuppressionReason from './rules/require-suppression-reason.ts'
@@ -28,6 +29,7 @@ export default {
     'no-stdout-in-core': noStdoutInCore,
     'no-ui-in-shell': noUiInShell,
     'renderer-clock': rendererClock,
+    'renderer-design-tokens': rendererDesignTokens,
     'renderer-motion': rendererMotion,
     'renderer-thread-lists': rendererThreadLists,
     'require-suppression-reason': requireSuppressionReason,

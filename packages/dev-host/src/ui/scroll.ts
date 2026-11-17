@@ -6,7 +6,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import type { Browser } from 'playwright'
-import { ARTIFACTS, equal, openPage } from './record.ts'
+import { ARTIFACTS, equal, openPage, ROW_HEIGHT } from './record.ts'
 
 const seed = devSeeds.many
 const total = seed.seed.messages.length
@@ -57,7 +57,7 @@ export async function checkScroll(browser: Browser, url: string) {
       requestAnimationFrame(tick)
     })
     return { frames: frames.slice(1), rows, blankFrames }
-  }, ROWS_PER_FRAME * 73)
+  }, ROWS_PER_FRAME * ROW_HEIGHT)
 
   // The oldest conversation arrives at the bottom once the window catches up.
   const oldest = seed.seed.messages[0]?.subject ?? ''

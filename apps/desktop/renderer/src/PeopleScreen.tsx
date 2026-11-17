@@ -47,12 +47,17 @@ export function PeopleScreen({ chrome, accounts }: { chrome: Chrome; accounts: r
       list.current?.querySelector(`[data-row="${selection.selected}"]`)?.scrollIntoView({ block: 'nearest' })
   }, [selection.selected])
 
-  const subtitle = people ? `${people.mine.length} wait on you · ${people.theirs.length} waiting on others` : 'Loading'
+  const subtitle = people
+    ? {
+        wide: `${people.mine.length} wait on you · ${people.theirs.length} waiting on others`,
+        narrow: `${people.mine.length} yours · ${people.theirs.length} waiting`,
+      }
+    : 'Loading'
   return (
     <Screen title="People" subtitle={subtitle} chrome={chrome} accounts={accounts} selection={selection}>
       <div
         ref={list}
-        className="min-h-0 flex-1 overflow-y-auto pb-1 [scrollbar-color:var(--color-line2)_transparent] [scrollbar-width:thin]"
+        className="min-h-0 flex-1 overflow-y-auto pb-2 [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin]"
       >
         {people && (
           <>
@@ -87,7 +92,7 @@ function Section({ title, icon: Icon, slot, ids, selection, empty }: SectionProp
   const { rows, held } = useHeld(ids)
   return (
     <section aria-label={title}>
-      <h3 className="flex items-center gap-[7px] px-[18px] pt-3 pb-1.5 text-xs font-semibold text-fg2">
+      <h3 className="flex h-[34px] items-center gap-[7px] pr-5 pl-[22px] text-meta font-semibold text-fg2">
         <Icon className="size-3.5 text-muted" strokeWidth={1.75} aria-hidden />
         {title}
         {/* Keyed by the count, so a new count drops into place. */}
@@ -116,9 +121,9 @@ function Section({ title, icon: Icon, slot, ids, selection, empty }: SectionProp
 /** Your turn with nothing in it. */
 function NothingWaits() {
   return (
-    <div className="flex animate-appear flex-col items-center gap-1.5 px-[18px] pt-[22px] pb-[18px]" data-field="empty">
+    <div className="flex animate-appear flex-col items-center gap-1.5 px-5 pt-[22px] pb-[18px]" data-field="empty">
       <CircleCheck className="size-7 text-green" strokeWidth={1.75} aria-hidden />
-      <b className="text-[13.5px] font-semibold">Nothing waits on you</b>
+      <b className="text-subject font-semibold">Nothing waits on you</b>
     </div>
   )
 }
