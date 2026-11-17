@@ -319,7 +319,9 @@ scenario(
 
     // The provider takes the first forward, its answer is lost, and the provider is gone before
     // the core can look it up. So the core cannot tell where the first forward is.
+    // Its first answer comes while the send is still held, so it always shows the account idle.
     const accounts = core.subscribe({ view: 'accounts' })
+    await accounts.next()
     box.damageNextSendAnswer('disconnect')
     box.releaseSends()
     box.setOffline(true)
