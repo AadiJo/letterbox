@@ -6,7 +6,8 @@
 //     anything reaches the core. The core checks again, and its refusal shows beside Send.
 //   - Once the core accepts, the draft goes and the reply is the core's: the conversation
 //     shows it at once, marked by its `delivery`. A new message or a forward starts a
-//     conversation of its own, which is found by its change id, as a merged one is (`relocate`).
+//     conversation of its own, which the core's `change` view names, as it names the one a
+//     merge moved a reply to (`relocate`).
 //   - The core stores a send before it answers, so a lost answer does not mean it was not
 //     sent. The draft then waits as Checking under its change id, which is kept across a
 //     reload, and the next connection sends the same change again. The core answers a
@@ -46,7 +47,7 @@ import {
 } from './drafts.ts'
 import { refusal } from './refusals.ts'
 import { readStored, saveStored, type Stored } from './stored-sends.ts'
-import { threadHolding, watchThreadDetail } from './threads.ts'
+import { watchThreadDetail } from './threads.ts'
 import { sayTooLate } from './undo.ts'
 
 /**
@@ -235,15 +236,16 @@ function watch(change: ChangeId, threadId: ThreadId, rev: number) {
 
 /**
  * Finds the conversation that holds send `change`: the one a new message started, or the one
- * the core merged its own into (threads.ts `threadHolding`). Until it is found the send stays
- * pending, the toast says it is finding it, and Undo waits. Once no conversation holds it, the
- * core holds it no more, and it is released. A query that fails leaves it pending, to be found
- * on the next connection.
+ * the core merged its own into. The core's `change` view names it, asked once from revision
+ * `rev`, and the conversation is watched from there (`move`). Until then the send stays
+ * pending, the toast says it is finding it, and Undo waits. When the view names none, the core
+ * holds the message no more, and the send is released. A connection that ends first leaves it
+ * pending, to be found on the next one.
  */
 async function relocate(change: ChangeId, rev: number) {
-  const holder = await threadHolding(change)
-  if (!pending.has(change) || holder === undefined) return
-  if (holder) move(change, holder.id, rev)
+  const holder = await client.query({ view: 'change', change }).catch(() => null)
+  if (!pending.has(change) || !holder) return
+  if (holder.threadId) move(change, holder.threadId, rev)
   else release(change)
 }
 

@@ -6,7 +6,7 @@
 // changes, one row re-renders, and the list re-renders only when its order or length does.
 
 import type { Subscription } from '@letterbox/client'
-import type { ChangeId, ThreadDetail, ThreadFilter, ThreadId, ThreadPage, ThreadSummary } from '@letterbox/protocol'
+import type { ThreadDetail, ThreadFilter, ThreadId, ThreadPage, ThreadSummary } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import { client } from './core.ts'
 
@@ -140,29 +140,6 @@ export function watchThreadDetail(id: ThreadId, listener: (detail: ThreadDetail 
   const stop = view.subscribe(tell)
   tell()
   return stop
-}
-
-/** How many conversations `threadHolding` reads the summaries of at a time. */
-const PAGE = 50
-
-/**
- * The conversation holding the user's send `change`, asked once: the one whose message's
- * delivery names it. Only conversations with a send on its way can, so it reads those, newest
- * first, a page at a time from `offset`. Null once every conversation has been read without it,
- * and undefined when a query failed, so nothing is known (sending.ts).
- */
-export async function threadHolding(change: ChangeId, offset = 0): Promise<ThreadDetail | null | undefined> {
-  const page = await client.query({ view: 'threads', filter: {}, offset, limit: PAGE }).catch(() => null)
-  if (!page) return undefined
-  remember(page)
-  const pending = page.threads.filter((thread) => thread.pending)
-  const opened = await Promise.all(
-    pending.map((thread) => client.query({ view: 'thread', threadId: thread.id }).catch(() => undefined)),
-  )
-  if (opened.includes(undefined)) return undefined
-  const holder = opened.find((detail) => detail?.messages.some((message) => message.delivery?.change === change))
-  if (holder) return holder
-  return offset + PAGE < page.total ? threadHolding(change, offset + PAGE) : null
 }
 
 // Pagers: one live list each, over one filter, showing one range at a time.
