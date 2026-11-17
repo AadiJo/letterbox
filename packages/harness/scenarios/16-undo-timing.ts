@@ -2,7 +2,7 @@
 // there, waiting behind another change, and on either side of a restart. The order of every
 // step is fixed by what the core and the sim provider report, never by time.
 
-import { mailbox, start, sync, thread, truthOf } from '../src/fixtures.ts'
+import { mailbox, start, sync, thread, truthOf, untilAccounts } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 import { accept, allTruth, lunchSeed, targetRow } from '../src/undoing.ts'
 
@@ -99,7 +99,10 @@ scenario('an undo accepted before a restart still reaches the provider after it'
   )
   t.equal((await first.core.settled(change)).result, 'done', 'it settles')
   first.box.setOffline(true)
+  const accounts = first.core.subscribe({ view: 'accounts' })
   const undo = await accept(t, first.core, { kind: 'undo', change }, 'the undo')
+  // Its push finds the provider unreachable. Waiting for that keeps what the core saved before it stops the same.
+  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
   t.equal((await targetRow(first.core)).pending, true, 'the undo shows at once, waiting for the provider')
   await first.core.stop()
   first.box.setOffline(false)

@@ -2,9 +2,10 @@
 //! it touched, so its cost follows what it changed, not the size of the mailbox.
 //!
 //! The test fills a large mailbox, keeps open what the app keeps open (the accounts, the
-//! mailboxes, the inbox's first page, the People screen's first page filtered by turn, and
-//! one conversation), then counts the work (see work.rs) of each step a person causes. It
-//! counts instead of timing, so it gives the same answer on every machine.
+//! mailboxes, the inbox's first page, Your turn and Let go?, which filter by turn and split
+//! on age, Updates, which groups automated mail by sender, and one conversation), then counts
+//! the work (see work.rs) of each step a person causes. It counts instead of timing, so it
+//! gives the same answer on every machine.
 //!
 //! `pnpm bench:scale` times the same steps at 100k messages, for people to read.
 
@@ -29,8 +30,8 @@ use crate::{Core, CoreOptions};
 
 /// Large enough that a view which reads every thread costs thousands of rows per commit.
 const MESSAGES: usize = 20_000;
-/// The thread lists the test keeps open. Each may check a touched thread against its filter.
-const LISTS: u64 = 2;
+/// The thread lists and Updates the test keeps open. Each may check a touched thread against its filter.
+const LISTS: u64 = 4;
 const DELIVERED: usize = 200;
 const ME: &str = "me@example.com";
 
@@ -232,13 +233,26 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
             assert!(arrived.0.is_empty(), "the test mailbox has no sends");
         });
 
+        let inbox = {
+            let state = inner.state.borrow();
+            let inbox = state
+                .world
+                .mailboxes
+                .values()
+                .find(|record| record.role == Some(Role::Inbox));
+            inbox
+                .map(|record| record.id.clone())
+                .expect("the test mailbox has an inbox")
+        };
         let receive = |message: Value| core.receive(message);
         receive(json!({ "kind": "hello", "protocol": letterbox_protocol::PROTOCOL }));
         let views = [
             json!({ "view": "accounts" }),
             json!({ "view": "mailboxes" }),
             json!({ "view": "threads", "filter": {}, "offset": 0, "limit": 50 }),
-            json!({ "view": "threads", "filter": { "turn": "mine" }, "offset": 0, "limit": 50 }),
+            json!({ "view": "threads", "filter": { "turn": "mine", "retired": false }, "offset": 0, "limit": 50 }),
+            json!({ "view": "threads", "filter": { "turn": "mine", "retired": true }, "offset": 0, "limit": 50 }),
+            json!({ "view": "senders", "mailboxId": inbox, "offset": 0, "limit": 50 }),
         ];
         for (index, query) in views.into_iter().enumerate() {
             receive(json!({ "kind": "subscribe", "sub": format!("sub_{index}"), "query": query }));

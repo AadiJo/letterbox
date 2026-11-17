@@ -181,8 +181,11 @@ scenario('a change made during a backfill reaches the provider before the backfi
   const read = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
   const unread = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: true })
   await nextPage(box)
-  t.equal((await core.settled(read.change)).result, 'done', 'the first change settled between pages')
-  t.equal((await core.settled(unread.change)).result, 'done', 'the second change settled between pages')
+  // Both settle before either is checked. The second can settle before or after the check of
+  // the first, so checking in between would change the transcript from run to run.
+  const settled = await Promise.all([core.settled(read.change), core.settled(unread.change)])
+  t.equal(settled[0].result, 'done', 'the first change settled between pages')
+  t.equal(settled[1].result, 'done', 'the second change settled between pages')
   // The provider counts a call when it answers it.
   t.equal(box.calls().snapshot, 2, 'the last page is still held, so the backfill has not ended')
   t.equal(

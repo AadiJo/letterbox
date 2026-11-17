@@ -9,11 +9,11 @@
 
 use std::borrow::Cow;
 
-use letterbox_protocol::{MailboxId, Person, ThreadId, ThreadSummary};
+use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, ThreadSummary};
 
 use crate::changes::Pending;
 use crate::maps::{HashMap, IndexMap, IndexSet};
-use crate::turns::{TurnMessage, decide_turn, is_automated};
+use crate::turns::{TurnMessage, decide_turn, held_override, is_automated};
 use crate::views::{person, same};
 use crate::work::Meter;
 use crate::world::{MessageRecord, MessageState, Touched, World, messages_of};
@@ -25,11 +25,30 @@ pub struct Counts {
     pub unread: u64,
 }
 
+/// What the lists read of one thread: its row, and what Updates groups it by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub summary: ThreadSummary,
+    /// The sender Updates groups it under, or None when it is not automated (see `sender_of`).
+    pub sender: Option<Sender>,
+    /// How many of its messages are unread, as the user sees them.
+    pub unread: u64,
+}
+
+/// Who sent an automated conversation: the address of its newest message from someone else.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sender {
+    /// The same for every address that differs only in case, within one account.
+    pub id: SenderId,
+    pub name: Option<String>,
+    pub address: String,
+}
+
 /// What one thread adds to the views.
 #[derive(Debug, Default, PartialEq)]
 struct Row {
     /// None when the thread has no row (see `summarize`). Its messages still count in their mailboxes.
-    summary: Option<ThreadSummary>,
+    listed: Option<Listed>,
     /// What its messages add to each mailbox's counts.
     counts: Vec<(MailboxId, Counts)>,
 }
@@ -37,7 +56,7 @@ struct Row {
 /// A thread whose row changed in a refresh, and its row before.
 pub struct Changed {
     pub id: ThreadId,
-    pub before: Option<ThreadSummary>,
+    pub before: Option<Listed>,
 }
 
 /// What a refresh rebuilt.
@@ -74,13 +93,13 @@ impl Rows {
                 let before = self.rows.remove(id).unwrap_or_default();
                 self.add(&before.counts, Counts::minus);
                 self.add(&row.counts, Counts::plus);
-                if row.summary != before.summary {
+                if row.listed != before.listed {
                     changed.push(Changed {
                         id: id.clone(),
-                        before: before.summary,
+                        before: before.listed,
                     });
                 }
-                if row.summary.is_some() || !row.counts.is_empty() {
+                if row.listed.is_some() || !row.counts.is_empty() {
                     self.rows.insert(id.clone(), row);
                 }
             }
@@ -95,12 +114,16 @@ impl Rows {
     }
 
     pub fn summary(&self, id: &ThreadId) -> Option<&ThreadSummary> {
-        self.rows.get(id)?.summary.as_ref()
+        Some(&self.listed(id)?.summary)
+    }
+
+    pub fn listed(&self, id: &ThreadId) -> Option<&Listed> {
+        self.rows.get(id)?.listed.as_ref()
     }
 
     /// Every thread that has a row, in no particular order.
-    pub fn summaries(&self) -> impl Iterator<Item = &ThreadSummary> {
-        self.rows.values().filter_map(|row| row.summary.as_ref())
+    pub fn all(&self) -> impl Iterator<Item = &Listed> {
+        self.rows.values().filter_map(|row| row.listed.as_ref())
     }
 
     pub fn counts(&self, mailbox: &MailboxId) -> Counts {
@@ -118,7 +141,7 @@ impl Rows {
             rows.rows.insert(id.clone(), row);
         }
         rows.rows
-            .retain(|_, row| row.summary.is_some() || !row.counts.is_empty());
+            .retain(|_, row| row.listed.is_some() || !row.counts.is_empty());
         rows
     }
 
@@ -179,10 +202,35 @@ fn row<'a>(world: &'a World, id: &ThreadId, pending: &Pending<'a>, meter: &Meter
             }
         }
     }
-    Row {
-        summary: summarize(world, id, &records, &states, pending),
-        counts,
+    let listed = summarize(world, id, &records, &states, pending).map(|summary| Listed {
+        sender: sender_of(world, &summary.account_id, &records),
+        unread: states.iter().filter(|state| state.unread).count() as u64,
+        summary,
+    });
+    Row { listed, counts }
+}
+
+/// The sender Updates groups a conversation under: the address of its newest message from
+/// someone else, when a machine sent that message (see `is_automated`). None for a conversation
+/// a person wrote last to me, or one with no message from anyone else. The address, not its
+/// domain, is the sender: one company's news@ and no-reply@ often carry unrelated mail.
+fn sender_of(world: &World, account_id: &AccountId, records: &[&MessageRecord]) -> Option<Sender> {
+    let me = &world.accounts.get(account_id)?.address;
+    let newest = records
+        .iter()
+        .rev()
+        .find(|record| !same(&record.facts.from.address, me))?;
+    if !is_automated(&newest.facts) {
+        return None;
     }
+    let from = &newest.facts.from;
+    #[expect(clippy::disallowed_methods, reason = "the one place sender ids are made")]
+    let id = SenderId::minted(format!("sender_{account_id}_{}", from.address.to_lowercase()));
+    Some(Sender {
+        id,
+        name: from.name.clone(),
+        address: from.address.clone(),
+    })
 }
 
 /// One row for a thread, or None when the thread or its account is gone, or it has no messages left.
@@ -211,11 +259,16 @@ fn summarize(
             .or_insert_with(|| person(address, &account.address));
     }
     // Only mail the provider holds moves the turn. A send still in the outbox, or one that
-    // failed, may never reach anyone, so the turn stays where it was (see outbox.rs).
+    // failed, may never reach anyone, so the turn stays where it was (see outbox.rs). The
+    // same mail decides whether a turn the user set still holds.
+    let held: Vec<&&MessageRecord> = records
+        .iter()
+        .filter(|record| record.provider_ref().is_some())
+        .collect();
+    let newest = held.last().map(|record| &record.facts.sent_at);
     let turn = decide_turn(
-        &records
+        &held
             .iter()
-            .filter(|record| record.provider_ref().is_some())
             .map(|record| TurnMessage {
                 from_me: same(&record.facts.from.address, &account.address),
                 to_me: record.facts.to.iter().any(|to| same(&to.address, &account.address)),
@@ -223,7 +276,7 @@ fn summarize(
                 automated: is_automated(&record.facts),
             })
             .collect::<Vec<_>>(),
-        thread.turn_override,
+        held_override(thread, newest),
     );
     let mailbox_ids: IndexSet<&MailboxId> = states.iter().flat_map(|state| &state.mailboxes).collect();
     Some(ThreadSummary {
