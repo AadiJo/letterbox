@@ -19,10 +19,11 @@
 // Every core main started must be gone once its app has quit.
 //
 // Writes electron.json (the checks and the cold start, from launch to the first painted
-// row), screenshots and the shell's log to artifacts/ui/.
+// row), screenshots, a Playwright trace per app run (electron-app.ts) and the shell's log to
+// artifacts/ui/.
 
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/build'
@@ -30,6 +31,7 @@ import { STOP_MS } from '@letterbox/desktop-shell/core'
 import { exited, killChildrenNow, logChildrenTo, startChild, stopChildren } from './children.ts'
 import {
   ARTIFACTS,
+  CheckFailure,
   checkQuit,
   checks,
   corePids,
@@ -339,7 +341,8 @@ if (display !== undefined) {
 rmSync(STATE, { recursive: true, force: true })
 mkdirSync(paths.data, { recursive: true })
 mkdirSync(ARTIFACTS, { recursive: true })
-for (const file of ['electron.json', 'electron.png', 'electron-core-lost.png', 'electron-shell.log']) {
+const traces = readdirSync(ARTIFACTS).filter((file) => file.startsWith('trace-electron-'))
+for (const file of ['electron.json', 'electron.png', 'electron-core-lost.png', 'electron-shell.log', ...traces]) {
   rmSync(join(ARTIFACTS, file), { force: true })
 }
 logChildrenTo(join(STATE, 'host.log'))
@@ -349,13 +352,17 @@ let sim: RunningSim | undefined
 let server: DevServer | undefined
 /** The cold start, once the built run has measured it. */
 const measured: { coldStart?: { ms: number; toPageMs: number } } = {}
-/** Runs one part of the check. A failure is noted, and the parts after it still run. */
+/**
+ * Runs one part of the check. A failure is noted, and the parts after it still run. Any error
+ * but a failed check also prints its stack, since its message alone may not say where it came from.
+ */
 async function part(run: () => unknown) {
   try {
     await run()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.log(`FAIL ${message}`)
+    if (error instanceof Error && !(error instanceof CheckFailure)) console.log(error.stack)
     failure ??= message
   }
 }
@@ -412,6 +419,6 @@ function electronVersion() {
 }
 
 console.log(
-  `\n${checks.filter((check) => check.ok).length} of ${checks.length} Electron checks passed. electron.json, screenshots and the shell log are in artifacts/ui/.`,
+  `\n${checks.filter((check) => check.ok).length} of ${checks.length} Electron checks passed. electron.json, screenshots, traces and the shell log are in artifacts/ui/.`,
 )
 process.exitCode = failure === null ? 0 : 1
