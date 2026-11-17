@@ -74,7 +74,7 @@ const closeOptions = (code: number | undefined, reason: string | undefined) => (
 /**
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
- * in order. The returned promise resolves once the relay holds that `accepted`. `sees`
+ * in order, or until `drop` ends the connection with them still unsent. The returned promise resolves once the relay holds that `accepted`. `sees`
  * resolves once the core sends a message, held or not, that contains `text`. It rejects
  * after WAIT_MS, or when the connection closes first, naming what never came.
  */
@@ -82,6 +82,9 @@ async function relayCore(page: Page) {
   let armed: (() => void) | undefined
   let held: string[] | undefined
   let toPage: ((message: string) => void) | undefined
+  let close: (() => Promise<void>) | undefined
+  const fromPage: string[] = []
+  let watched: { text: string; seen: () => void } | undefined
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -122,8 +125,20 @@ async function relayCore(page: Page) {
       void socket.close(closeOptions(code, reason))
       closed()
     })
-    socket.onMessage((message) => core.send(message))
+    socket.onMessage((message) => {
+      fromPage.push(String(message))
+      core.send(message)
+      if (watched && String(message).includes(watched.text)) {
+        held ??= []
+        watched.seen()
+        watched = undefined
+      }
+    })
     toPage = (message) => socket.send(message)
+    close = async () => {
+      await socket.close({ code: 1011, reason: 'the check dropped the connection' })
+      await core.close()
+    }
     core.onMessage((frame) => {
       const message = frame.toString()
       see(message)
@@ -139,7 +154,18 @@ async function relayCore(page: Page) {
   })
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
+    /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
+    pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),
     sees,
+    /** Every message the page sent its cores, in order, as sent. */
+    fromPage: () => [...fromPage],
+    /** Ends the connection both ways. What the relay held is never delivered, as when an answer is lost. */
+    drop: async () => {
+      held = undefined
+      armed = undefined
+      watched = undefined
+      await close?.()
+    },
     resume: () => {
       const queued = held ?? []
       held = undefined

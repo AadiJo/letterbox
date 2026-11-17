@@ -65,7 +65,7 @@ async function checkReaderLayout(page: Page) {
     .locator('article[aria-label="Conversation"] > div')
     .evaluate((element) => element.getBoundingClientRect().width - element.clientWidth)
   const layout = {
-    leftGap: (await box('section[aria-label="Reader"] button[title^="Done"]')).left - pane.left,
+    leftGap: (await box('section[aria-label="Reader"] [role="group"][aria-label="Reply"]')).left - pane.left,
     searchGap: pane.right - (await box('section[aria-label="Reader"] form[role="search"]')).right,
     timeGap: pane.right - (await box('[data-message="open"] [data-field="message-time"]')).right,
     scrollbar,
@@ -74,7 +74,11 @@ async function checkReaderLayout(page: Page) {
     bodyLeft: (await box('[data-message="open"] [data-field="body"]')).left,
     measure,
   }
-  equal(layout.leftGap <= 40, true, `1920 px: Done sits at the pane's left edge (${layout.leftGap} px in)`)
+  equal(
+    layout.leftGap <= 40,
+    true,
+    `1920 px: Reply, the toolbar's first control, sits at the pane's left edge (${layout.leftGap} px in)`,
+  )
   equal(layout.searchGap <= 40, true, `1920 px: search sits at the pane's right edge (${layout.searchGap} px in)`)
   equal(
     layout.timeGap <= 40 + layout.scrollbar,

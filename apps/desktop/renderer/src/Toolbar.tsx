@@ -1,24 +1,37 @@
-// The reader's toolbar: the actions the core has for the open conversation, and search.
+// The reader's toolbar: Reply, the actions the core has for the open conversation, and search.
 // A button is disabled when the core cannot do its action here (actions.ts decides).
 
 import type { ThreadSummary } from '@letterbox/protocol'
-import { Archive, Check, Flag, Mail as MailIcon, MailOpen, type LucideIcon, Trash2 } from 'lucide-react'
+import {
+  Archive,
+  Check,
+  Flag,
+  Mail as MailIcon,
+  MailOpen,
+  type LucideIcon,
+  Reply,
+  ReplyAll,
+  Trash2,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
-import { type Action, commandFor, type Mail, SHORTCUTS } from './actions.ts'
+import { type Action, canReply, commandFor, type Mail, REPLY_KEY, SHORTCUTS } from './actions.ts'
 
 type Props = {
   thread: ThreadSummary | undefined
   mail: Mail
   /** Runs an action. It settles once the core has answered. */
   onAct: (action: Action) => Promise<void>
+  /** Opens the reply editor. `all` for Reply all. */
+  onReply: (all: boolean) => void
   search: ReactNode
 }
 
 /** A button's tooltip: what it does and its key. */
 const title = (label: string, action: Action) => `${label} (${SHORTCUTS[action]})`
 
-export function Toolbar({ thread, mail, onAct, search }: Props) {
+export function Toolbar({ thread, mail, onAct, onReply, search }: Props) {
   const can = (action: Action) => thread !== undefined && commandFor(action, thread, mail) !== null
+  const replies = thread !== undefined && canReply(thread, mail)
   const icon = (action: Action, label: string, Icon: LucideIcon) => (
     <button
       type="button"
@@ -34,6 +47,36 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
   return (
     // Spans the reader pane, 40 px in from each side like the conversation below it.
     <div className="flex h-[72px] flex-none items-center gap-0.5 px-10">
+      <div
+        role="group"
+        aria-label="Reply"
+        className="inline-flex h-7 overflow-hidden rounded-[7px] border border-key bg-pill-sel"
+      >
+        <button
+          type="button"
+          title={`Reply (${REPLY_KEY.toUpperCase()})`}
+          disabled={!replies}
+          onClick={() => onReply(false)}
+          className="inline-flex items-center gap-1.5 pr-2 pl-2.5 text-[12.5px] font-medium whitespace-nowrap text-fg enabled:hover:bg-hover disabled:text-faint"
+        >
+          <Reply className="size-3.5" strokeWidth={1.75} aria-hidden />
+          Reply
+          <kbd className="rounded border border-key px-[5px] font-mono text-[10.5px] leading-4 text-muted">
+            {REPLY_KEY.toUpperCase()}
+          </kbd>
+        </button>
+        <button
+          type="button"
+          aria-label="Reply all"
+          title={`Reply all (Shift ${REPLY_KEY.toUpperCase()})`}
+          disabled={!replies}
+          onClick={() => onReply(true)}
+          className="inline-flex w-8 items-center justify-center border-l border-key text-fg2 enabled:hover:bg-hover disabled:text-faint"
+        >
+          <ReplyAll className="size-[15px]" strokeWidth={1.75} aria-hidden />
+        </button>
+      </div>
+      <span className="w-2" />
       <button
         type="button"
         title={title('Done', 'done')}

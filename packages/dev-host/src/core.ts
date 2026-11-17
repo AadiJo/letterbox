@@ -42,10 +42,14 @@ export type CoreProcess = {
   stop(): Promise<void>
 }
 
-/** Starts core-sim over the dev store at the seed's fixed time. Its stderr goes to the core log. */
-export function startCore(paths: Paths, now: string): CoreProcess {
+/**
+ * Starts core-sim over the dev store at the seed's fixed time, with any `flags` of core-sim's
+ * own, such as `--hold-waits`. Its stderr goes to the core log.
+ */
+export function startCore(paths: Paths, now: string, flags: readonly string[] = []): CoreProcess {
   const program = join(paths.root, 'target/debug/core-sim')
-  const child: Child = startChild(program, ['--data', paths.data, '--sim', paths.socket, '--now', now], paths.root)
+  const args = ['--data', paths.data, '--sim', paths.socket, '--now', now, ...flags]
+  const child: Child = startChild(program, args, paths.root)
   child.stderr.pipe(createWriteStream(paths.coreLog, { flags: 'a' }))
   const lines = createInterface({ input: child.stdout })
   const done = exited(child)

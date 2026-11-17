@@ -1,10 +1,13 @@
 // The open conversation: subject, whose turn and why, then its messages. Earlier messages
-// fold to one line each and the newest is open. Bodies load through the core's thread view.
+// fold to one line each and the newest is open, as is any reply of the user's still on its
+// way or not sent. Bodies load through the core's thread view. The reply editor docks below.
 
 import type { Mailbox, Message, MessageId, Person, ThreadDetail, ThreadId, TurnState } from '@letterbox/protocol'
 import { ChevronRight, Hourglass, Reply } from 'lucide-react'
 import { useState } from 'react'
 import { Body } from './Body.tsx'
+import { Dock } from './Composer.tsx'
+import { DeliveryMark, NotSent } from './Delivery.tsx'
 import { useNow } from './clock.ts'
 import { otherPerson, personName } from './Row.tsx'
 import { useThreadDetail } from './threads.ts'
@@ -42,11 +45,12 @@ function Conversation({ id, mailboxes }: { id: ThreadId; mailboxes: readonly Mai
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-10 py-1 [scrollbar-color:var(--color-line2)_transparent] [scrollbar-width:thin]">
         {thread.messages.map((message) =>
-          message.id === newest || opened.has(message.id) ? (
-            <OpenMessage key={message.id} message={message} now={now} />
+          message.id === newest || message.delivery || opened.has(message.id) ? (
+            <OpenMessage key={message.id} thread={thread} message={message} now={now} />
           ) : (
             <FoldedMessage
               key={message.id}
+              from={known(thread, message.from)}
               message={message}
               now={now}
               onOpen={() => setOpened(new Set([...opened, message.id]))}
@@ -54,6 +58,7 @@ function Conversation({ id, mailboxes }: { id: ThreadId; mailboxes: readonly Mai
           ),
         )}
       </div>
+      <Dock thread={thread} />
     </article>
   )
 }
@@ -104,6 +109,17 @@ const initials = (person: Person) =>
 
 const who = (person: Person) => (person.isMe ? 'You' : personName(person))
 
+/**
+ * `person` with the name the conversation knows them by, when the message itself gives none,
+ * as on a reply the core has not sent yet, which carries bare addresses.
+ */
+const known = (thread: ThreadDetail, person: Person) =>
+  person.name !== null
+    ? person
+    : (thread.people.find(
+        (other) => other.name !== null && other.address.toLowerCase() === person.address.toLowerCase(),
+      ) ?? person)
+
 function Avatar({ person, small }: { person: Person; small?: boolean }) {
   return (
     <span
@@ -115,7 +131,9 @@ function Avatar({ person, small }: { person: Person; small?: boolean }) {
   )
 }
 
-function FoldedMessage({ message, now, onOpen }: { message: Message; now: number; onOpen: () => void }) {
+type FoldedProps = { from: Person; message: Message; now: number; onOpen: () => void }
+
+function FoldedMessage({ from, message, now, onOpen }: FoldedProps) {
   const preview = message.body.state === 'ready' ? message.body.text.replace(/\s+/g, ' ').trim() : ''
   return (
     <button
@@ -127,8 +145,8 @@ function FoldedMessage({ message, now, onOpen }: { message: Message; now: number
       <span className="flex w-3.5 flex-none justify-center text-muted">
         <ChevronRight className="size-[13px]" strokeWidth={2} aria-hidden />
       </span>
-      <Avatar person={message.from} small />
-      <span className="flex-none text-[13.5px] font-semibold whitespace-nowrap">{who(message.from)}</span>
+      <Avatar person={from} small />
+      <span className="flex-none text-[13.5px] font-semibold whitespace-nowrap">{who(from)}</span>
       <span className="min-w-0 flex-1 truncate text-[13px] text-muted">{preview}</span>
       <span className="text-[12.5px] whitespace-nowrap text-muted tabular-nums" data-field="message-time">
         {messageTime(message.sentAt, now)}
@@ -137,22 +155,39 @@ function FoldedMessage({ message, now, onOpen }: { message: Message; now: number
   )
 }
 
-function OpenMessage({ message, now }: { message: Message; now: number }) {
-  const to = [...message.to, ...message.cc].map((person) => (person.isMe ? 'you' : personName(person)))
+function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: Message; now: number }) {
+  const to = [...message.to, ...message.cc].map((person) => (person.isMe ? 'you' : personName(known(thread, person))))
+  const from = known(thread, message.from)
+  const { delivery } = message
+  const going = delivery !== null && delivery.state !== 'failed'
   return (
-    <section className="border-b border-hair py-4" data-message="open">
+    <section
+      className="border-b border-hair py-4"
+      data-message="open"
+      data-delivery={delivery?.state ?? 'delivered'}
+      // A reply the user just sent comes into view as it lands in the thread.
+      ref={(element) => {
+        if (delivery?.state === 'held') element?.scrollIntoView({ block: 'nearest' })
+      }}
+    >
       <div className="mb-3 flex items-center gap-2.5">
         <span className="w-3.5 flex-none" />
-        <Avatar person={message.from} />
+        <Avatar person={from} />
         <div className="min-w-0">
-          <div className="truncate text-[13.5px] font-semibold">{who(message.from)}</div>
+          <div className="truncate text-[13.5px] font-semibold">{who(from)}</div>
           {to.length > 0 && <div className="truncate text-[12.5px] text-muted">to {to.join(', ')}</div>}
         </div>
-        <span className="ml-auto text-[12.5px] whitespace-nowrap text-muted tabular-nums" data-field="message-time">
-          {messageTime(message.sentAt, now)}
-        </span>
+        {going ? (
+          <DeliveryMark thread={thread} delivery={delivery} />
+        ) : (
+          <span className="ml-auto text-[12.5px] whitespace-nowrap text-muted tabular-nums" data-field="message-time">
+            {messageTime(message.sentAt, now)}
+          </span>
+        )}
       </div>
-      <div className="pl-6">
+      {delivery?.state === 'failed' && <NotSent thread={thread} message={message} delivery={delivery} />}
+      {/* On its way, the reply reads a step quieter than mail the provider holds. */}
+      <div className={`pl-6 ${going ? 'opacity-70' : ''}`}>
         <Body body={message.body} />
       </div>
     </section>

@@ -1,6 +1,6 @@
 // The end-to-end UI check, run by `pnpm check:ui` and `pnpm check`.
 //
-// Five runs, each against real cores over the sim provider, in Playwright's Chromium:
+// Six runs, each against real cores over the sim provider, in Playwright's Chromium:
 //   people-first  `pnpm dev` (main.ts) with the people-first seed: People, All mail, the
 //                 reader, HTML bodies, the narrow window, keyboard actions, new mail, a reload
 //                 (ui/people-first.ts)
@@ -10,6 +10,7 @@
 //   many          `pnpm dev` with 6,000 conversations: scrolls All mail top to bottom (ui/scroll.ts)
 //   first sync    the dev host's parts in this process, with snapshot pages held (ui/first-sync.ts)
 //   rollback      the same parts, with an archive the provider refuses (ui/rollback.ts)
+//   reply         the same parts: the docked reply editor, sending, undo, a refused send and a lost answer (ui/reply.ts)
 // Every process a run started must be gone at its end.
 //
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
@@ -23,6 +24,7 @@ import { checkDone } from './ui/done.ts'
 import { checkFirstSync } from './ui/first-sync.ts'
 import { startDevHost } from './ui/host.ts'
 import { checkPeopleFirst } from './ui/people-first.ts'
+import { checkReply } from './ui/reply.ts'
 import { checkRollback } from './ui/rollback.ts'
 import { ARTIFACTS, fail, failed, summarize } from './ui/record.ts'
 import { checkScroll } from './ui/scroll.ts'
@@ -60,6 +62,7 @@ try {
   await withDevHost('many', 'many', 1, browser, checkScroll)
   await checkFirstSync(browser).catch(fail)
   await checkRollback(browser).catch(fail)
+  await checkReply(browser).catch(fail)
 } finally {
   await browser.close()
 }
