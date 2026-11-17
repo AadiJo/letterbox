@@ -61,8 +61,8 @@ const browser = await chromium.launch()
 try {
   // The first load and the reload each start a core.
   await withDevHost('people-first', 'people-first', 2, browser, checkPeopleFirst)
-  // The undo checks end the connection twice, and reload each time to connect again.
-  await withDevHost('done', 'people-first', 3, browser, checkDone)
+  // The undo checks end the connection three times, and reload each time to connect again.
+  await withDevHost('done', 'people-first', 4, browser, checkDone)
   await withDevHost('many', 'many', 1, browser, checkScroll)
   await runCheck(() => checkFirstSync(browser))
   await runCheck(() => checkRollback(browser))

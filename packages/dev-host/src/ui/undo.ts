@@ -168,6 +168,10 @@ async function checkRefusals(page: Page, relay: Relay) {
 
 /** What the toast says when the core's answer to an undo never came (apps/desktop/renderer/src/undo.ts). */
 const UNANSWERED = 'Lost the connection. The undo may or may not have gone through'
+/** What the toast says when the connection was gone before the undo could be sent. */
+const NOT_UNDONE = "Lost the connection, so this wasn't undone"
+/** How many undo commands the page has sent its cores. */
+const undos = (relay: Relay) => relay.fromPage().filter((text) => text.includes('"kind":"undo"')).length
 
 /** Archives Inbox's open row and waits until it has left, and the next one has opened. Returns its id. */
 async function archiveAndWait(page: Page) {
@@ -204,7 +208,8 @@ async function inInboxAfterReload(page: Page, id: string) {
  * The connection ends before the core's answer to an undo reaches the page. The toast says only
  * what is known: the undo may or may not have gone through. Both happen. The core accepts one
  * undo before the connection drops, so the conversation is back after a reload. Another never
- * reaches the core, so it stays archived.
+ * reaches the core, so it stays archived. With the connection gone before z, nothing is sent,
+ * and the toast says it was not undone.
  */
 async function checkLostConnection(page: Page, relay: Relay) {
   await openInbox(page)
@@ -230,4 +235,22 @@ async function checkLostConnection(page: Page, relay: Relay) {
     'an undo the lost connection kept from the core says the same',
   )
   equal(await inInboxAfterReload(page, kept), false, 'after a reload, that change stands: the row stays archived')
+
+  // The connection is gone before z, while the toast still offers Undo. Nothing is sent.
+  const archived = await archiveAndWait(page)
+  await relay.drop()
+  await page.getByRole('alert').waitFor()
+  const before = undos(relay)
+  equal(
+    await toast(page).getByRole('button', { name: /^Undo/ }).count(),
+    1,
+    'after the drop the toast still offers Undo',
+  )
+  await page.keyboard.press('z')
+  equal(
+    [await toastAfterUndo(page), undos(relay) - before],
+    [{ text: NOT_UNDONE, undo: 0 }, 0],
+    'z with the connection already lost sends nothing, and says it was not undone',
+  )
+  equal(await inInboxAfterReload(page, archived), false, 'after a reload, that change stands too')
 }

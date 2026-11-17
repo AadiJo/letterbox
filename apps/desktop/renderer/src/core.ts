@@ -109,12 +109,12 @@ export function useView<V extends View>(query: QueryFor<V>): Queries[V]['result'
 }
 
 /** Why this tab lost the core, or null while it has it. */
+export const lostReason = () => lost
+
+/** `lostReason`, for React. */
 export function useLost() {
-  return useSyncExternalStore(
-    (onChange) => {
-      lostWatchers.add(onChange)
-      return () => void lostWatchers.delete(onChange)
-    },
-    () => lost,
-  )
+  return useSyncExternalStore((onChange) => {
+    lostWatchers.add(onChange)
+    return () => void lostWatchers.delete(onChange)
+  }, lostReason)
 }

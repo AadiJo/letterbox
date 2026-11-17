@@ -6,12 +6,12 @@
 // what that change altered. The renderer never builds an opposite command. While the core
 // waits to answer, the toast says "Undoing…". When it refuses, the toast says why. When no
 // answer comes, as when the connection ends, the toast says so: the undo may or may not have
-// gone through.
+// gone through. With the connection already gone, nothing is sent, and the toast says so.
 
 import type { ChangeId, MailboxId, ThreadId, UndoConflict, UndoField } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import type { Action } from './actions.ts'
-import { client } from './core.ts'
+import { client, lostReason } from './core.ts'
 
 /** The key that undoes the last action. */
 export const UNDO_KEY = 'z'
@@ -21,6 +21,8 @@ const NOTICE_MS = 5000
 
 /** What the toast says when the core's answer to an undo never came. */
 const UNANSWERED = 'Lost the connection. The undo may or may not have gone through'
+/** What the toast says when the connection was gone before the undo could be sent. */
+const NOT_UNDONE = "Lost the connection, so this wasn't undone"
 
 /**
  * The toast's content: what was done, and the change Undo takes back, or null for a toast
@@ -128,11 +130,17 @@ function refusal(conflict: UndoConflict | undefined, names: Names, threadId: Thr
  * before it answers, so the toast says "Undoing…" until it does, with Undo still in place.
  * Resolves with the conversation once the core accepts, or null. A refusal says why in the
  * toast, and a call that fails says the outcome is not known, unless a new action took the
- * toast meanwhile.
+ * toast meanwhile. With the connection already gone, nothing is sent, and the toast says it
+ * was not undone.
  */
 export async function undo(names: Names) {
   const taken = notice
   if (!taken?.change || taken.undoing) return null
+  if (lostReason() !== null) {
+    serial += 1
+    setNotice({ serial, threadId: taken.threadId, label: NOT_UNDONE, change: null, undoing: false, icon: 'info' })
+    return null
+  }
   const undoing: Notice = { ...taken, label: 'Undoing…', undoing: true, icon: 'clock' }
   setNotice(undoing)
   // The client rejects only when it cannot hear the answer, as when the connection ends.
