@@ -109,8 +109,8 @@ export const PEOPLE_MUTATIONS: Mutation[] = [
   {
     name: "Updates keeps an archived conversation's messages in its sender's days",
     file: core('senders.rs'),
-    find: '                sum.messages -= counts.messages;\n                sum.unread -= counts.unread;\n',
-    replace: '                let _ = (counts, &sum);\n',
+    find: '                sum.messages -= 1;\n                sum.unread -= u64::from(*unread);\n',
+    replace: '                let _ = (unread, &sum);\n',
     scenarios: 'per day',
   },
   {
@@ -141,5 +141,19 @@ export const PEOPLE_MUTATIONS: Mutation[] = [
     replace:
       '            if opening.any(|entry| matches!(&entry.query, Query::Threads { filter, .. } if filter.retired.is_some())) {',
     scenarios: 'per day',
+  },
+  {
+    name: "Updates ignores the user's zone and counts UTC days",
+    file: core('live_view.rs'),
+    find: '                    zone_of(zone.as_deref()),',
+    replace: '                    zone_of(zone.as_deref().filter(|_| false)),',
+    scenarios: "user's days",
+  },
+  {
+    name: "Updates' midnight wake comes 24 hours after the day began, so it misses a midnight a clock change moved",
+    file: core('senders.rs'),
+    find: '        let start = start_of(self.zone, self.today.succ_opt()?);',
+    replace: '        let start = start_of(self.zone, self.today) + 86_400;',
+    scenarios: "user's days",
   },
 ]

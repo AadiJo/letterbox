@@ -4,26 +4,53 @@
 //! commit moves only the threads it changed in and out of their groups, so its cost follows
 //! what it changed, not the size of the mailbox (budget.rs).
 //!
-//! Each group also sums its conversations' messages per UTC day, and the answer reads the
-//! last DAYS of them on the core's clock. Time alone moves those days on at midnight, so the
-//! view reads the time like a list that splits on age, and `wakes_at` books a wake for the
-//! next midnight (see subscriptions.rs).
+//! Each group also keeps when its conversations' messages were sent, and the answer counts
+//! them by the user's last DAYS days, in the zone the query names, on the core's clock. Time
+//! alone moves those days on at the zone's midnight, so the view reads the time like a list
+//! that splits on age, and `wakes_at` books a wake for the next midnight (see subscriptions.rs).
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::DateTime;
+use chrono::{Days, NaiveDate, NaiveTime, TimeDelta, TimeZone};
+use chrono_tz::Tz;
 use letterbox_protocol::{SenderDay, SenderId, SenderPage, SenderSummary, ThreadFilter, Time};
 
-use crate::clock::iso;
+use crate::clock::{iso, parse};
 use crate::live_view::{Place, place};
 use crate::maps::HashMap;
-use crate::rows::{Listed, Refresh, Rows, day_of};
+use crate::rows::{Listed, Refresh, Rows};
 use crate::views::{Live, matches};
 use crate::work::Meter;
 
 /// How many days of volume a sender's row shows, today the last.
-const DAYS: i64 = 14;
+const DAYS: u64 = 14;
+
+/// The zone a query names, or UTC for none or one the zone database does not know.
+pub fn zone_of(name: Option<&str>) -> Tz {
+    name.and_then(|name| name.parse().ok()).unwrap_or(Tz::UTC)
+}
+
+/// The day `now` falls on in `zone`.
+fn day_of(zone: Tz, now: &Time) -> NaiveDate {
+    parse(now).with_timezone(&zone).date_naive()
+}
+
+/// When `day` starts in `zone`, in seconds since the epoch: its midnight, or, on a day whose
+/// midnight a clock change skips, the first moment it has. A day a zone skipped whole (as
+/// Samoa skipped Dec 30, 2011) starts when the next one does, and so holds nothing.
+fn start_of(zone: Tz, day: NaiveDate) -> i64 {
+    let midnight = day.and_time(NaiveTime::MIN);
+    (0..=24)
+        .find_map(|hour| {
+            zone.from_local_datetime(&(midnight + TimeDelta::hours(hour)))
+                .earliest()
+        })
+        .map_or_else(
+            || day.succ_opt().map_or(i64::MAX, |next| start_of(zone, next)),
+            |at| at.timestamp(),
+        )
+}
 
 /// One sender's conversations.
 #[derive(Debug, Default, PartialEq)]
@@ -31,8 +58,9 @@ struct Group {
     threads: BTreeSet<Place>,
     messages: u64,
     unread: u64,
-    /// Their messages per UTC day (see `day_of`). A day with none has no entry.
-    days: BTreeMap<i64, SenderDay>,
+    /// Their messages by the second they were sent (rows.rs `Sender::sent`), with how many
+    /// are unread. A second with none has no entry.
+    sent: BTreeMap<i64, SenderDay>,
 }
 
 /// The view behind a senders subscription.
@@ -47,13 +75,22 @@ pub struct Senders {
     /// How many groups have unread mail, and how many unread messages they hold in all.
     unread_senders: u64,
     unread: u64,
+    /// The user's zone, whose days the answer counts by.
+    zone: Tz,
     /// The day the last answer ended on. When the clock moves past it, the answer changes.
-    today: i64,
+    today: NaiveDate,
 }
 
 impl Senders {
     /// Groups every thread in the rows. Reads every row, so only a new view or a full refresh calls it.
-    pub fn open(filter: ThreadFilter, offset: u64, limit: u64, rows: &Rows, live: &dyn Live, meter: &Meter) -> Senders {
+    pub fn open(
+        filter: ThreadFilter,
+        zone: Tz,
+        (offset, limit): (u64, u64),
+        rows: &Rows,
+        live: &dyn Live,
+        meter: &Meter,
+    ) -> Senders {
         let mut senders = Senders {
             filter,
             offset,
@@ -62,7 +99,8 @@ impl Senders {
             order: BTreeSet::new(),
             unread_senders: 0,
             unread: 0,
-            today: day_of(&live.now()),
+            zone,
+            today: day_of(zone, &live.now()),
         };
         for listed in rows.all() {
             meter.matched();
@@ -77,12 +115,12 @@ impl Senders {
         let changed = match refresh {
             Refresh::Everything => {
                 let filter = std::mem::take(&mut self.filter);
-                *self = Senders::open(filter, self.offset, self.limit, rows, live, meter);
+                *self = Senders::open(filter, self.zone, (self.offset, self.limit), rows, live, meter);
                 return true;
             }
             Refresh::Threads { changed, .. } => changed,
         };
-        let today = day_of(&live.now());
+        let today = day_of(self.zone, &live.now());
         let mut moved = today != self.today;
         self.today = today;
         for one in changed {
@@ -95,14 +133,8 @@ impl Senders {
             }
         }
         if cfg!(test) {
-            let fresh = Senders::open(
-                self.filter.clone(),
-                self.offset,
-                self.limit,
-                rows,
-                live,
-                &Meter::default(),
-            );
+            let window = (self.offset, self.limit);
+            let fresh = Senders::open(self.filter.clone(), self.zone, window, rows, live, &Meter::default());
             assert!(
                 self.groups == fresh.groups
                     && self.order == fresh.order
@@ -113,15 +145,21 @@ impl Senders {
         moved
     }
 
-    /// When the days move on: the next UTC midnight.
+    /// When the days move on: the next midnight in the user's zone.
     pub fn wakes_at(&self) -> Option<Time> {
-        let midnight = DateTime::from_timestamp(self.today.checked_add(1)?.checked_mul(86_400)?, 0)?;
-        Some(iso(midnight))
+        let start = start_of(self.zone, self.today.succ_opt()?);
+        Some(iso(chrono::DateTime::from_timestamp(start, 0)?))
     }
 
     /// One window of the groups, newest first, each told by its newest conversation.
     pub fn answer(&self, rows: &Rows) -> SenderPage {
-        let first = self.today - (DAYS - 1);
+        // Where each of the last DAYS days starts, then where tomorrow does.
+        let first = self.today.checked_sub_days(Days::new(DAYS - 1)).unwrap_or(self.today);
+        let starts: Vec<i64> = first
+            .iter_days()
+            .take(usize::try_from(DAYS + 1).unwrap_or(usize::MAX))
+            .map(|day| start_of(self.zone, day))
+            .collect();
         let skip = usize::try_from(self.offset).unwrap_or(usize::MAX);
         let take = usize::try_from(self.limit).unwrap_or(usize::MAX);
         let senders = self.order.iter().skip(skip).take(take).filter_map(|(_, id)| {
@@ -139,8 +177,18 @@ impl Senders {
                 unread: group.unread,
                 subject: listed.summary.subject.clone(),
                 last_message_at: listed.summary.last_message_at.clone(),
-                days: (first..=self.today)
-                    .map(|day| group.days.get(&day).copied().unwrap_or_default())
+                days: starts
+                    .windows(2)
+                    .map(|day| {
+                        let (from, to) = (day[0], day[1]);
+                        group
+                            .sent
+                            .range(from..to)
+                            .fold(SenderDay::default(), |sum, (_, one)| SenderDay {
+                                messages: sum.messages + one.messages,
+                                unread: sum.unread + one.unread,
+                            })
+                    })
                     .collect(),
             })
         });
@@ -163,10 +211,10 @@ impl Senders {
         group.threads.insert(place(&listed.summary));
         group.messages += listed.summary.message_count;
         group.unread += listed.unread;
-        for (day, counts) in &sender.days {
-            let sum = group.days.entry(*day).or_default();
-            sum.messages += counts.messages;
-            sum.unread += counts.unread;
+        for (at, unread) in &sender.sent {
+            let sum = group.sent.entry(*at).or_default();
+            sum.messages += 1;
+            sum.unread += u64::from(*unread);
         }
         let unread = group.unread;
         self.count_unread(was_unread, unread);
@@ -189,12 +237,12 @@ impl Senders {
         let was_unread = group.unread;
         group.messages -= listed.summary.message_count;
         group.unread -= listed.unread;
-        for (day, counts) in &sender.days {
-            if let Some(sum) = group.days.get_mut(day) {
-                sum.messages -= counts.messages;
-                sum.unread -= counts.unread;
+        for (at, unread) in &sender.sent {
+            if let Some(sum) = group.sent.get_mut(at) {
+                sum.messages -= 1;
+                sum.unread -= u64::from(*unread);
                 if sum.messages == 0 {
-                    group.days.remove(day);
+                    group.sent.remove(at);
                 }
             }
         }

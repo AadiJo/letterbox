@@ -28,8 +28,7 @@ mod command;
 mod lists;
 mod outcome;
 mod send;
-
-use std::num::NonZeroU64;
+mod subscribe;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
@@ -37,6 +36,7 @@ pub use lists::{SenderDay, SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
+pub use subscribe::{Query, ThreadPage, Update};
 use ts_rs::TS;
 
 pub const PROTOCOL: u32 = 0;
@@ -318,59 +318,6 @@ pub struct Attachment {
     pub mime: String,
     pub size: u64,
     pub inline: bool,
-}
-
-// ---------------------------------------------------------------- subscribe
-
-/// Every live view. Add a variant here and a matching one to `Update`.
-#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
-#[serde(tag = "view", rename_all = "kebab-case", rename_all_fields = "camelCase")]
-pub enum Query {
-    Accounts,
-    SignInOptions,
-    Mailboxes {
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        account_id: Option<AccountId>,
-    },
-    Threads {
-        filter: ThreadFilter,
-        offset: u64,
-        limit: NonZeroU64,
-    },
-    /// `null` once the thread no longer exists.
-    Thread {
-        thread_id: ThreadId,
-    },
-    /// Updates: the automated conversations in the account and mailbox given, grouped by sender.
-    Senders {
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        account_id: Option<AccountId>,
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        mailbox_id: Option<MailboxId>,
-        offset: u64,
-        limit: NonZeroU64,
-    },
-}
-
-/// The answer to a query. A threads update replaces the whole window.
-#[derive(Clone, Debug, PartialEq, Serialize, TS)]
-#[serde(tag = "view", rename_all = "kebab-case")]
-pub enum Update {
-    Accounts { data: Vec<Account> },
-    SignInOptions { data: Vec<SignInOption> },
-    Mailboxes { data: Vec<Mailbox> },
-    Threads { data: ThreadPage },
-    Thread { data: Option<ThreadDetail> },
-    Senders { data: SenderPage },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, TS)]
-pub struct ThreadPage {
-    pub total: u64,
-    pub threads: Vec<ThreadSummary>,
 }
 
 // ---------------------------------------------------------------- request

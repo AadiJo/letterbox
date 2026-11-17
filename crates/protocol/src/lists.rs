@@ -59,7 +59,8 @@ pub struct SenderSummary {
     pub subject: String,
     pub last_message_at: Time,
     /// The messages in its conversations sent on each of the last 14 days, oldest first, the
-    /// last entry today. Days are UTC days on the core's clock, which moves them on at midnight.
+    /// last entry today. Days are the user's, in the query's `zone`, on the core's clock, which
+    /// moves them on at the zone's midnight.
     pub days: Vec<SenderDay>,
 }
 

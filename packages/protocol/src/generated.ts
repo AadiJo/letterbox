@@ -140,7 +140,12 @@ sender?: SenderId, };
 /**
  * Every live view. Add a variant here and a matching one to `Update`.
  */
-export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "view": "mailboxes", accountId?: AccountId, } | { "view": "threads", filter: ThreadFilter, offset: number, limit: number, } | { "view": "thread", threadId: ThreadId, } | { "view": "senders", accountId?: AccountId, mailboxId?: MailboxId, offset: number, limit: number, };
+export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "view": "mailboxes", accountId?: AccountId, } | { "view": "threads", filter: ThreadFilter, offset: number, limit: number, } | { "view": "thread", threadId: ThreadId, } | { "view": "senders", accountId?: AccountId, mailboxId?: MailboxId, 
+/**
+ * The user's IANA time zone, such as "America/Chicago": `days` are their days in it,
+ * and move on at its midnight. Leave out, or name a zone the core does not know, for UTC.
+ */
+zone?: string, offset: number, limit: number, };
 
 /**
  * The answer to a query. A threads update replaces the whole window.
@@ -176,7 +181,8 @@ threads: number, messages: number, unread: number,
 subject: string, lastMessageAt: string, 
 /**
  * The messages in its conversations sent on each of the last 14 days, oldest first, the
- * last entry today. Days are UTC days on the core's clock, which moves them on at midnight.
+ * last entry today. Days are the user's, in the query's `zone`, on the core's clock, which
+ * moves them on at the zone's midnight.
  */
 days: Array<SenderDay>, };
 

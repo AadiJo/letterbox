@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use letterbox_protocol::{AccountId, MailboxId, Person, SenderDay, SenderId, ThreadId, ThreadSummary, Time};
+use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, ThreadSummary};
 
 use crate::changes::Pending;
 use crate::clock::parse;
@@ -43,14 +43,10 @@ pub struct Sender {
     pub id: SenderId,
     pub name: Option<String>,
     pub address: String,
-    /// The conversation's messages by the UTC day they were sent (see `day_of`), oldest day
-    /// first, each day once. Updates sums them per sender for its volume strip (senders.rs).
-    pub days: Vec<(i64, SenderDay)>,
-}
-
-/// The UTC day a time falls on, counted from the epoch.
-pub fn day_of(at: &Time) -> i64 {
-    parse(at).timestamp().div_euclid(86_400)
+    /// When each of the conversation's messages was sent, in seconds since the epoch, and
+    /// whether it is unread, oldest first. Updates sums them per sender and counts them by the
+    /// user's days for its volume strip (senders.rs).
+    pub sent: Vec<(i64, bool)>,
 }
 
 /// What one thread adds to the views.
@@ -240,26 +236,17 @@ fn sender_of(
     let from = &newest.facts.from;
     #[expect(clippy::disallowed_methods, reason = "the one place sender ids are made")]
     let id = SenderId::minted(format!("sender_{account_id}_{}", from.address.to_lowercase()));
-    let mut days: Vec<(i64, SenderDay)> = Vec::new();
-    for (record, state) in records.iter().zip(states) {
-        let day = day_of(&record.facts.sent_at);
-        let at = match days.binary_search_by_key(&day, |(known, _)| *known) {
-            Ok(at) => at,
-            Err(at) => {
-                days.insert(at, (day, SenderDay::default()));
-                at
-            }
-        };
-        if let Some((_, counts)) = days.get_mut(at) {
-            counts.messages += 1;
-            counts.unread += u64::from(state.unread);
-        }
-    }
+    let mut sent: Vec<(i64, bool)> = records
+        .iter()
+        .zip(states)
+        .map(|(record, state)| (parse(&record.facts.sent_at).timestamp(), state.unread))
+        .collect();
+    sent.sort_unstable();
     Some(Sender {
         id,
         name: from.name.clone(),
         address: from.address.clone(),
-        days,
+        sent,
     })
 }
 

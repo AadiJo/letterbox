@@ -30,6 +30,8 @@ letterbox-host = { path = "crates/host" }
 letterbox-keychain = { path = "crates/keychain" }
 foldhash = "0.2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+# The IANA time zone database, so Updates counts a sender's mail by the user's own days.
+chrono-tz = { version = "0.10.4", default-features = false, features = ["std"] }
 indexmap = { version = "2.14", features = ["serde"] }
 regex = "1.12"
 rusqlite = { version = "0.43", features = ["bundled"] }

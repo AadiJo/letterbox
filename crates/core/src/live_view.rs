@@ -17,7 +17,7 @@ use letterbox_protocol::{AccountId, Body, Query, ThreadFilter, ThreadId, ThreadS
 
 use crate::clock::{iso, parse};
 use crate::rows::{Refresh, Rows};
-use crate::senders::Senders;
+use crate::senders::{Senders, zone_of};
 use crate::views::{Live, accounts, mailboxes, matches, missing_bodies, page, thread};
 use crate::work::Meter;
 use crate::world::World;
@@ -120,6 +120,7 @@ impl LiveView {
             Query::Senders {
                 account_id,
                 mailbox_id,
+                zone,
                 offset,
                 limit,
             } => {
@@ -128,7 +129,14 @@ impl LiveView {
                     mailbox_id: mailbox_id.clone(),
                     ..ThreadFilter::default()
                 };
-                LiveView::Senders(Box::new(Senders::open(filter, *offset, limit.get(), rows, live, meter)))
+                LiveView::Senders(Box::new(Senders::open(
+                    filter,
+                    zone_of(zone.as_deref()),
+                    (*offset, limit.get()),
+                    rows,
+                    live,
+                    meter,
+                )))
             }
         }
     }
