@@ -4,7 +4,8 @@
 // into another moves with it: Undo waits while the renderer finds where it went, that
 // conversation's draft cannot go meanwhile, and Undo over that draft keeps both until the user
 // picks. An undo the core accepts, whose answer never reaches the page, keeps the reply's text:
-// the toast says "Undoing…", and after a reload the reply is back in its editor.
+// the toast says "Undoing…", and after a reload the reply is back in its editor once the core
+// answers again. Two undos at once send one.
 
 import type { Page } from 'playwright'
 import { draftText } from './dock.ts'
@@ -27,6 +28,18 @@ import {
   TRIP,
   undos,
 } from './reply-page.ts'
+
+const LEASE_SUBJECT = 'Lease addendum for 4B'
+
+/** Sends LEASE from the People screen and waits until the conversation shows it held. */
+async function sendLease(page: Page) {
+  await nav(page, 'People').click()
+  await open(page, LEASE_SUBJECT)
+  await page.keyboard.press('r')
+  await body(page).fill(LEASE)
+  await page.keyboard.press('Control+Enter')
+  await page.locator('[data-message="open"][data-delivery="held"]', { hasText: LEASE }).waitFor()
+}
 
 /** A reload without session storage: Undo brings the reply back saying its Bcc is gone, and Send waits. */
 export async function checkBccAfterReload(page: Page) {
@@ -208,29 +221,38 @@ export async function checkMergedConversation(page: Page, relay: Relay) {
  * the reply is back in its editor.
  */
 export async function checkUndoAnswerLost(page: Page, relay: Relay) {
-  const subject = 'Lease addendum for 4B'
+  const subject = LEASE_SUBJECT
   const held = page.locator('[data-message="open"][data-delivery="held"]', { hasText: LEASE })
   const said = () => toast(page).locator('[data-field="toast"]').textContent()
-  const sendLease = async () => {
-    await nav(page, 'People').click()
-    await open(page, subject)
-    await page.keyboard.press('r')
-    await body(page).fill(LEASE)
-    await page.keyboard.press('Control+Enter')
-    await held.waitFor()
-  }
-  /** Reloads, opens the conversation, and reads its editor (null without one), its held reply and the toast. */
+  /** The conversation's editor (null without one), its held reply, and whether the toast says Undoing…. */
+  const looks = async () => ({
+    text: (await dock(page).count()) === 1 ? await draftText(page) : null,
+    held: await held.count(),
+    undoing: await toast(page).filter({ hasText: 'Undoing…' }).count(),
+  })
+  /**
+   * Reloads with the core's answer to the undo the page sends again held, and reads the
+   * conversation before and after that answer arrives. The text waits for the answer.
+   */
   const afterReload = async () => {
+    const replayed = relay.holdNextUndoAnswer()
     await page.reload()
+    await replayed
     await nav(page, 'People').click()
     await open(page, subject)
     await settle(page)
-    const text = (await dock(page).count()) === 1 ? await draftText(page) : null
-    return { text, held: await held.count(), undoing: await toast(page).filter({ hasText: 'Undoing…' }).count() }
+    const before = await looks()
+    relay.releaseUndoAnswer()
+    await dock(page).waitFor()
+    return { before, after: await looks() }
+  }
+  const restored = {
+    before: { text: null, held: 0, undoing: 1 },
+    after: { text: LEASE, held: 0, undoing: 0 },
   }
 
   // The connection drops after the core accepted the undo, before its answer reached the page.
-  await sendLease()
+  await sendLease(page)
   const accepted = relay.pauseAtAccepted()
   await toast(page).getByRole('button', { name: /^Undo/ }).click()
   await accepted
@@ -240,17 +262,18 @@ export async function checkUndoAnswerLost(page: Page, relay: Relay) {
   await capture(page, 'reply-undo-lost')
   equal(
     await afterReload(),
-    { text: LEASE, held: 0, undoing: 0 },
-    'after a reload, the undo the core accepted puts the reply back in its editor',
+    restored,
+    'after a reload, the reply comes back to its editor once the core answers the undo again',
   )
   await capture(page, 'reply-undo-lost-restored')
   await dock(page).getByRole('button', { name: 'Discard' }).click()
 
   // The answer alone is lost, and the connection stays. The core's update takes the reply out of
   // the conversation, and the text stays kept until the core says the undo went through.
-  await sendLease()
-  relay.loseNextUndoAnswer()
+  await sendLease(page)
+  const lost = relay.holdNextUndoAnswer()
   await page.keyboard.press('z')
+  await lost
   await held.waitFor({ state: 'detached' })
   await settle(page)
   equal(
@@ -261,8 +284,39 @@ export async function checkUndoAnswerLost(page: Page, relay: Relay) {
   await capture(page, 'reply-undo-unanswered')
   equal(
     await afterReload(),
-    { text: LEASE, held: 0, undoing: 0 },
-    'after a reload, the undo whose answer was lost puts the reply back in its editor',
+    restored,
+    'after a reload, the undo whose answer was lost puts the reply back once the core answers again',
+  )
+  await dock(page).getByRole('button', { name: 'Discard' }).click()
+}
+
+/**
+ * The toast's Undo and z in the same tick, on a held reply. One undo reaches the core, the
+ * reply comes back once, and nothing says it is too late.
+ */
+export async function checkDoubleUndo(page: Page, relay: Relay) {
+  await sendLease(page)
+  const before = undos(relay)
+  await page.evaluate(() => {
+    const status = [...document.querySelectorAll('[role="status"]')].find((element) =>
+      element.querySelector('[data-field="toast"]'),
+    )
+    const button = status?.querySelector('button')
+    if (!button) throw new Error('the toast offers no Undo')
+    button.click()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }))
+  })
+  await dock(page).waitFor()
+  await settle(page)
+  equal(
+    {
+      undos: undos(relay) - before,
+      text: await draftText(page),
+      kept: await page.locator('[data-field="undone-notice"]').count(),
+      tooLate: await toast(page).filter({ hasText: 'Too late' }).count(),
+    },
+    { undos: 1, text: LEASE, kept: 0, tooLate: 0 },
+    'Undo and z at once send one undo, and the reply comes back once',
   )
   await dock(page).getByRole('button', { name: 'Discard' }).click()
 }

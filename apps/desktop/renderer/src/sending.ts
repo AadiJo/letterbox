@@ -37,6 +37,7 @@ import {
   submit,
   unsure,
 } from './drafts.ts'
+import { readStored, saveStored, type Stored } from './stored-sends.ts'
 import { threadsMatching, watchThreadDetail } from './threads.ts'
 import { sayTooLate } from './undo.ts'
 
@@ -82,6 +83,12 @@ const unknown = new Set<ChangeId>()
  */
 let undoing: ReadonlyMap<ChangeId, ChangeId> = new Map()
 /**
+ * Sends whose Undo was pressed and whose undo is not sent yet, while `undoSend` asks the core
+ * where the reply is held. A second press meanwhile sends nothing. Never stored: until the
+ * undo goes, there is no answer to lose.
+ */
+const preparing = new Set<ChangeId>()
+/**
  * Replies the core took back while their conversation's draft had text. Each waits beside that
  * draft until the user restores it over the draft or discards it (`useUndone`).
  */
@@ -114,56 +121,10 @@ const offered = () =>
 
 // Session storage keeps the sends being followed, and the sends and undos with no known
 // answer, across a reload. It may be missing or refuse. A held reply the reader shows is
-// followed anyway (`adopt`), and a lost answer stays Checking, or Undoing…, until the page reloads.
+// followed anyway (`adopt`), and a lost answer stays Checking, or Undoing…, until the page
+// reloads. stored-sends.ts reads and writes the rows. This file decides what they hold.
 
-const STORED = 'letterbox.sends'
-
-type Stored = { change: ChangeId; threadId: ThreadId; reply: Reply } & (
-  | { phase: 'unknown' | 'followed' | 'undone' }
-  | { phase: 'undoing'; undo: ChangeId }
-)
-
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
-const isRecipients = (value: unknown) =>
-  Array.isArray(value) &&
-  value.every(
-    (person) =>
-      isObject(person) &&
-      typeof person.address === 'string' &&
-      (person.name === null || typeof person.name === 'string'),
-  )
-
-/** A stored send, as this file wrote it. Anything else in storage is ignored. */
-function isStored(value: unknown): value is Stored {
-  if (!isObject(value) || typeof value.change !== 'string' || typeof value.threadId !== 'string') return false
-  const { phase } = value
-  const known =
-    phase === 'unknown' ||
-    phase === 'followed' ||
-    phase === 'undone' ||
-    (phase === 'undoing' && typeof value.undo === 'string')
-  if (!known) return false
-  const { reply } = value
-  return (
-    isObject(reply) &&
-    ['accountId', 'inReplyTo', 'subject', 'text'].every((key) => typeof reply[key] === 'string') &&
-    isRecipients(reply.to) &&
-    isRecipients(reply.cc) &&
-    isRecipients(reply.bcc) &&
-    isObject(reply.typing) &&
-    typeof reply.bccLost === 'boolean'
-  )
-}
-
-function readStored(): Stored[] {
-  try {
-    const parsed: unknown = JSON.parse(sessionStorage.getItem(STORED) ?? '[]')
-    return Array.isArray(parsed) ? parsed.filter(isStored) : []
-  } catch {
-    return []
-  }
-}
-
+/** Writes every send this file follows or keeps, as rows for the next load to read. */
 function writeStored() {
   const entries = [
     ...[...unknown].map((change) => ({ change, phase: 'unknown' as const })),
@@ -178,11 +139,7 @@ function writeStored() {
     return sent ? [{ ...entry, ...sent }] : []
   })
   for (const { change, threadId, reply } of undone.values()) kept.push({ change, threadId, reply, phase: 'undone' })
-  try {
-    sessionStorage.setItem(STORED, JSON.stringify(kept))
-  } catch {
-    // Without storage, a reload finds held replies only as the reader shows them.
-  }
+  saveStored(kept)
 }
 
 /** How to stop watching each pending send's conversation. */
@@ -378,12 +335,23 @@ export function useShownPending(threadId: ThreadId) {
  * Takes back a reply in its undo window: `change`, or else the newest, once it is located.
  * It asks the core which conversation holds the reply first, since a merge may have moved it,
  * and the reply comes back there, never to a conversation remembered from before. Resolves
- * with that conversation once the core accepts, or null. An undo already on its way for the
- * reply sends nothing. The core's update that drops it ends the offer.
+ * with that conversation once the core accepts, or null. A press while an undo for the reply
+ * is being prepared or is on its way sends nothing. The core's update that drops it ends the offer.
  */
 export async function undoSend(change?: ChangeId) {
   const offer = change ? pending.get(change) : offered()
-  if (!offer || !isOffer(offer) || !offer.located || undoing.has(offer.change)) return null
+  if (!offer || !isOffer(offer) || !offer.located) return null
+  if (undoing.has(offer.change) || preparing.has(offer.change)) return null
+  preparing.add(offer.change)
+  try {
+    return await prepareUndo(offer)
+  } finally {
+    preparing.delete(offer.change)
+  }
+}
+
+/** `undoSend` once `offer` is marked as preparing: finds where the reply is held, then takes it back there. */
+async function prepareUndo(offer: Offer) {
   const held = await client.query({ view: 'thread', threadId: offer.threadId }).catch(() => null)
   const delivery = held?.messages.find((message) => message.delivery?.change === offer.change)?.delivery
   // Past its window already: an undo could only be refused.
@@ -403,9 +371,11 @@ export async function undoSend(change?: ChangeId) {
 
 /**
  * Sends the undo of send `change` and acts on the core's answer. `again` is the change id of
- * an undo sent before whose answer was lost: the core answers a repeated id from what it
- * stored, so this learns whether that undo went through. `held` is the conversation that holds
- * the reply now, or null after a reload, when the reply's own conversation is used.
+ * an undo sent before whose answer was lost. The core stores an undo it accepts, and answers
+ * that id again from what it stored. It stores no refusal, so an undo it refused, or never
+ * got, runs again as a new undo: accepted inside the window, refused once it has ended.
+ * `held` is the conversation that holds the reply now, or null after a reload, when the
+ * reply's own conversation is used.
  *
  * Until the answer arrives the text stays kept, in storage too. Accepted, the reply goes back
  * in its editor, or, over a draft with text or one waiting on the core, waits beside it

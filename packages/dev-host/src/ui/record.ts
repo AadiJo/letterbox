@@ -78,8 +78,8 @@ const closeOptions = (code: number | undefined, reason: string | undefined) => (
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
  * in order, or until `drop` ends the connection with them still unsent. The returned promise resolves once the relay holds that `accepted`.
- * After `loseNextUndoAnswer`, the page's next undo reaches the core, and the core's answer to
- * it never reaches the page, while the connection stays open. `sees`
+ * After `holdNextUndoAnswer`, the page's next undo reaches the core, and the core's answer to
+ * it waits until `releaseUndoAnswer`, or for good, while everything else passes. `sees`
  * resolves once the core sends a message, held or not, that contains `text`. It rejects
  * after WAIT_MS, or when the connection closes first, naming what never came.
  */
@@ -92,8 +92,8 @@ async function relayCore(page: Page) {
   let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
-  // Armed by `loseNextUndoAnswer`, then the change id of the undo whose answer the relay keeps from the page.
-  let loseUndo: { change: string | null } | undefined
+  // Armed by `holdNextUndoAnswer`: the change id of the page's next undo, once sent, and the core's answer to it, once held.
+  let undoAnswer: { change: string | null; answer: string | null; held: () => void } | undefined
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -144,8 +144,8 @@ async function relayCore(page: Page) {
         const rejected = { kind: 'rejected', change, reason: 'conflict', ...(conflict ? { conflict } : {}) }
         return void socket.send(JSON.stringify(rejected))
       }
-      if (loseUndo?.change === null && text.includes('"kind":"undo"'))
-        loseUndo.change = (JSON.parse(text) as { change: string }).change
+      if (undoAnswer?.change === null && text.includes('"kind":"undo"'))
+        undoAnswer.change = (JSON.parse(text) as { change: string }).change
       core.send(message)
       if (watched && text.includes(watched.text)) {
         held ??= []
@@ -161,9 +161,12 @@ async function relayCore(page: Page) {
     core.onMessage((frame) => {
       const message = frame.toString()
       see(message)
-      if (loseUndo?.change && /"kind":"(accepted|rejected)"/.test(message)) {
+      if (undoAnswer?.change && undoAnswer.answer === null && /"kind":"(accepted|rejected)"/.test(message)) {
         const { change } = JSON.parse(message) as { change?: string }
-        if (change === loseUndo.change) return void (loseUndo = undefined)
+        if (change === undoAnswer.change) {
+          undoAnswer.answer = message
+          return void undoAnswer.held()
+        }
       }
       if (held) return void held.push(message)
       if (armed && message.includes('"kind":"accepted"')) {
@@ -183,9 +186,21 @@ async function relayCore(page: Page) {
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }
     },
-    /** Passes the page's next undo to the core and keeps the core's answer to it from the page. The connection stays open. */
-    loseNextUndoAnswer: () => {
-      loseUndo = { change: null }
+    /**
+     * Passes the page's next undo to the core and holds the core's answer to it, and only that,
+     * until `releaseUndoAnswer`. Never released, the answer is lost while the connection stays
+     * open. Arming again forgets any answer still held. Resolves once the relay holds the answer.
+     */
+    holdNextUndoAnswer: () =>
+      new Promise<void>((resolve) => {
+        undoAnswer = { change: null, answer: null, held: resolve }
+      }),
+    /** Hands the page the answer `holdNextUndoAnswer` held. */
+    releaseUndoAnswer: () => {
+      const answer = undoAnswer?.answer
+      undoAnswer = undefined
+      if (!answer) throw new Error('the relay holds no answer to an undo')
+      toPage?.(answer)
     },
     sees,
     /** Every message the page sent its cores, in order, as sent. */

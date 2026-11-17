@@ -47,7 +47,7 @@ import {
   undoOffered,
   yourTurn,
 } from './reply-page.ts'
-import { checkBccAfterReload, checkMergedConversation, checkUndoAnswerLost } from './reply-recovery.ts'
+import { checkBccAfterReload, checkDoubleUndo, checkMergedConversation, checkUndoAnswerLost } from './reply-recovery.ts'
 
 const STATE = join(root, '.letterbox/ui-check-reply')
 export async function checkReply(browser: Browser) {
@@ -361,6 +361,7 @@ export async function checkReply(browser: Browser) {
     await checkBccAfterReload(page)
     await checkMergedConversation(page, relay)
     await checkUndoAnswerLost(page, relay)
+    await checkDoubleUndo(page, relay)
 
     // The core's fixed clock moves a second each time it reads it, as each sync does, so syncs
     // carry it past Maya's window while --hold-waits keeps its timer from firing. The reply
