@@ -142,8 +142,14 @@ scenario('a second change follows a message the first one moved', async (t) => {
   const { core, box } = await start(t)
   const target = await thread(core, SUBJECT)
   const inbox = await mailbox(core, 'Inbox')
+  // The archive's call is held at the provider until the read is accepted, so the read always
+  // waits behind a move whose new ref the core does not know yet. Unheld, the archive could
+  // settle before or after the read's accept, and the transcript would change from run to run.
+  box.holdApplies()
   const archive = await core.command({ kind: 'set-mailboxes', threadIds: [target.id], add: [], remove: [inbox.id] })
+  await box.applyHeld()
   const read = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  box.releaseApplies()
   t.equal(
     [(await core.settled(archive.change)).result, (await core.settled(read.change)).result],
     ['done', 'done'],
