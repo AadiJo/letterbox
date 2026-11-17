@@ -10,7 +10,7 @@ import { useNow } from './clock.ts'
 import { useView } from './core.ts'
 import type { Field, Reply } from './drafts.ts'
 import { Key } from './Key.tsx'
-import { age, isRetired, listTime } from './time.ts'
+import { age, listTime } from './time.ts'
 
 export type { Suggested }
 
@@ -39,8 +39,11 @@ type Props = {
   onAdd: (person: Suggested) => void
 }
 
-/** How long ago `time` was, as a list says it: "7h" or "5d", and a date past People's 30 days. */
-const ago = (time: string, now: number) => (isRetired(time, now) ? listTime(time, now) : age(time, now))
+/** Past this, a suggestion's last mail shows as a date. */
+const MONTH = 30 * 24 * 3_600_000
+
+/** How long ago `time` was, as a list says it: "7h" or "5d", and a date past 30 days. */
+const ago = (time: string, now: number) => (now - Date.parse(time) > MONTH ? listTime(time, now) : age(time, now))
 
 export function Suggestions({ people, typed, active, onAdd }: Props) {
   const now = useNow()

@@ -86,6 +86,18 @@ const summaryFields = {
   pending: 'boolean',
 } as const
 
+const sender = type({
+  id: 'string',
+  accountId: 'string',
+  name: 'string | null',
+  address: 'string',
+  threads: 'number',
+  messages: 'number',
+  unread: 'number',
+  subject: 'string',
+  lastMessageAt: 'string',
+})
+
 const body = type({ state: "'ready'", text: 'string', html: 'string | null', hasRemoteContent: 'boolean' })
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })
@@ -114,6 +126,7 @@ const update = type({ view: "'accounts'", data: account.array() })
   .or({ view: "'mailboxes'", data: mailbox.array() })
   .or({ view: "'threads'", data: { total: 'number', threads: type(summaryFields).array() } })
   .or({ view: "'thread'", data: type({ ...summaryFields, messages: message.array() }).or('null') })
+  .or({ view: "'senders'", data: { total: 'number', senders: sender.array() } })
   .or({ view: "'recipients'", data: type({ name: 'string | null', address: 'string', lastAt: 'string' }).array() })
 
 const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 'string' } })
