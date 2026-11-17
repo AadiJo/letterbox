@@ -16,6 +16,8 @@ export const INVOICE = 'The invoice is paid, the receipt is copied to the ledger
 export const TRIP = "I'm in for the bike trip."
 /** A draft in the older conversation while the reply above is held. */
 export const ROUTE = 'Which route are we taking?'
+/** A reply whose undo the core accepts, with the answer lost on the way to the page. */
+export const LEASE = 'The addendum is signed and on its way back to you.'
 
 /** A message to the user and one more person, copying a third, for Reply all. */
 export const GROUP = {

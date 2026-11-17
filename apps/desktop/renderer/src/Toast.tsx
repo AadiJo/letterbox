@@ -1,25 +1,35 @@
 // The toast, raised over the bottom of the reader and never over the list's rows: what the
 // last action did, and Undo (z), or why there is nothing to undo. With the reply dock up it
 // sits 12 px above the dock (CSS anchor positioning, the dock is `--dock`), so it never covers
-// Send or Undo. undo.ts decides what it says and for how long. With no notice up, it offers
-// Undo for a reply in its undo window, for exactly as long as the core holds it (sending.ts).
+// Send or Undo. undo.ts decides what it says and for how long. With no notice up, it says
+// "Undoing…" while the core has not answered an undo of a reply, and otherwise offers Undo for a
+// reply in its undo window, for exactly as long as the core holds it (sending.ts).
 
 import { CircleCheck, Clock, Info } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useSecondsUntil } from './clock.ts'
 import { Key } from './Key.tsx'
-import { type Offer, useSendOffer } from './sending.ts'
+import { type Offer, useSendOffer, useUndoingSend } from './sending.ts'
 import { type Notice, UNDO_KEY, useNotice } from './undo.ts'
 
 export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
   const notice = useNotice()
   const offer = useSendOffer()
+  const undoing = useUndoingSend()
   if (notice)
     return (
       // A new offer is a new toast, so it rises again.
       <Frame key={notice.serial} undo={notice.change ? 'ready' : 'none'} onUndo={onUndo}>
         <NoticeIcon icon={notice.icon} />
         <span data-field="toast">{notice.label}</span>
+      </Frame>
+    )
+  if (undoing)
+    return (
+      // The reply's text stays kept until the core answers, after a reload if the answer is lost.
+      <Frame key="undoing" undo="none" onUndo={onUndo}>
+        <Clock className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
+        <span data-field="toast">Undoing…</span>
       </Frame>
     )
   if (!offer) return null
