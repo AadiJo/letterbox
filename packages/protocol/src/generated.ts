@@ -248,6 +248,16 @@ export type BlobError = "offline" | "gone" | "not-supported";
 
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+
+/**
+ * A sync brought a message from a person, in the inbox, that leaves this conversation the
+ * user's turn: it is the newest message, and the turn rule gives the turn to the user because
+ * its sender wrote last. Sent once per conversation per sync. Never for a message a snapshot
+ * lists, which is how the first sync, a backfill and a resync bring mail, never for mail from
+ * a machine, and never for the user's own sends. A UI that notifies shows `from` and `subject`
+ * only, and opens `thread_id` when the notification is chosen.
+ */
+export type YourTurn = { threadId: ThreadId, from: Person, subject: string, };
 
 export type ProtocolErrorReason = "version-mismatch" | "malformed";

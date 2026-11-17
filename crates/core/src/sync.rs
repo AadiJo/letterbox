@@ -2,7 +2,8 @@
 //! what changed there, or one snapshot page (see snapshot.rs), and records how it went.
 //! It runs in the account's queue, and stops writing once a sign-out or a new sign-in
 //! takes the account (`still_current`). Bodies load here too, one fetch per message
-//! someone is looking at.
+//! someone is looking at. A change set's new mail that makes it the user's turn is told
+//! after its commit (notify.rs).
 
 use std::rc::Rc;
 
@@ -11,6 +12,7 @@ use letterbox_protocol::{AccountId, Answer, Empty, MessageId, RequestId, Respons
 use tokio::sync::oneshot;
 
 use crate::adapter::{AdapterFailure, ChangesResult};
+use crate::notify::Arrivals;
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
 use crate::world::{AccountRecord, Health, MessageRecord, put_account, put_message};
@@ -93,6 +95,7 @@ impl Inner {
             if !self.still_current(account_id, linked) {
                 return Ok(Pulled::Done);
             }
+            let arrivals = Arrivals::before(&self.state.borrow().world, account_id, &set);
             let mut arrived = None;
             let rev = self.commit(|world, tx, at| {
                 let Some(account) = world.accounts.get(account_id).cloned() else {
@@ -112,6 +115,7 @@ impl Inner {
             if let Some(arrived) = arrived {
                 self.announce(arrived, rev);
             }
+            self.tell_your_turns(account_id, arrivals);
             return Ok(Pulled::Done);
         }
         if !self.still_current(account_id, linked) {

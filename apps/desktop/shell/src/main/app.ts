@@ -3,6 +3,7 @@
 //   - gives each page load its own core: a reload stops the core and starts another, as
 //     the store allows one core at a time, and a port goes only to the document that asked;
 //   - opens the core's sign-in pages in the browser, https only;
+//   - notifies of new mail that is the user's turn, and keeps the badge count (notify.ts);
 //   - on quit, closes the core's input, waits up to STOP_MS, then kills it by PID.
 // If the core exits on its own, the page hears it through the port. Nothing restarts it.
 
@@ -11,8 +12,9 @@ import { getCompileCacheDir } from 'node:module'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, shell, type WebFrameMain } from 'electron'
 import type { Channel } from '../shared/channels.ts'
 import { coreCommand, readConfig } from './config.ts'
-import { type CoreSession, startCore, STOP_MS } from './core.ts'
+import { type CoreHooks, type CoreSession, startCore, STOP_MS } from './core.ts'
 import { log, logTo } from './log.ts'
+import { notifyYourTurn, showBadge } from './notify.ts'
 import { createWindow, lockNavigation, pageOrigin, registerScheme, serveRenderer } from './window.ts'
 
 /** Opens a sign-in page from the core in the browser. Only https: anything else stays shut. */
@@ -37,9 +39,19 @@ if (!read.ok) {
   const command = coreCommand(config.core, config.data ?? join(app.getPath('userData'), 'core'))
   log(`compile cache: ${getCompileCacheDir() ?? 'off'}`)
 
+  // Windows shows a desktop app's notifications only under an app id.
+  if (process.platform === 'win32') app.setAppUserModelId(process.execPath)
+
+  let window: BrowserWindow | undefined
+  /** What main does with what each core tells it. The window is read when they run. */
+  const hooks: CoreHooks = {
+    openUrl,
+    yourTurn: (event) => notifyYourTurn(event, () => window),
+    badge: (count) => showBadge(count, window),
+  }
   /** The core, and whether a page has it yet. Undefined between stopping one and starting the next. */
   let core: { session: CoreSession; taken: boolean } | undefined = {
-    session: startCore(command, openUrl),
+    session: startCore(command, hooks),
     taken: false,
   }
   /** The document that asked for a core last. Only its request may start a core or get a port. */
@@ -47,7 +59,6 @@ if (!read.ok) {
   /** Page connects and the quit, one at a time, in order. */
   let queue = Promise.resolve()
   let quitting = false
-  let window: BrowserWindow | undefined
   const origin = pageOrigin(config.renderer)
 
   /**
@@ -67,7 +78,7 @@ if (!read.ok) {
           core = undefined
         }
         if (!wanted()) return dropped()
-        core ??= { session: startCore(command, openUrl), taken: false }
+        core ??= { session: startCore(command, hooks), taken: false }
         core.taken = true
         const { port1, port2 } = new MessageChannelMain()
         core.session.connect(port1)

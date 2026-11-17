@@ -5,7 +5,7 @@
 //
 // Nothing here reads a global until it is called, so the module loads in Hermes too.
 
-import type { CoreMessage } from '@letterbox/protocol'
+import type { CoreMessage, ThreadId } from '@letterbox/protocol'
 import type { Listener, Transport } from './client.ts'
 
 /** What the host posts on the port: a line the core wrote, or why the core is gone. */
@@ -20,6 +20,11 @@ export type ShellBridge = {
   platform: string
   /** Asks the shell for a port to a core. The port arrives as a PORT_MESSAGE window message. */
   connect(): void
+  /**
+   * Calls `listener` with the conversation each time the person chooses a notification for it,
+   * after the shell has brought the window forward. Returns a function that stops listening.
+   */
+  onOpenConversation(listener: (threadId: ThreadId) => void): () => void
 }
 
 /**

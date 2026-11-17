@@ -36,6 +36,7 @@ mod effect;
 mod live_view;
 mod maps;
 mod mime;
+mod notify;
 mod outbox;
 mod push;
 mod queue;

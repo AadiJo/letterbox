@@ -1,10 +1,13 @@
-// The preload: a thin bridge between the sandboxed page and main. It puts two things on
-// `window.letterbox` (ShellBridge): the platform, for styling, and `connect`, which asks main
-// for a core. Main answers with a MessagePort, which this passes to the page as a window
-// message, because contextBridge cannot carry a port. Core messages never pass through here.
+// The preload: a thin bridge between the sandboxed page and main. It puts these on
+// `window.letterbox` (ShellBridge): the platform, for styling; `connect`, which asks main
+// for a core; and `onOpenConversation`, which tells the page which conversation a chosen
+// notification names. Main answers `connect` with a MessagePort, which this passes to the
+// page as a window message, because contextBridge cannot carry a port. Core messages never
+// pass through here.
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { PORT_MESSAGE, type ShellBridge } from '@letterbox/client/message-port'
+import type { ThreadId } from '@letterbox/protocol'
 import type { Channel } from '../shared/channels.ts'
 
 /**
@@ -23,4 +26,11 @@ ipcRenderer.on('core:port' satisfies Channel, (event, asker: unknown) => {
 contextBridge.exposeInMainWorld('letterbox', {
   platform: process.platform,
   connect: () => ipcRenderer.send('core:connect' satisfies Channel, documentId),
+  onOpenConversation: (listener) => {
+    // Main sends the thread id the core put in its `your-turn`, so the string is branded here.
+    const relay = (_event: IpcRendererEvent, threadId: unknown) =>
+      typeof threadId === 'string' && listener(threadId as ThreadId)
+    ipcRenderer.on('conversation:open' satisfies Channel, relay)
+    return () => void ipcRenderer.off('conversation:open' satisfies Channel, relay)
+  },
 } satisfies ShellBridge)
