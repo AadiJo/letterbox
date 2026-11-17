@@ -46,6 +46,7 @@ mod sign_in;
 mod snapshot;
 mod store;
 mod subscriptions;
+mod suggestions;
 mod sync;
 mod turns;
 mod undo;
@@ -78,6 +79,7 @@ use crate::sign_in::Attempts;
 use crate::snapshot::Backfill;
 use crate::store::Store;
 pub use crate::store::StoreError;
+use crate::suggestions::People;
 use crate::work::Meter;
 use crate::world::{AccountRecord, Health, World, load_world, put_account};
 
@@ -188,6 +190,7 @@ impl Core {
                 state: RefCell::new(State {
                     world,
                     rows: Rows::default(),
+                    people: People::default(),
                     adapters,
                     subscriptions: IndexMap::default(),
                     syncing: HashSet::default(),
@@ -264,6 +267,8 @@ struct State {
     world: World,
     /// Every thread's row, rebuilt for what each commit touched. `flush` keeps it in step with `world`.
     rows: Rows,
+    /// Everyone the recipients views can suggest, kept in step with `rows` (see suggestions.rs).
+    people: People,
     /// The adapter serving each signed-in account.
     adapters: HashMap<AccountId, Linked>,
     /// In the order they were made, which is the order updates go out.

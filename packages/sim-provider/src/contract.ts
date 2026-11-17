@@ -90,6 +90,7 @@ export type CallCounts = {
   snapshot: number
   changes: number
   body: number
+  attachment: number
   apply: number
   send: number
   find: number
@@ -111,6 +112,9 @@ export type SentCopy = {
   /** The message as the provider got it. */
   raw: string
 }
+
+/** One attachment of a sent copy, as the provider read it from the message. */
+export type SentFile = { name: string; mime: string; inline: boolean; content: Buffer }
 
 /** One mailbox at the sim provider, as a scenario drives it. Every method takes effect at once. */
 export interface SimMailbox {

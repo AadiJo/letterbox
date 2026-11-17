@@ -16,6 +16,8 @@
 //!   send          users.messages.send with the core's message as base64url, in the thread
 //!                 of the message it answers. A send that may have landed is never sent
 //!                 again: `find` searches rfc822msgid: for it (send.rs).
+//!   attachment    messages.get with format=full, then the content inline in the part, or
+//!                 users.messages.attachments.get with the part's fresh attachmentId.
 //!
 //! Rate limits: a call Gmail refuses as over its rate limit waits and tries again, up to
 //! a limit (api.rs). The wait comes from `GmailConfig::pause`, and `close` ends it.

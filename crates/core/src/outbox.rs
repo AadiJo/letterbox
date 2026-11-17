@@ -20,6 +20,10 @@
 //!   - Delivered, the same record takes the provider's ref in the commit that settles the
 //!     change, so the conversation never shows it twice or drops it for a moment.
 //!   - Refused, it stays in its conversation, marked failed with the reason.
+//!   - A forward's attachments are fetched from the original's provider copy each time the
+//!     send is about to go, before it is saved `Sending`, so a fetch that fails leaves it due.
+//!     Only the text is saved: the files join it in memory (`attach` in mime.rs) under the
+//!     same headers, so every try sends the same message. A file that is gone fails the send.
 
 use std::rc::Rc;
 
@@ -30,10 +34,13 @@ use letterbox_protocol::{
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
-use crate::adapter::{BodyResult, MessageRef, Outgoing, SendResult};
+use crate::adapter::{
+    AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, RemoteAttachment, SendResult,
+};
 use crate::clock::{iso, parse};
 use crate::draft::prepare;
 use crate::effect::Effect;
+use crate::mime::{File, attach};
 use crate::reconcile::{remove_with_thread, thread_for};
 use crate::sync::PassResult;
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Origin, World, put_change, put_message};
@@ -53,7 +60,24 @@ pub struct Outbound {
     pub header_id: String,
     /// The message it answers.
     pub reply_to: Option<MessageId>,
+    /// For a forward, what it carries of the original beyond its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<Forward>,
 }
+
+/// What a forward carries of its original beyond the text draft.rs wrote into it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    /// The message it forwards.
+    pub of: MessageId,
+    /// The original's attachments in the order its body lists them, so each one's place is
+    /// the index `Adapter::attachment` takes.
+    pub files: Vec<RemoteAttachment>,
+}
+
+/// The content of a forward's files, in order, or None when one of them is gone.
+type Contents = Option<Vec<Vec<u8>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "stage", rename_all = "kebab-case", rename_all_fields = "camelCase")]
@@ -134,6 +158,7 @@ impl Inner {
                     bcc: prepared.bcc,
                     header_id: prepared.header_id,
                     reply_to: draft.in_reply_to.clone(),
+                    forward: prepared.forward,
                 };
                 put_change(
                     world,
@@ -245,6 +270,26 @@ impl Inner {
         staged
     }
 
+    /// Saves that a call to send has started, and the size of the message as it goes, files
+    /// and all, in one commit. The provider's copy reports that size, and a provider that gives
+    /// a moved message a new ref is matched to its copy by it (see `fingerprint` in reconcile.rs).
+    fn start_sending(self: &Rc<Self>, record: ChangeRecord, outbound: &Outbound, size: u64) -> ChangeRecord {
+        let effect = Effect::Send(Outbound {
+            stage: Stage::Sending,
+            ..outbound.clone()
+        });
+        let staged = ChangeRecord { effect, ..record };
+        self.commit(|world, tx, _| {
+            put_change(world, tx, staged.clone());
+            let message = world.messages.get(&outbound.message_id).cloned();
+            if let Some(mut message) = message.filter(|message| message.facts.size != size) {
+                message.facts.size = size;
+                put_message(world, tx, message);
+            }
+        });
+        staged
+    }
+
     /// Carries one send as far as its stage allows. Returns why the provider was not
     /// reached, if it was not. The send then stays where it was. A send that may have reached
     /// the provider is its checks' to settle (see confirm.rs): a pass only makes sure one is booked.
@@ -265,6 +310,26 @@ impl Inner {
         }
     }
 
+    /// The content of a forward's files, fetched from the provider's copy of the original.
+    /// Empty for any other send. A failure here means nothing was sent.
+    async fn contents(&self, linked: &Linked, outbound: &Outbound) -> Result<Contents, AdapterFailure> {
+        let Some(forward) = outbound.forward.as_ref().filter(|forward| !forward.files.is_empty()) else {
+            return Ok(Some(Vec::new()));
+        };
+        let original = self.state.borrow().world.messages.get(&forward.of).cloned();
+        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {
+            return Ok(None);
+        };
+        let mut contents = Vec::with_capacity(forward.files.len());
+        for index in 0..forward.files.len() {
+            match linked.adapter.attachment(r#ref.clone(), index).await? {
+                AttachmentResult::Bytes(bytes) => contents.push(bytes),
+                AttachmentResult::Gone => return Ok(None),
+            }
+        }
+        Ok(Some(contents))
+    }
+
     /// Sends a due message, the one call to `send` it ever gets unless the provider surely did not get it.
     async fn post(
         self: &Rc<Self>,
@@ -273,14 +338,33 @@ impl Inner {
         record: ChangeRecord,
         outbound: Outbound,
     ) -> PassResult {
-        let record = self.restage(record, &outbound, Stage::Sending);
+        let contents = self.contents(linked, &outbound).await;
+        if !self.still_current(account_id, linked) {
+            return Ok(());
+        }
+        let Some(contents) = contents? else {
+            self.settle(record, ChangeResult::Failed(Refusal::UnknownTarget));
+            return Ok(());
+        };
+        let files = outbound.forward.iter().flat_map(|forward| &forward.files);
+        let files: Vec<File<'_>> = files
+            .zip(&contents)
+            .map(|(file, bytes)| File {
+                name: &file.name,
+                mime: &file.mime,
+                inline: file.inline,
+                bytes,
+            })
+            .collect();
+        let raw = attach(&outbound.raw, &files);
+        let record = self.start_sending(record, &outbound, raw.len() as u64);
         let reply_to = {
             let state = self.state.borrow();
             let parent = outbound.reply_to.as_ref().and_then(|id| state.world.messages.get(id));
             parent.and_then(|parent| parent.provider_ref().cloned())
         };
         let outgoing = Outgoing {
-            raw: outbound.raw.clone(),
+            raw,
             bcc: outbound.bcc.clone(),
             message_id: outbound.header_id.clone(),
             reply_to,

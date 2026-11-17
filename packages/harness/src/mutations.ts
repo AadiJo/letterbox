@@ -15,6 +15,7 @@
 // short incremental build.
 
 import { type Mutation, runBreaks } from './breaks.ts'
+import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
@@ -408,4 +409,4 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...UNDO_MUTATIONS, ...GMAIL_MUTATIONS])
+runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...UNDO_MUTATIONS, ...GMAIL_MUTATIONS, ...FORWARD_MUTATIONS])

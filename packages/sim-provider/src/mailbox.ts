@@ -3,6 +3,7 @@
 
 import type {
   ApplyResult,
+  AttachmentResult,
   BodyResult,
   Cursor,
   MailboxRef,
@@ -27,7 +28,7 @@ import type {
 import { foldersEngine } from './folders.ts'
 import { labelsEngine } from './labels.ts'
 import { readSent } from './sent.ts'
-import { bodyOf, boxOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
+import { bodyOf, boxOf, contentsOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
 import type { Box, Draft, Store, Stored } from './store.ts'
 import { failedCall, isRecord } from './wire.ts'
 import type { Call, CallResult, Session } from './wire.ts'
@@ -107,7 +108,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   const engine = dialect === 'labels' ? labelsEngine(store) : foldersEngine(store)
   // The Message-ID of every key ever delivered. It outlives an expunge, so replies can still name it.
   const messageIds = new Map<string, string>()
-  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0, find: 0 }
+  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, attachment: 0, apply: 0, send: 0, find: 0 }
   const sentCopies: SentCopy[] = []
   const pageSize = seed.pageSize ?? 50
   const canModify = seed.canModify ?? true
@@ -164,6 +165,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       key: message.key,
       facts: factsOf(message, references, dialect === 'labels' ? (message.bulk ?? false) : null),
       body: bodyOf(message),
+      contents: contentsOf(message),
       unread: message.unread ?? true,
       flagged: message.flagged ?? false,
       mailboxes,
@@ -323,6 +325,12 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     return message ? { kind: 'body', body: message.body } : { kind: 'gone' }
   }
 
+  /** The content of the attachment at `index` in a message's body, or gone. */
+  const attachment = ({ ref, index }: { ref: MessageRef; index: number }): AttachmentResult => {
+    const content = targetsOf([ref])[0]?.contents[index]
+    return content === undefined ? { kind: 'gone' } : { kind: 'bytes', base64: content.toString('base64') }
+  }
+
   /** The mailboxes these refs name, or null if one of them names nothing. */
   const boxesOf = (refs: MailboxRef[]): Box[] | null => {
     const found = refs.flatMap((ref) => [...store.boxes.values()].filter((box) => box.ref === ref))
@@ -396,6 +404,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         return { method: 'changes', outcome: { ok: true, ...engine.changes(call.arg) } }
       case 'body':
         return { method: 'body', outcome: { ok: true, ...body(call.arg) } }
+      case 'attachment':
+        return { method: 'attachment', outcome: { ok: true, ...attachment(call.arg) } }
       case 'apply':
         return { method: 'apply', outcome: { ok: true, ...apply(call.arg) } }
       case 'send':
@@ -430,7 +440,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         else applyDamage = null
         reply(result, damage)
       }
-      const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
+      const unheld = call.method === 'changes' || call.method === 'find' || call.method === 'attachment'
+      const hold = unheld || offline ? null : holds[call.method]
       if (!hold?.keep(answerNow)) answerNow()
     },
   }

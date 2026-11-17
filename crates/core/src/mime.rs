@@ -7,6 +7,8 @@
 //!   - Text parts are UTF-8 in base64, so no body line is too long and none can look like
 //!     the boundary, which holds "=_", two characters base64 never writes.
 //!   - Addresses are bare ASCII (`is_plain_address`), so they need no quoting or encoding.
+//!   - Attachments (`attach`) travel in base64 in a multipart/mixed message after the text,
+//!     with their names in RFC 2231 parameters when a quoted string cannot hold them.
 
 use chrono::{DateTime, Utc};
 
@@ -23,9 +25,29 @@ pub struct Letter<'a> {
     pub threading: &'a Threading,
     pub text: &'a str,
     pub html: Option<&'a str>,
+    /// The Message-ID of the message this forwards, without angle brackets. It goes in
+    /// X-Forwarded-Message-Id, as Thunderbird writes it, and not in References: a forward
+    /// does not answer the original, so it starts a conversation of its own.
+    pub forwards: Option<&'a str>,
+}
+
+/// One file `attach` adds to a message.
+pub struct File<'a> {
+    pub name: &'a str,
+    pub mime: &'a str,
+    pub inline: bool,
+    pub bytes: &'a [u8],
 }
 
 const BOUNDARY: &str = "=_letterbox_alternative";
+const MIXED: &str = "=_letterbox_mixed";
+/// The line that ends the headers every reader of the message sees. `attach` finds the text
+/// entity after it. A folded header line starts with a space, so no other line can match.
+const MIME_VERSION: &str = "\r\nMIME-Version: 1.0\r\n";
+/// The longest parameter value written as one quoted string, and the most characters of an
+/// RFC 2231 piece after its name and charset, so each parameter line stays within 78.
+const PARAMETER: usize = 60;
+const PIECE: usize = 40;
 /// The longest header line this writer aims for. RFC 5322 section 2.1.1 asks for 78.
 const LINE: usize = 78;
 /// The most UTF-8 bytes in one encoded word, so the word stays well inside 75 characters.
@@ -99,6 +121,9 @@ pub fn write(letter: &Letter<'_>) -> String {
         let ids: Vec<String> = letter.threading.references.iter().map(|id| format!("<{id}>")).collect();
         push(&mut out, "References", &ids.join("\r\n "));
     }
+    if let Some(original) = letter.forwards.filter(|id| id.len() <= MAX_IN_REPLY_TO) {
+        push(&mut out, "X-Forwarded-Message-Id", &format!("<{original}>"));
+    }
     push(&mut out, "MIME-Version", "1.0");
     match letter.html {
         None => push_part(&mut out, "text/plain", letter.text),
@@ -117,6 +142,83 @@ pub fn write(letter: &Letter<'_>) -> String {
         }
     }
     out
+}
+
+/// `raw`, a message `write` wrote, with `files` after its text in a multipart/mixed body.
+/// The headers stay as they are, so the Message-ID is the same. `raw` alone when `files` is empty.
+pub fn attach(raw: &str, files: &[File<'_>]) -> String {
+    if files.is_empty() {
+        return raw.to_owned();
+    }
+    let at = raw
+        .find(MIME_VERSION)
+        .expect("`write` puts a MIME-Version line in every message")
+        + MIME_VERSION.len();
+    let (envelope, entity) = raw.split_at(at);
+    let mut out = envelope.to_owned();
+    push(
+        &mut out,
+        "Content-Type",
+        &format!("multipart/mixed; boundary=\"{MIXED}\""),
+    );
+    out.push_str("\r\n");
+    out.push_str(&format!("--{MIXED}\r\n"));
+    out.push_str(entity);
+    for file in files {
+        out.push_str(&format!("--{MIXED}\r\n"));
+        let mut kind = media_type(file.mime);
+        push_parameter(&mut kind, "name", file.name);
+        push(&mut out, "Content-Type", &kind);
+        let mut disposition = (if file.inline { "inline" } else { "attachment" }).to_owned();
+        push_parameter(&mut disposition, "filename", file.name);
+        push(&mut out, "Content-Disposition", &disposition);
+        push(&mut out, "Content-Transfer-Encoding", "base64");
+        out.push_str("\r\n");
+        push_base64(&mut out, file.bytes);
+    }
+    out.push_str(&format!("--{MIXED}--\r\n"));
+    out
+}
+
+/// `mime` as a Content-Type writes it: lowercase `type/subtype` made of RFC 2045 token
+/// characters. Anything else, which a provider could hand over, is application/octet-stream.
+fn media_type(mime: &str) -> String {
+    let token = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_graphic() && !"()<>@,;:\\\"/[]?=".contains(c))
+    };
+    match mime.split_once('/') {
+        Some((kind, subtype)) if token(kind) && token(subtype) => mime.to_ascii_lowercase(),
+        _ => "application/octet-stream".to_owned(),
+    }
+}
+
+/// Adds `;` and one parameter on a line of its own: a quoted string when the value is short
+/// printable ASCII with nothing to escape, else RFC 2231 pieces of UTF-8 in percent encoding,
+/// `name*0*=UTF-8''...`, one per line, which no line length can break.
+fn push_parameter(out: &mut String, name: &str, value: &str) {
+    let quotable = value.chars().all(|c| matches!(c, ' '..='~') && c != '"' && c != '\\');
+    if quotable && value.len() <= PARAMETER {
+        return out.push_str(&format!(";\r\n {name}=\"{value}\""));
+    }
+    let mut pieces: Vec<String> = vec![String::new()];
+    for byte in value.bytes() {
+        let encoded = if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+            char::from(byte).to_string()
+        } else {
+            format!("%{byte:02X}")
+        };
+        if pieces.last().is_some_and(|piece| piece.len() + encoded.len() > PIECE) {
+            pieces.push(String::new());
+        }
+        pieces.last_mut().expect("pieces starts with one").push_str(&encoded);
+    }
+    for (index, piece) in pieces.iter().enumerate() {
+        let charset = if index == 0 { "UTF-8''" } else { "" };
+        out.push_str(&format!(";\r\n {name}*{index}*={charset}{piece}"));
+    }
 }
 
 /// `raw` with a Bcc header in front, or `raw` alone when `bcc` is empty.
@@ -173,7 +275,12 @@ fn push_part(out: &mut String, mime: &str, content: &str) {
     push(out, "Content-Transfer-Encoding", "base64");
     out.push_str("\r\n");
     let canonical = content.replace("\r\n", "\n").replace('\r', "\n").replace('\n', "\r\n");
-    let encoded = base64(canonical.as_bytes());
+    push_base64(out, canonical.as_bytes());
+}
+
+/// Content in base64, in lines of 76 characters with CRLF line ends (RFC 2045 section 6.8).
+fn push_base64(out: &mut String, bytes: &[u8]) {
+    let encoded = base64(bytes);
     for line in encoded.as_bytes().chunks(76) {
         out.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
         out.push_str("\r\n");

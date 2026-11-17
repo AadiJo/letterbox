@@ -2,9 +2,11 @@
 // keeps, so a sent copy looks to the core exactly like any message the provider reports.
 // It reads what a mail provider must: folded headers, RFC 2047 encoded words, address
 // lists, and a text/plain or multipart/alternative body in base64, quoted-printable or
-// plain 7bit and 8bit.
+// plain 7bit and 8bit, in a multipart/mixed one with attachments named in plain or RFC 2231
+// parameters.
 
 import type { RemoteAddress, RemoteBody, RemoteFacts } from './adapter.ts'
+import type { SentFile } from './contract.ts'
 import { previewOf } from './store.ts'
 
 type Headers = Map<string, string>
@@ -65,27 +67,63 @@ const idsOf = (value: string | undefined): string[] => [...(value ?? '').matchAl
 const parameter = (value: string, name: string): string | undefined =>
   new RegExp(`;\\s*${name}="?([^";]+)"?`, 'i').exec(value)?.[1]
 
-/** The decoded text of one part, with CRLF line ends turned into LF. */
-const textOf = (headers: Headers, body: string): string => {
-  const encoding = (headers.get('content-transfer-encoding') ?? '7bit').toLowerCase()
-  const bytes =
-    encoding === 'base64'
-      ? Buffer.from(body, 'base64')
-      : encoding === 'quoted-printable'
-        ? unquote(body, false)
-        : Buffer.from(body)
-  return bytes.toString('utf8').replace(/\r\n/g, '\n')
+/**
+ * A parameter that may be written in RFC 2231 pieces: `name*0*=UTF-8''...; name*1*=...`, or
+ * as one `name*=` value, or as a plain or quoted one, which may hold RFC 2047 encoded words.
+ */
+const extended = (value: string, name: string): string | undefined => {
+  const pieces = [...value.matchAll(new RegExp(`;\\s*${name}\\*(\\d+)?(\\*)?="?([^";]*)"?`, 'gi'))]
+  if (pieces.length === 0) {
+    const plain = new RegExp(`;\\s*${name}="([^"]*)"|;\\s*${name}=([^;\\s]+)`, 'i').exec(value)
+    const found = plain?.[1] ?? plain?.[2]
+    return found === undefined ? undefined : decodeWords(found)
+  }
+  const ordered = pieces.toSorted((a, b) => Number(a[1] ?? 0) - Number(b[1] ?? 0))
+  const bytes = ordered.map((piece, index) => {
+    const text = index === 0 && piece[2] ? (piece[3] ?? '').replace(/^[^']*'[^']*'/, '') : (piece[3] ?? '')
+    return piece[2] ? Buffer.from(decodeURIComponent(text), 'utf8') : Buffer.from(text)
+  })
+  return Buffer.concat(bytes).toString('utf8')
 }
 
-/** The text and html of a body: a single text part, or the first of each in a multipart one. */
-const bodyOf = (headers: Headers, body: string): { text: string | null; html: string | null } => {
+/** The decoded content of one part. */
+const contentOf = (headers: Headers, body: string): Buffer => {
+  const encoding = (headers.get('content-transfer-encoding') ?? '7bit').toLowerCase()
+  return encoding === 'base64'
+    ? Buffer.from(body, 'base64')
+    : encoding === 'quoted-printable'
+      ? unquote(body, false)
+      : Buffer.from(body)
+}
+
+/** The decoded text of one part, with CRLF line ends turned into LF. */
+const textOf = (headers: Headers, body: string): string =>
+  contentOf(headers, body).toString('utf8').replace(/\r\n/g, '\n')
+
+/** The file a part holds, when it names one in Content-Disposition or Content-Type. */
+const fileOf = (headers: Headers, body: string): SentFile | null => {
+  const type = headers.get('content-type') ?? 'text/plain'
+  const disposition = headers.get('content-disposition') ?? ''
+  const name = extended(disposition, 'filename') ?? extended(type, 'name')
+  if (name === undefined) return null
+  const mime = (type.split(';')[0] ?? '').trim().toLowerCase()
+  return { name, mime, inline: disposition.toLowerCase().startsWith('inline'), content: contentOf(headers, body) }
+}
+
+type Read = { text: string | null; html: string | null; files: SentFile[] }
+
+/** The text, html and files of a body: a single part, or the first text of each kind in a multipart one, and every file. */
+const bodyOf = (headers: Headers, body: string): Read => {
   const type = headers.get('content-type') ?? 'text/plain'
   const boundary = parameter(type, 'boundary')
   if (!type.toLowerCase().startsWith('multipart/') || boundary === undefined) {
+    const file = fileOf(headers, body)
+    if (file !== null) return { text: null, html: null, files: [file] }
     const isHtml = type.toLowerCase().startsWith('text/html')
-    return isHtml ? { text: null, html: textOf(headers, body) } : { text: textOf(headers, body), html: null }
+    const text = textOf(headers, body)
+    return isHtml ? { text: null, html: text, files: [] } : { text, html: null, files: [] }
   }
-  const found: { text: string | null; html: string | null } = { text: null, html: null }
+  const found: Read = { text: null, html: null, files: [] }
   const parts = body.split(`--${boundary}`).slice(1)
   for (const raw of parts) {
     if (raw.startsWith('--')) break
@@ -93,14 +131,18 @@ const bodyOf = (headers: Headers, body: string): { text: string | null; html: st
     const inner = bodyOf(part.headers, part.body.replace(/\r?\n$/, ''))
     found.text ??= inner.text
     found.html ??= inner.html
+    found.files.push(...inner.files)
   }
   return found
 }
 
 /** A sent message as the sim keeps it. `bulk` is the dialect's verdict, as for delivered mail. */
-export const readSent = (raw: string, bulk: boolean | null): { facts: RemoteFacts; body: RemoteBody } => {
+export const readSent = (
+  raw: string,
+  bulk: boolean | null,
+): { facts: RemoteFacts; body: RemoteBody; contents: Buffer[] } => {
   const { headers, body } = split(raw)
-  const { text, html } = bodyOf(headers, body)
+  const { text, html, files } = bodyOf(headers, body)
   const references = idsOf(headers.get('references'))
   for (const id of idsOf(headers.get('in-reply-to'))) if (!references.includes(id)) references.push(id)
   const from = addressesOf(headers.get('from'))[0] ?? { name: null, address: '' }
@@ -116,12 +158,23 @@ export const readSent = (raw: string, bulk: boolean | null): { facts: RemoteFact
       sentAt: new Date(Number.isNaN(date) ? 0 : date).toISOString(),
       preview: previewOf(text ?? ''),
       size: Buffer.byteLength(raw),
-      hasAttachments: false,
+      hasAttachments: files.length > 0,
       headers: { listUnsubscribe: false, listId: false, precedence: '', autoSubmitted: '' },
       bulk,
     },
-    body: { text: text ?? '', html, attachments: [] },
+    body: {
+      text: text ?? '',
+      html,
+      attachments: files.map(({ name, mime, inline, content }) => ({ name, mime, size: content.length, inline })),
+    },
+    contents: files.map((file) => file.content),
   }
+}
+
+/** The files a message carries, as the provider reads them. Scenarios check a forward's with it. */
+export const filesOf = (raw: string): SentFile[] => {
+  const { headers, body } = split(raw)
+  return bodyOf(headers, body).files
 }
 
 /** Takes the Bcc header out of a message: what the provider delivers, and who it also goes to. */

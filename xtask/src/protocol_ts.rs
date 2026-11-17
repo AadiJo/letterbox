@@ -35,7 +35,7 @@ pub fn generate() -> String {
         AccountId, MailboxId, ThreadId, MessageId, BlobId, SignInOptionId, SubscriptionId, ChangeId, RequestId,
         Account, Capabilities, AccountStatus, AccountErrorReason, Mailbox, Role, Person, Turn, TurnReason, TurnState,
         ThreadSummary, ThreadDetail, Message, Body, Unavailable, Attachment,
-        ThreadFilter, Query, Update, ThreadPage,
+        ThreadFilter, Query, Update, ThreadPage, Recipient,
         Command, TurnChoice, Draft, Delivery, Refusal, ChangeResult, UndoConflict, UndoField,
         SignInOption, SignInMethod, Request, PasswordInput, Response, Answer<Empty, Never>, True, False, Empty, Never,
         SignedIn, SignInError, SyncNowError, BlobUrl, BlobError,

@@ -72,7 +72,7 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'the core does not save that a send started, so after a crash it sends again blind',
     file: core('outbox.rs'),
-    find: '        let record = self.restage(record, &outbound, Stage::Sending);\n',
+    find: '        let record = self.start_sending(record, &outbound, raw.len() as u64);\n',
     replace: '',
     scenarios: 'cut off by a crash',
   },

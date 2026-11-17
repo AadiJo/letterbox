@@ -89,6 +89,7 @@ impl Inner {
             let State {
                 world,
                 rows,
+                people,
                 adapters,
                 subscriptions,
                 syncing,
@@ -104,17 +105,18 @@ impl Inner {
             };
             let touched = world.take_touched();
             let refresh = rows.refresh(world, touched, &self.meter);
+            people.refresh(world, &refresh);
             for (sub, entry) in subscriptions.iter_mut() {
                 let view = match &mut entry.view {
                     Some(view) => {
-                        if !view.catch_up(&refresh, world, rows, &live, &self.meter) {
+                        if !view.catch_up(&refresh, world, rows, people, &live, &self.meter) {
                             continue;
                         }
                         view
                     }
                     None => entry
                         .view
-                        .insert(LiveView::open(&entry.query, world, rows, &live, &self.meter)),
+                        .insert(LiveView::open(&entry.query, world, rows, people, &live, &self.meter)),
                 };
                 let update = view.answer(world, rows, &live);
                 let text = serde_json::to_string(&update).expect("updates are plain data");

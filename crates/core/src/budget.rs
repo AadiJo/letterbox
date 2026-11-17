@@ -2,8 +2,9 @@
 //! it touched, so its cost follows what it changed, not the size of the mailbox.
 //!
 //! The test fills a large mailbox, keeps open what the app keeps open (the accounts, the
-//! mailboxes, the inbox's first page, the People screen's first page filtered by turn, and
-//! one conversation), then counts the work (see work.rs) of each step a person causes. It
+//! mailboxes, the inbox's first page, the People screen's first page filtered by turn, one
+//! conversation, and a recipient field's suggestions for a typed prefix), then counts the work
+//! (see work.rs) of each step a person causes. It
 //! counts instead of timing, so it gives the same answer on every machine.
 //!
 //! `pnpm bench:scale` times the same steps at 100k messages, for people to read.
@@ -32,6 +33,11 @@ const MESSAGES: usize = 20_000;
 /// The thread lists the test keeps open. Each may check a touched thread against its filter.
 const LISTS: u64 = 2;
 const DELIVERED: usize = 200;
+/// What the recipient field has typed. It matches person1, person10 to person19 and person100
+/// to person199: the mailbox's 300 correspondents never grow with it.
+const PREFIX: &str = "person1";
+/// How many people `PREFIX` matches. A commit may rank at most these, once.
+const MATCHED: u64 = 111;
 const ME: &str = "me@example.com";
 
 struct NoSecrets;
@@ -177,11 +183,23 @@ impl Step {
         let allowed = Work {
             summarized: self.touched,
             matched: self.touched * LISTS,
+            ranked: MATCHED,
         };
-        (self.work.summarized > allowed.summarized || self.work.matched > allowed.matched).then(|| {
+        let over = self.work.summarized > allowed.summarized
+            || self.work.matched > allowed.matched
+            || self.work.ranked > allowed.ranked;
+        over.then(|| {
             format!(
-                "{}: touched {} thread(s), summarized {} (budget {}) and matched {} against list filters (budget {})",
-                self.name, self.touched, self.work.summarized, allowed.summarized, self.work.matched, allowed.matched
+                "{}: touched {} thread(s), summarized {} (budget {}), matched {} against list filters (budget {}) \
+                 and ranked {} people (budget {})",
+                self.name,
+                self.touched,
+                self.work.summarized,
+                allowed.summarized,
+                self.work.matched,
+                allowed.matched,
+                self.work.ranked,
+                allowed.ranked
             )
         })
     }
@@ -239,6 +257,7 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
             json!({ "view": "mailboxes" }),
             json!({ "view": "threads", "filter": {}, "offset": 0, "limit": 50 }),
             json!({ "view": "threads", "filter": { "turn": "mine" }, "offset": 0, "limit": 50 }),
+            json!({ "view": "recipients", "accountId": account_id, "prefix": PREFIX, "limit": 8 }),
         ];
         for (index, query) in views.into_iter().enumerate() {
             receive(json!({ "kind": "subscribe", "sub": format!("sub_{index}"), "query": query }));
@@ -376,6 +395,10 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
             .filter(|message| matches!(message, CoreMessage::Update { .. }))
             .count();
         assert!(updates > 0, "the subscriptions were answered");
+        let suggested = sent.borrow().iter().any(|message| {
+            matches!(message, CoreMessage::Update { update: letterbox_protocol::Update::Recipients { data }, .. } if data.len() == 8)
+        });
+        assert!(suggested, "the recipients view suggested people, so its steps measured real ranking");
         steps
     });
     let _ = std::fs::remove_dir_all(&folder);

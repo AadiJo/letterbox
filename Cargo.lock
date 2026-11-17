@@ -1089,6 +1089,7 @@ dependencies = [
 name = "letterbox-sim-client"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "letterbox-core",
  "letterbox-gmail",
  "letterbox-host",

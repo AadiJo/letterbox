@@ -25,6 +25,12 @@ static NO_REPLY: LazyLock<Regex> = LazyLock::new(|| {
 
 static BULK_PRECEDENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)bulk|list|junk").expect("a valid pattern"));
 
+/// True for an address only a machine reads, such as a no-reply one. The recipients view
+/// (suggestions.rs) never suggests one, even one the user wrote to.
+pub fn is_machine_address(address: &str) -> bool {
+    NO_REPLY.is_match(address)
+}
+
 /// True when a machine sent the message: its own headers say so, its address does, or the provider does.
 pub fn is_automated(facts: &RemoteFacts) -> bool {
     let headers = &facts.headers;
