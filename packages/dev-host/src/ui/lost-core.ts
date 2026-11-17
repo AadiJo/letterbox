@@ -206,6 +206,8 @@ export async function checkLostCore(browser: Browser) {
     await relay.drop()
     await strip(page).waitFor()
     await toast(page).evaluate((box) => Promise.all(box.getAnimations().map((animation) => animation.finished)))
+    // The editor slides up as it docks. The toast keeps to where it lands, so measure it there.
+    await dock(page).evaluate((box) => Promise.all(box.getAnimations().map((animation) => animation.finished)))
     const editor = await boxOf(page, 'section[aria-label="Reply"]')
     const above = await boxOf(page, '[role="status"]:has([data-field="toast"])')
     equal(
