@@ -7,7 +7,7 @@ import { ME, mailbox, openThread, readThread, start, sync, thread, threads, unti
 import { HELD_WINDOW, scenario } from '../src/scenario.ts'
 import { ASKED, asked, draft, idsOf, startWith } from '../src/sending.ts'
 
-scenario('a reply shows at once, hands the turn over, and settles into one copy', async (t) => {
+scenario('a reply shows at once, hands the turn over once it went, and settles into one copy', async (t) => {
   const { core, box, accountId } = await start(t)
   const { threadId, question } = await asked(core)
   t.equal((await thread(core, ASKED)).turn.holder, 'mine', 'Ben asked, so it is my turn')
@@ -27,8 +27,8 @@ scenario('a reply shows at once, hands the turn over, and settles into one copy'
   const reply = first?.messages[1]
   t.equal(
     [first?.messages.length, reply?.delivery?.state, first?.turn, first?.pending],
-    [2, 'held', { holder: 'theirs', reason: 'i-wrote-last' }, true],
-    'the first update shows the reply in its undo window, pending, and the turn is theirs',
+    [2, 'held', { holder: 'mine', reason: 'they-wrote-last' }, true],
+    'the first update shows the reply in its undo window, pending, and the turn still mine',
   )
   t.equal(
     [reply?.from.address, reply?.unread, reply?.body.state],
@@ -40,7 +40,11 @@ scenario('a reply shows at once, hands the turn over, and settles into one copy'
     'every update until it settled shows the reply once, under one id',
   )
   const last = open.latest()
-  t.equal([last?.messages[1]?.delivery, last?.pending], [null, false], 'settled, it is the provider copy')
+  t.equal(
+    [last?.messages[1]?.delivery, last?.pending, last?.turn.holder],
+    [null, false, 'theirs'],
+    'settled, it is the provider copy, and the turn is theirs',
+  )
   t.check((await mailbox(core, 'Sent')).total >= 2, 'the reply counts in Sent with the earlier one')
 
   const copies = box.sent()
