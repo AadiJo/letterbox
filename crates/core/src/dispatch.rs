@@ -12,7 +12,8 @@ use letterbox_protocol::{
 use crate::Inner;
 use crate::changes::{Edit, mode_of, resolve, targets};
 use crate::effect::{Effect, MessageEffect, TurnEffect};
-use crate::world::{ChangeOutcome, ChangeRecord, Op, ThreadRecord, put_change, put_thread};
+use crate::turns::with_override;
+use crate::world::{ChangeOutcome, ChangeRecord, Op, put_change, put_thread};
 
 impl Inner {
     pub(crate) fn send(&self, message: CoreMessage) {
@@ -96,17 +97,10 @@ impl Inner {
         let effect = TurnEffect::new(&self.state.borrow().world, sets, undoes);
         let rev = self.commit_then(
             |world, tx, at| {
-                for (id, turn_override) in sets {
+                for (id, turn) in sets {
                     if let Some(thread) = world.threads.get(id).cloned() {
-                        let turn_override = *turn_override;
-                        put_thread(
-                            world,
-                            tx,
-                            ThreadRecord {
-                                turn_override,
-                                ..thread
-                            },
-                        );
+                        let thread = with_override(world, thread, *turn);
+                        put_thread(world, tx, thread);
                     }
                 }
                 put_change(

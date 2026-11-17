@@ -10,7 +10,9 @@ use crate::{ChangeId, Draft, MailboxId, ThreadId, Turn, present};
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
-    /// Correct the rule, or hand the thread back to it with `auto`.
+    /// Correct the rule, or hand the thread back to it with `auto`. A turn set holds until the
+    /// conversation gets a message sent after its newest one then, from anyone, once the provider
+    /// holds it. Then the rule decides again: their reply to a conversation marked done is my turn.
     SetTurn {
         thread_ids: Vec<ThreadId>,
         turn: TurnChoice,
@@ -40,7 +42,8 @@ pub enum Command {
     /// never goes out, it settles `undone`, and the undo settles `done`. A change the provider
     /// may hold is reversed by the undo itself, a change of its own that settles like any other:
     /// each message the change altered gets back the mailboxes, read and flag state it changed,
-    /// and nothing else. A turn correction is reversed at once.
+    /// and nothing else. A turn correction is reversed at once, unless the conversation got a
+    /// newer message since: then it is refused `conflict`, `changed`.
     ///
     /// An undo trusts only what the provider confirmed. A send is cancelled only inside its
     /// undo window, and refused `conflict` after it. Otherwise it is refused `conflict`, with
