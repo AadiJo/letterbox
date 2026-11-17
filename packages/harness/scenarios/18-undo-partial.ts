@@ -7,7 +7,7 @@
 import type { ChangeId } from '@letterbox/protocol'
 import type { Seed } from '@letterbox/sim-provider/contract'
 import type { CoreClient } from '../src/client.ts'
-import { mailbox, standardSeed, start, sync, thread, truthOf } from '../src/fixtures.ts'
+import { mailbox, standardSeed, start, sync, thread, truthOf, untilAccounts } from '../src/fixtures.ts'
 import { type Scenario, scenario } from '../src/scenario.ts'
 import { accept, allTruth, targetRow } from '../src/undoing.ts'
 
@@ -66,7 +66,10 @@ scenario(
     // The answer's step, Trash, goes first. The question's takes it out of Inbox and Projects,
     // and Projects is deleted before it goes.
     box.setOffline(true)
+    const accounts = core.subscribe({ view: 'accounts' })
     const trash = await accept(t, core, { kind: 'trash', threadIds: [lunch.id] }, 'the trash')
+    // Its push finds the provider unreachable. Waiting for that keeps the order of the next steps fixed.
+    await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
     box.deleteMailbox('projects')
     box.setOffline(false)
     await sync(core)
