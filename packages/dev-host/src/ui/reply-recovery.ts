@@ -1,16 +1,22 @@
-// The reply UI check's two ways a reply can come back without all it knew, run inside
-// reply.ts while the core holds its waits. A reload that cannot read session storage rebuilds
-// a held reply from its message, which keeps no Bcc. A held reply whose conversation the core
-// merges into another moves with it: Undo waits while the renderer finds where it went, that
-// conversation's draft cannot go meanwhile, and Undo over that draft keeps both until the user picks.
+// The reply UI check's ways a reply can come back without all it knew, run inside reply.ts
+// while the core holds its waits. A reload that cannot read session storage rebuilds a held
+// reply from its message, which keeps no Bcc. A held reply whose conversation the core merges
+// into another moves with it: Undo waits while the renderer finds where it went, that
+// conversation's draft cannot go meanwhile, and Undo over that draft keeps both until the user
+// picks. An undo the core accepts, whose answer never reaches the page, keeps the reply's text:
+// the toast says "Undoing…", and after a reload the reply is back in its editor.
 
 import type { Page } from 'playwright'
-import { equal, type Relay, WAIT_MS } from './record.ts'
+import { draftText } from './dock.ts'
+import { settle } from './mail-list.ts'
+import { capture, equal, type Relay, WAIT_MS } from './record.ts'
 import {
   body,
   chips,
   dock,
   INVOICE,
+  LEASE,
+  nav,
   open,
   openWith,
   ROUTE,
@@ -192,5 +198,71 @@ export async function checkMergedConversation(page: Page, relay: Relay) {
   await page.keyboard.press('z')
   await heldRoute.waitFor({ state: 'detached' })
   await notice.getByRole('button', { name: 'Discard it' }).click()
+  await dock(page).getByRole('button', { name: 'Discard' }).click()
+}
+
+/**
+ * The core accepts an undo of a held reply, and its answer never reaches the page: first the
+ * connection drops, then the answer alone is lost. Either way the toast says "Undoing…" and
+ * the text stays kept. After a reload, the page asks the core again under the same undo, and
+ * the reply is back in its editor.
+ */
+export async function checkUndoAnswerLost(page: Page, relay: Relay) {
+  const subject = 'Lease addendum for 4B'
+  const held = page.locator('[data-message="open"][data-delivery="held"]', { hasText: LEASE })
+  const said = () => toast(page).locator('[data-field="toast"]').textContent()
+  const sendLease = async () => {
+    await nav(page, 'People').click()
+    await open(page, subject)
+    await page.keyboard.press('r')
+    await body(page).fill(LEASE)
+    await page.keyboard.press('Control+Enter')
+    await held.waitFor()
+  }
+  /** Reloads, opens the conversation, and reads its editor (null without one), its held reply and the toast. */
+  const afterReload = async () => {
+    await page.reload()
+    await nav(page, 'People').click()
+    await open(page, subject)
+    await settle(page)
+    const text = (await dock(page).count()) === 1 ? await draftText(page) : null
+    return { text, held: await held.count(), undoing: await toast(page).filter({ hasText: 'Undoing…' }).count() }
+  }
+
+  // The connection drops after the core accepted the undo, before its answer reached the page.
+  await sendLease()
+  const accepted = relay.pauseAtAccepted()
+  await toast(page).getByRole('button', { name: /^Undo/ }).click()
+  await accepted
+  await relay.drop()
+  await page.getByRole('alert').waitFor()
+  equal(await said(), 'Undoing…', 'an undo whose answer the dropped connection lost says Undoing…')
+  await capture(page, 'reply-undo-lost')
+  equal(
+    await afterReload(),
+    { text: LEASE, held: 0, undoing: 0 },
+    'after a reload, the undo the core accepted puts the reply back in its editor',
+  )
+  await capture(page, 'reply-undo-lost-restored')
+  await dock(page).getByRole('button', { name: 'Discard' }).click()
+
+  // The answer alone is lost, and the connection stays. The core's update takes the reply out of
+  // the conversation, and the text stays kept until the core says the undo went through.
+  await sendLease()
+  relay.loseNextUndoAnswer()
+  await page.keyboard.press('z')
+  await held.waitFor({ state: 'detached' })
+  await settle(page)
+  equal(
+    [(await toast(page).count()) === 1 ? await said() : null, await dock(page).count()],
+    ['Undoing…', 0],
+    'an undo whose answer is lost says Undoing… once the reply has left the conversation',
+  )
+  await capture(page, 'reply-undo-unanswered')
+  equal(
+    await afterReload(),
+    { text: LEASE, held: 0, undoing: 0 },
+    'after a reload, the undo whose answer was lost puts the reply back in its editor',
+  )
   await dock(page).getByRole('button', { name: 'Discard' }).click()
 }

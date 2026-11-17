@@ -7,8 +7,8 @@
 // that reply read only and starts no second one, and Undo brings back exactly that reply,
 // even after someone else wrote. Past the window the reply goes exactly once. A refused send says why
 // and can be written again, and a send whose answer is lost waits as Checking, then goes once.
-// reply-recovery.ts adds a reload without session storage and a merge of conversations, and
-// reply-page.ts holds the mail and page helpers both share.
+// reply-recovery.ts adds a reload without session storage, a merge of conversations and an
+// undo whose answer is lost, and reply-page.ts holds the mail and page helpers both share.
 //
 // The dev host's clock is fixed and its waits end at once, so a send's window passes as soon
 // as it starts. Cores started while `hold` is true get `--hold-waits`, which keeps the window
@@ -46,7 +46,7 @@ import {
   undoOffered,
   yourTurn,
 } from './reply-page.ts'
-import { checkBccAfterReload, checkMergedConversation } from './reply-recovery.ts'
+import { checkBccAfterReload, checkMergedConversation, checkUndoAnswerLost } from './reply-recovery.ts'
 
 const STATE = join(root, '.letterbox/ui-check-reply')
 export async function checkReply(browser: Browser) {
@@ -359,6 +359,7 @@ export async function checkReply(browser: Browser) {
 
     await checkBccAfterReload(page)
     await checkMergedConversation(page, relay)
+    await checkUndoAnswerLost(page, relay)
 
     // The core's fixed clock moves a second each time it reads it, as each sync does, so syncs
     // carry it past Maya's window while --hold-waits keeps its timer from firing. The reply
