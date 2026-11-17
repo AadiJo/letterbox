@@ -150,7 +150,8 @@ export async function checkReply(browser: Browser) {
     await page.keyboard.press('Escape')
     await bar(page).waitFor()
     equal(await dock(page).count(), 0, 'Esc closes the editor')
-    equal((await bar(page).textContent())?.startsWith('Reply to MayaHi Maya'), true, 'the bar keeps the draft')
+    // The bar's key follows its label, and the draft's first words follow the key.
+    equal((await bar(page).textContent())?.startsWith('Reply to MayaRHi Maya'), true, 'the bar keeps the draft')
 
     // Another conversation keeps a draft of its own.
     await open(page, 'Lease addendum for 4B')
