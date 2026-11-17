@@ -162,14 +162,19 @@ scenario('Updates, Your turn and Let go hold what the seed says over a bench-sha
   await check('synced', all)
 
   // A burst, as select-all sends: mark ten newsletters read, one command each, all at once.
+  // The provider holds the first change's call until the core has accepted all ten, so each
+  // settles after every accept on every run.
   const newsletters = (await threads(core, { mailboxId: inbox.id })).filter(
     (thread) => /^Topic \d+$/.test(thread.subject) && Number(thread.subject.slice(6)) % 7 === 0,
   )
+  box.holdApplies()
   const burst = await Promise.all(
     newsletters
       .slice(0, 10)
       .map((thread) => core.command({ kind: 'set-flags', threadIds: [thread.id], unread: false })),
   )
+  await box.applyHeld()
+  box.releaseApplies()
   for (const answer of burst) t.equal((await core.settled(answer.change)).result, 'done', 'a mark-read settles')
   const read = new Set(newsletters.slice(0, 10).map((thread) => thread.subject))
   const afterBurst = all.map((messages) =>
