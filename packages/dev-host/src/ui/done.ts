@@ -331,6 +331,7 @@ export async function checkDone(browser: Browser, url: string) {
   await empty.waitFor()
   await capture(page, 'nothing-waits')
 
-  equal(appErrors(errors), [], 'the done states logged no errors')
+  // The undo checks end the connection on purpose (undo.ts).
+  equal(appErrors(errors, { lostCore: true }), [], 'the done states logged no errors')
   await close()
 }

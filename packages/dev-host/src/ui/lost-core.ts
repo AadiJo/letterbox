@@ -8,7 +8,7 @@
 // check builds the dev host's parts in this process, over state of its own, so Maya's turn is
 // there to mark done. Writes lost-core.png (1440×900) and lost-core-narrow.png (1024×700).
 
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { startSimProvider } from '@letterbox/sim-provider/server'
 import type { Browser, Locator, Page } from 'playwright'
@@ -20,6 +20,24 @@ import { dock, ME, open, seed, toast, yourTurn } from './reply-page.ts'
 
 const STATE = join(root, '.letterbox/ui-check-lost-core')
 const strip = (page: Page) => page.locator('[data-field="lost-core"]')
+
+/** What the strip says, and the raw reason its tooltip keeps. */
+const reasonShown = (page: Page) =>
+  strip(page)
+    .locator('[data-field="lost-reason"]')
+    .evaluate((words) => ({ says: words.textContent, raw: words.getAttribute('title') }))
+
+/**
+ * The PID of the core this check's server started last, which is the one the page talks to
+ * once it has connected. children.ts logs each start in host.log. Cargo is not a core.
+ */
+function newestCore() {
+  const log = readFileSync(join(STATE, 'host.log'), 'utf8')
+  const cores = [...log.matchAll(/^started (\d+) (.+)$/gm)].filter((line) => !/cargo/.test(line[2] ?? ''))
+  const pid = Number(cores.at(-1)?.[1])
+  if (!Number.isInteger(pid)) throw new Error('host.log names no core')
+  return pid
+}
 
 /** What the toast says when the connection was gone before z could send the undo (renderer undo.ts). */
 const NOT_UNDONE = "Lost the connection, so this wasn't undone"
@@ -165,6 +183,14 @@ export async function checkLostCore(browser: Browser) {
       'with the core lost, the toast that offers Undo sits 12 px above the strip, readable',
     )
     equal(
+      await reasonShown(page),
+      {
+        says: 'Lost the core: the connection closed.',
+        raw: 'the connection to the core closed (1011: the check dropped the connection)',
+      },
+      'a closed connection reads "Lost the core: the connection closed.", with the raw reason in its tooltip',
+    )
+    equal(
       await controls(page),
       {
         actions: [
@@ -182,6 +208,17 @@ export async function checkLostCore(browser: Browser) {
     )
     await page.keyboard.press('r')
     equal(await dock(page).count(), 0, 'with the core lost, r opens no reply')
+    // e too: an action key sends nothing and shakes no row, as the toolbar shows every action off.
+    const sent = relay.fromPage().length
+    const chosen = page.locator('[role="option"][aria-selected="true"]')
+    await page.keyboard.press('e')
+    const moving = await chosen.evaluate(
+      (row) =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(row.getAnimations().length))),
+        ),
+    )
+    equal([relay.fromPage().length - sent, moving], [0, 0], 'with the core lost, e sends nothing and shakes no row')
 
     await page.keyboard.press('z')
     await toast(page).filter({ hasText: NOT_UNDONE }).waitFor()
@@ -215,7 +252,18 @@ export async function checkLostCore(browser: Browser) {
       12,
       'with the reply editor up and the core lost, the toast sits 12 px above the editor, not the strip',
     )
-    equal(appErrors(errors), [], 'the lost-core page logged no errors')
+
+    // A core that exits: the dev host closes the page's connection, saying so.
+    await Promise.all([page.waitForEvent('load'), strip(page).getByRole('button', { name: 'Reload' }).click()])
+    await yourTurn(page).first().waitFor()
+    process.kill(newestCore(), 'SIGKILL')
+    await strip(page).waitFor()
+    equal(
+      await reasonShown(page),
+      { says: 'Lost the core: the core exited.', raw: 'the connection to the core closed (1011: the core exited)' },
+      'a core that exited reads "Lost the core: the core exited.", with the raw reason in its tooltip',
+    )
+    equal(appErrors(errors, { lostCore: true }), [], 'the lost-core page logged no errors')
   } finally {
     await opened.close()
     await server.close()

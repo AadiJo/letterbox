@@ -8,6 +8,20 @@ import { CircleAlert, RotateCw } from 'lucide-react'
 import { useLost } from './core.ts'
 
 /**
+ * Why the page lost its core, as one plain sentence. The transports and the shell word their
+ * reasons for a log (websocket.ts, message-port.ts, the shell's main/core.ts, the dev host's
+ * server.ts): a line it could not read, a core that exited, or else a connection that closed,
+ * for whatever reason. The raw reason stays in `lostReason` and the strip's tooltip.
+ */
+function sentence(reason: string) {
+  if (reason.startsWith('the core sent a ') || reason.startsWith('the shell sent a frame'))
+    return 'Lost the core: the page got a message it could not read.'
+  if (reason.startsWith('the core exited') || reason.endsWith(': the core exited)'))
+    return 'Lost the core: the core exited.'
+  return 'Lost the core: the connection closed.'
+}
+
+/**
  * Screen renders it first in the reader pane, and `order-last` shows it at the foot. The toast
  * sits above the last `--dock` anchor in tree order, so a docked reply editor, which comes
  * later, keeps the toast above itself, clear of Send. With no editor up, the strip is the anchor.
@@ -15,7 +29,6 @@ import { useLost } from './core.ts'
 export function LostCore() {
   const lost = useLost()
   if (lost === null) return null
-  const why = `Lost the core: ${lost}.`
   return (
     <div
       role="alert"
@@ -25,8 +38,8 @@ export function LostCore() {
       <div className="reading-column flex min-w-0 items-center gap-2">
         <CircleAlert className="size-4 flex-none text-red" strokeWidth={2} aria-hidden />
         {/* A long reason gives way first, so what to do and Reload stay whole. */}
-        <b className="min-w-0 truncate font-medium text-fg" title={why}>
-          {why}
+        <b data-field="lost-reason" className="min-w-0 truncate font-medium text-fg" title={lost}>
+          {sentence(lost)}
         </b>
         <span className="flex-none whitespace-nowrap">Reload to connect again.</span>
         <button

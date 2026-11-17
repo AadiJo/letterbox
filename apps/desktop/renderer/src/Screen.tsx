@@ -63,13 +63,15 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
 
   /**
    * Runs `action` on the open conversation, unless the screen goes before the core answers.
-   * A refused action shakes its row. Once the core
+   * Does nothing while the core is lost. A refused action shakes its row. Once the core
    * accepts a command that takes the conversation out of this list, its row slides out and,
    * as the row folds, the next one opens, unless anything was selected or the screen left
    * meanwhile. The list has not changed yet when the action starts, so the rows around the
    * open one are where they were.
    */
   const act = async (action: Action) => {
+    // The toolbar shows every action off while the core is lost, and the keys match it.
+    if (lostReason() !== null) return
     const thread = selected ? threadRecord(selected) : undefined
     if (!thread) return
     const index = order.indexOf(thread.id)
