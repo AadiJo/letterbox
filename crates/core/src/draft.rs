@@ -8,13 +8,13 @@
 //! outbox message at once, and their content joins the message only when it goes out (outbox.rs).
 
 use chrono::SubsecRound;
-use letterbox_protocol::{AccountId, Draft, MessageId, Refusal, Role, Time};
+use letterbox_protocol::{AccountId, BlobId, Draft, MessageId, Refusal, Role, Time};
 
-use crate::adapter::{BodyResult, RemoteAddress, RemoteBody, RemoteFacts, RemoteHeaders};
+use crate::adapter::{BodyResult, RemoteAddress, RemoteAttachment, RemoteBody, RemoteFacts, RemoteHeaders};
 use crate::clock::{iso, parse};
 use crate::mime::{Letter, Threading, is_plain_address, write};
 use crate::outbox::Forward;
-use crate::world::{MessageRecord, MessageState, World};
+use crate::world::{MessageRecord, MessageState, World, blob_id_of};
 
 /// A send that passed every check, ready to store.
 pub struct Prepared {
@@ -45,6 +45,13 @@ fn original<'a>(
         // It loads while its conversation is open, so the user can forward once it shows.
         None => Err(Refusal::Conflict),
     }
+}
+
+/// The places among the original's files of those named in `without`, by the blob id each
+/// shows under. A name the original does not carry is refused `invalid`.
+fn left_out(record: &MessageRecord, body: &RemoteBody, without: &[BlobId]) -> Result<Vec<usize>, Refusal> {
+    let place = |blob: &BlobId| (0..body.attachments.len()).find(|&index| blob_id_of(&record.id, index) == *blob);
+    without.iter().map(|blob| place(blob).ok_or(Refusal::Invalid)).collect()
 }
 
 /// The lines of the block above a forwarded message: who sent it, when, its subject and who got it.
@@ -163,11 +170,20 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
         None => (text, draft.html.clone()),
         Some((record, body)) => forwarded(&text, draft.html.as_deref(), &record.facts, body),
     };
-    let forward = forwarding.map(|(record, body)| Forward {
-        of: record.id.clone(),
-        files: body.attachments.clone(),
-    });
-    let files = forward.as_ref().map_or(&[][..], |forward| forward.files.as_slice());
+    let forward = match forwarding {
+        None if draft.forward_without.is_some() => return Err(Refusal::Invalid),
+        None => None,
+        Some((record, body)) => Some(Forward {
+            of: record.id.clone(),
+            files: body.attachments.clone(),
+            left_out: left_out(record, body, draft.forward_without.as_deref().unwrap_or_default())?,
+        }),
+    };
+    let files: Vec<RemoteAttachment> = forward
+        .iter()
+        .flat_map(Forward::carried)
+        .map(|(_, file)| file.clone())
+        .collect();
     let raw = write(&Letter {
         from: &account.address,
         to: &draft.to,
@@ -219,7 +235,7 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
         body: RemoteBody {
             text,
             html,
-            attachments: files.to_vec(),
+            attachments: files,
         },
         server: MessageState {
             mailboxes: sent.map(|mailbox| mailbox.id.clone()).into_iter().collect(),

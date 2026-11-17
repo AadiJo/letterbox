@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AccountId, ChangeId, MessageId, Refusal, Time};
+use crate::{AccountId, BlobId, ChangeId, MessageId, Refusal, Time};
 
 /// A message for the core to send. `to`, `cc` and `bcc` hold bare addresses, for example
 /// "ana@example.com". The core writes From, Date, Message-ID, In-Reply-To and References.
@@ -34,6 +34,12 @@ pub struct Draft {
     #[serde(default, deserialize_with = "crate::present")]
     #[ts(optional)]
     pub forward_of: Option<MessageId>,
+    /// The original's files a forward leaves out, each by the `blobId` the original's message
+    /// lists it under. Leave it out to carry every file. Refused `invalid` on a draft that
+    /// forwards nothing, or for a file the original does not carry.
+    #[serde(default, deserialize_with = "crate::present")]
+    #[ts(optional)]
+    pub forward_without: Option<Vec<BlobId>>,
 }
 
 /// How far a message the user sent has got. Messages the provider holds have none.

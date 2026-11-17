@@ -74,9 +74,22 @@ pub struct Forward {
     /// The original's attachments in the order its body lists them, so each one's place is
     /// the index `Adapter::attachment` takes.
     pub files: Vec<RemoteAttachment>,
+    /// The places in `files` of those the user took off the forward. It carries the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<usize>,
 }
 
-/// The content of a forward's files, in order, or None when one of them is gone.
+impl Forward {
+    /// The files the forward carries, each with its place among the original's.
+    pub fn carried(&self) -> impl Iterator<Item = (usize, &RemoteAttachment)> {
+        self.files
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !self.left_out.contains(index))
+    }
+}
+
+/// The content of the files a forward carries, in order, or None when one of them is gone.
 type Contents = Option<Vec<Vec<u8>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,7 +326,11 @@ impl Inner {
     /// The content of a forward's files, fetched from the provider's copy of the original.
     /// Empty for any other send. A failure here means nothing was sent.
     async fn contents(&self, linked: &Linked, outbound: &Outbound) -> Result<Contents, AdapterFailure> {
-        let Some(forward) = outbound.forward.as_ref().filter(|forward| !forward.files.is_empty()) else {
+        let Some(forward) = outbound
+            .forward
+            .as_ref()
+            .filter(|forward| forward.carried().next().is_some())
+        else {
             return Ok(Some(Vec::new()));
         };
         let original = self.state.borrow().world.messages.get(&forward.of).cloned();
@@ -321,7 +338,7 @@ impl Inner {
             return Ok(None);
         };
         let mut contents = Vec::with_capacity(forward.files.len());
-        for index in 0..forward.files.len() {
+        for (index, _) in forward.carried() {
             match linked.adapter.attachment(r#ref.clone(), index).await? {
                 AttachmentResult::Bytes(bytes) => contents.push(bytes),
                 AttachmentResult::Gone => return Ok(None),
@@ -346,10 +363,10 @@ impl Inner {
             self.settle(record, ChangeResult::Failed(Refusal::UnknownTarget));
             return Ok(());
         };
-        let files = outbound.forward.iter().flat_map(|forward| &forward.files);
+        let files = outbound.forward.iter().flat_map(Forward::carried);
         let files: Vec<File<'_>> = files
             .zip(&contents)
-            .map(|(file, bytes)| File {
+            .map(|((_, file), bytes)| File {
                 name: &file.name,
                 mime: &file.mime,
                 inline: file.inline,

@@ -274,3 +274,52 @@ scenario('a forward is refused until the original has loaded, and when it also a
   box.releaseBodies()
   watch.close()
 })
+
+scenario('a forward without some of the original files carries only the rest, and fetches only those', async (t) => {
+  const { core, box, accountId, original } = await startWithContract(t, HELD_WINDOW)
+  // The first file comes off, so a file fetched by its place among those carried would be the wrong one.
+  const without = original.attachments.slice(0, 1).map((file) => file.blobId)
+  const send = await core.command({ kind: 'send', draft: forward(accountId, original.id, { forwardWithout: without }) })
+  t.equal(send.kind, 'accepted', 'the forward is accepted')
+  const row = await thread(core, 'Fwd: The contract')
+  const held = (await readThread(core, row.id))?.messages[0]
+  t.equal(
+    namesOf(held),
+    namesOf(original)?.slice(1),
+    'while it waits in its undo window, it lists only the files it will carry',
+  )
+  await core.stop()
+  // A restart reads the outbox back, and the files left out must stay out. It starts past the window.
+  const again = t.startCore({ now: '2026-01-01T02:00:00.000Z' })
+  await again.hello()
+  await sync(again)
+  t.equal((await again.settled(send.change)).result, 'done', 'after a restart the window ends and it goes out')
+  const { raw } = delivered(t, box)
+  t.equal(filesOf(raw), expectedFiles(FILES.slice(1)), 'it carries the other files whole, and not the one left out')
+  t.equal(box.calls().attachment, FILES.length - 1, 'only the files it carries were fetched')
+  t.check(
+    readSent(raw, null).body.text.startsWith(`Dan, see below.\n\n${FORWARDED}`),
+    'the text still quotes the whole original',
+  )
+})
+
+scenario(
+  'leaving out a file is refused on a draft that forwards nothing, or for a file the original lacks',
+  async (t) => {
+    const { core, box, accountId, original } = await startWithContract(t)
+    const file = original.attachments[0]?.blobId
+    if (!file) throw new Error('the contract has no files')
+    const refused = async (message: Draft) => {
+      const answer = await core.command({ kind: 'send', draft: message })
+      return answer.kind === 'rejected' ? answer.reason : answer.kind
+    }
+    const reply = draft(accountId, original.id, { to: ['ana@example.com'], forwardWithout: [file] })
+    t.equal(await refused(reply), 'invalid', 'a reply that leaves out a file is invalid')
+    const lone = draft(accountId, null, { to: ['dan@example.com'], forwardWithout: [file] })
+    t.equal(await refused(lone), 'invalid', 'a new message that leaves out a file is invalid')
+    const elsewhere = forward(accountId, original.id, { forwardWithout: [`${file}0` as typeof file] })
+    t.equal(await refused(elsewhere), 'invalid', 'a forward that leaves out a file the original lacks is invalid')
+    await sync(core)
+    t.equal(box.sent(), [], 'nothing went out')
+  },
+)

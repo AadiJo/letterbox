@@ -191,7 +191,13 @@ inReplyTo: MessageId | null,
  * and `conflict` while its body has not loaded (it loads when its conversation is open).
  * If an attachment is gone by the time the send goes out, the send fails `unknown-target`.
  */
-forwardOf?: MessageId, };
+forwardOf?: MessageId, 
+/**
+ * The original's files a forward leaves out, each by the `blobId` the original's message
+ * lists it under. Leave it out to carry every file. Refused `invalid` on a draft that
+ * forwards nothing, or for a file the original does not carry.
+ */
+forwardWithout?: Array<BlobId>, };
 
 /**
  * How far a message the user sent has got. Messages the provider holds have none.
