@@ -146,9 +146,14 @@ impl MessageRecord {
 pub struct ThreadRecord {
     pub id: ThreadId,
     pub account_id: AccountId,
-    /// A turn the user set by hand. None leaves it to the rule.
+    /// A turn the user set by hand. None leaves it to the rule. It holds only until a newer
+    /// message (see `held_override` in turns.rs). Set it with `with_override`.
     #[serde(rename = "override")]
     pub turn_override: Option<Turn>,
+    /// When the newest message the provider held was sent, as the user set `turn_override`:
+    /// empty when it held none. None for a turn set before this was kept, which holds as before.
+    #[serde(default)]
+    pub override_since: Option<Time>,
 }
 
 /// One edit in the core's own terms: which messages, and what to set on them. A change

@@ -158,8 +158,8 @@ scenario(
   },
 )
 
-// #31 makes a reply after Done hand the turn back. Until then Done holds, so the reply is quiet.
-scenario('a reply to a conversation marked done tells nothing while done holds', async (t) => {
+// Done holds until the conversation moves (turns.rs): their reply makes it my turn again, which is told.
+scenario('a reply to a conversation marked done makes it my turn again, and is told', async (t) => {
   const signedIn = await start(t)
   const { core, box } = signedIn
   const review = await thread(core, 'Can you review the draft?')
@@ -171,8 +171,9 @@ scenario('a reply to a conversation marked done tells nothing while done holds',
   await sync(core)
   t.equal(
     (await thread(core, 'Can you review the draft?')).turn,
-    { holder: 'none', reason: 'set-by-user' },
-    'done still holds after the reply',
+    { holder: 'mine', reason: 'they-wrote-last' },
+    'the reply makes it my turn again',
   )
-  await sentinel(t, signedIn, 'the reply to the done conversation was not told')
+  t.equal((await core.take('your-turn')).threadId, review.id, 'the reply is told, for its conversation')
+  await sentinel(t, signedIn, 'it was told once')
 })
