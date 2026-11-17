@@ -5,7 +5,8 @@
   "exports": {
     ".": "./src/client.ts",
     "./websocket": "./src/websocket.ts",
-    "./message-port": "./src/message-port.ts"
+    "./message-port": "./src/message-port.ts",
+    "./files": "./src/files.ts"
   },
   "dependencies": {
     "@letterbox/protocol": "workspace:*"

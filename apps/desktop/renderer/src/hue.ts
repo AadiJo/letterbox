@@ -16,8 +16,6 @@ declare module 'react' {
 const PEOPLE = [212, 262, 292, 330, 168, 190, 140, 236] as const
 /** Labels: gold, violet, rose, green and sky. */
 const LABELS = [42, 250, 345, 162, 200] as const
-/** A file's type badge: the warm red documents are known by. */
-export const FILE_HUE = 8
 
 const hash = (key: string) => [...key].reduce((sum, char) => (sum * 31 + (char.codePointAt(0) ?? 0)) >>> 0, 0)
 

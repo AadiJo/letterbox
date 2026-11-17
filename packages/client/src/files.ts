@@ -1,9 +1,15 @@
-// What main decides about an attachment's file name before it touches the disk. The name
-// comes from a message, so it is hostile: it may hold a path, a name the OS treats
-// specially, or characters that make "photo.exe" read as "photo.pdf". attachments.ts calls these.
+// What the desktop shell decides about an attachment's file name before it touches the disk,
+// and what the reader shows. The name comes from a message, so it is hostile: it may hold a
+// path, a name the OS treats specially, or characters that make "photo.exe" read as "photo.pdf".
+// The shell's main (attachments.ts) cleans the name and warns before opening a file that can
+// run code. The reader (Attachments.tsx) shows the same cleaned name and marks the same files,
+// so what it says at rest agrees with the warning. Plain code, no Node, so both can load it.
 
 /** The most bytes of UTF-8 a cleaned name keeps. Every common file system takes 255. */
 const MAX_BYTES = 200
+
+const utf8 = new TextEncoder()
+const bytesOf = (text: string) => utf8.encode(text).length
 
 /** Names Windows keeps for devices, with or without an extension. */
 const DEVICE_NAMES = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i
@@ -30,11 +36,11 @@ export function safeName(name: string): string {
     // A leading dot hides a file, or makes "..". Windows drops trailing dots and spaces.
     .replace(/^[\s.]+|[\s.]+$/g, '')
   if (DEVICE_NAMES.test(clean)) clean = `_${clean}`
-  if (Buffer.byteLength(clean) > MAX_BYTES) {
+  if (bytesOf(clean) > MAX_BYTES) {
     const dot = clean.lastIndexOf('.')
     const extension = dot > 0 && clean.length - dot <= 16 ? clean.slice(dot) : ''
     let stem = Array.from(clean.slice(0, clean.length - extension.length))
-    while (stem.length > 0 && Buffer.byteLength(stem.join('') + extension) > MAX_BYTES) stem = stem.slice(0, -1)
+    while (stem.length > 0 && bytesOf(stem.join('') + extension) > MAX_BYTES) stem = stem.slice(0, -1)
     clean = stem.join('') + extension
   }
   return clean === '' ? 'attachment' : clean
@@ -43,7 +49,7 @@ export function safeName(name: string): string {
 /**
  * Extensions whose file the OS runs, installs or mounts, or opens in a program that runs code
  * from it, when a person opens it: programs, installers, scripts, shortcuts, disk images and
- * documents with macros. Main warns before it opens one.
+ * documents with macros. Main warns before it opens one, and the reader marks one at rest.
  */
 const RUNS_CODE = new Set(
   [

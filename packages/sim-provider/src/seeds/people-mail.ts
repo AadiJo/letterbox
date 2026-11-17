@@ -254,6 +254,13 @@ const MINE: Conversation[] = [
           'Want me to post prints, or is a link enough?',
           'Felix',
         ),
+        // The reader's attachment states use these: a photo, a big zip, a PDF and a program.
+        attachments: [
+          { name: 'lake-jetty-1998.jpg', mime: 'image/jpeg', size: 3_250_586 },
+          { name: 'reunion-scans-roll-2.zip', mime: 'application/zip', size: 50_960_794 },
+          { name: 'contact-sheet.pdf', mime: 'application/pdf', size: 1_468_006 },
+          { name: 'RawViewer-setup.exe', mime: 'application/vnd.microsoft.portable-executable', size: 13_002_342 },
+        ],
       },
     ],
   },

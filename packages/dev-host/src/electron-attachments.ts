@@ -1,6 +1,6 @@
 // The attachments run of the Electron check (electron-check.ts): the page saves and opens
-// files through the bridge, with main's save dialog, warning dialog and OS open call stubbed
-// inside main, so nothing reaches the desktop. It checks the bytes that land on disk, the
+// files through the bridge, then through the reader's rows, with main's save dialog, warning
+// dialog and OS open call stubbed inside main, so nothing reaches the desktop. It checks the bytes that land on disk, the
 // names main gives them, the warning before a file that can run code, that the page never
 // sees a path, and that every temp copy but the opened ones is gone afterwards.
 
@@ -153,6 +153,67 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       [basename(dirname(opened)), basename(dirname(program))].toSorted(),
       'attachments: only the two opened copies are left in the temp folder',
     )
+    // From the reader: each row's Save and Open reach the same shell, and the row shows what came of it.
+    await page
+      .getByRole('navigation', { name: 'Sidebar' })
+      .getByRole('button', { name: /^Inbox/ })
+      .click()
+    await page.locator('[data-list="mail"] [role="option"]', { hasText: SUBJECT }).first().click()
+    const row = (name: string) =>
+      page
+        .locator('[data-message="open"] [data-field="attachment"]')
+        .filter({ has: page.locator('[data-field="name"]', { hasText: name }) })
+    /** Clicks a row's button, and waits until the shell has answered and the row shows it. */
+    const press = async (action: 'Open' | 'Save' | 'Retry', name: string) => {
+      await page.getByRole('button', { name: `${action} ${name}`, exact: true }).click()
+      await row(name).and(page.locator('[data-state="rest"], [data-state="failed"]')).waitFor({ timeout: WAIT_MS })
+      return row(name).getAttribute('data-state')
+    }
+    const REPORT = 'Q3 report.pdf'
+    const SETUP = '_setupfdp.exe'
+    await row(REPORT).waitFor({ timeout: WAIT_MS })
+    await row(SETUP).waitFor({ timeout: WAIT_MS })
+    equal(
+      [
+        await row(REPORT).locator('[data-field="program"]').count(),
+        await row(SETUP).locator('[data-field="program"]').count(),
+      ],
+      [0, 1],
+      'attachments: the reader marks the program, under the name main warns with, and not the PDF',
+    )
+
+    const fromReader = join(saved, 'from-the-reader.pdf')
+    await answer(fromReader, 0)
+    equal(await press('Save', REPORT), 'rest', "attachments: Save on the reader's row comes back to rest")
+    equal(readFileSync(fromReader).equals(bytesOf(0)), true, 'attachments: it saved the bytes the provider has')
+
+    const before = await asked()
+    await answer(null, 0)
+    equal(await press('Open', SETUP), 'rest', "attachments: declining main's warning leaves the program's row at rest")
+    equal(
+      [(await asked()).warned.length - before.warned.length, (await asked()).opened.length - before.opened.length],
+      [1, 0],
+      "attachments: Open on the program's row brings main's one warning, and nothing opens",
+    )
+    equal(await press('Open', REPORT), 'rest', "attachments: Open on the PDF's row comes back to rest")
+    equal(
+      basename((await asked()).opened.at(-1) ?? ''),
+      REPORT,
+      "attachments: the OS opened the PDF from the reader's row",
+    )
+
+    sim.mailbox.setOffline(true)
+    equal(
+      [await press('Save', REPORT), await row(REPORT).locator('[data-field="failed"]').textContent()],
+      ['failed', "Couldn't fetch while offline"],
+      'attachments: offline, the row says it could not fetch the file',
+    )
+    sim.mailbox.setOffline(false)
+    const retried = join(saved, 'retried.pdf')
+    await answer(retried, 0)
+    equal(await press('Retry', REPORT), 'rest', 'attachments: back online, Retry saves it')
+    equal(readFileSync(retried).equals(bytesOf(0)), true, 'attachments: the retried save holds the same bytes')
+
     equal(
       await page.evaluate(() => window.letterbox?.saveAttachment(42 as never)),
       { ok: false, reason: 'gone' },
