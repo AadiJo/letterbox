@@ -173,12 +173,24 @@ threads: number, messages: number, unread: number,
 /**
  * The newest conversation's subject, and when its last message came.
  */
-subject: string, lastMessageAt: string, };
+subject: string, lastMessageAt: string, 
+/**
+ * The messages in its conversations sent on each of the last 14 days, oldest first, the
+ * last entry today. Days are UTC days on the core's clock, which moves them on at midnight.
+ */
+days: Array<SenderDay>, };
 
 /**
- * One window of Updates, newest sender first. `total` counts every sender in it.
+ * One day of a sender's mail in Updates: how many messages were sent that day, and how many
+ * of them are unread.
  */
-export type SenderPage = { total: number, senders: Array<SenderSummary>, };
+export type SenderDay = { messages: number, unread: number, };
+
+/**
+ * One window of Updates, newest sender first. `total` counts every sender in it,
+ * `unread_senders` those with unread mail, and `unread` their unread messages.
+ */
+export type SenderPage = { total: number, unreadSenders: number, unread: number, senders: Array<SenderSummary>, };
 
 /**
  * A user intent. Every command acts on whole threads.

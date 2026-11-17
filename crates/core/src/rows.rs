@@ -9,9 +9,10 @@
 
 use std::borrow::Cow;
 
-use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, ThreadSummary};
+use letterbox_protocol::{AccountId, MailboxId, Person, SenderDay, SenderId, ThreadId, ThreadSummary, Time};
 
 use crate::changes::Pending;
+use crate::clock::parse;
 use crate::maps::{HashMap, IndexMap, IndexSet};
 use crate::turns::{TurnMessage, decide_turn, is_automated};
 use crate::views::{person, same};
@@ -42,6 +43,14 @@ pub struct Sender {
     pub id: SenderId,
     pub name: Option<String>,
     pub address: String,
+    /// The conversation's messages by the UTC day they were sent (see `day_of`), oldest day
+    /// first, each day once. Updates sums them per sender for its volume strip (senders.rs).
+    pub days: Vec<(i64, SenderDay)>,
+}
+
+/// The UTC day a time falls on, counted from the epoch.
+pub fn day_of(at: &Time) -> i64 {
+    parse(at).timestamp().div_euclid(86_400)
 }
 
 /// What one thread adds to the views.
@@ -203,7 +212,7 @@ fn row<'a>(world: &'a World, id: &ThreadId, pending: &Pending<'a>, meter: &Meter
         }
     }
     let listed = summarize(world, id, &records, &states, pending).map(|summary| Listed {
-        sender: sender_of(world, &summary.account_id, &records),
+        sender: sender_of(world, &summary.account_id, &records, &states),
         unread: states.iter().filter(|state| state.unread).count() as u64,
         summary,
     });
@@ -214,7 +223,12 @@ fn row<'a>(world: &'a World, id: &ThreadId, pending: &Pending<'a>, meter: &Meter
 /// someone else, when a machine sent that message (see `is_automated`). None for a conversation
 /// a person wrote last to me, or one with no message from anyone else. The address, not its
 /// domain, is the sender: one company's news@ and no-reply@ often carry unrelated mail.
-fn sender_of(world: &World, account_id: &AccountId, records: &[&MessageRecord]) -> Option<Sender> {
+fn sender_of(
+    world: &World,
+    account_id: &AccountId,
+    records: &[&MessageRecord],
+    states: &[Cow<'_, MessageState>],
+) -> Option<Sender> {
     let me = &world.accounts.get(account_id)?.address;
     let newest = records
         .iter()
@@ -226,10 +240,26 @@ fn sender_of(world: &World, account_id: &AccountId, records: &[&MessageRecord]) 
     let from = &newest.facts.from;
     #[expect(clippy::disallowed_methods, reason = "the one place sender ids are made")]
     let id = SenderId::minted(format!("sender_{account_id}_{}", from.address.to_lowercase()));
+    let mut days: Vec<(i64, SenderDay)> = Vec::new();
+    for (record, state) in records.iter().zip(states) {
+        let day = day_of(&record.facts.sent_at);
+        let at = match days.binary_search_by_key(&day, |(known, _)| *known) {
+            Ok(at) => at,
+            Err(at) => {
+                days.insert(at, (day, SenderDay::default()));
+                at
+            }
+        };
+        if let Some((_, counts)) = days.get_mut(at) {
+            counts.messages += 1;
+            counts.unread += u64::from(state.unread);
+        }
+    }
     Some(Sender {
         id,
         name: from.name.clone(),
         address: from.address.clone(),
+        days,
     })
 }
 

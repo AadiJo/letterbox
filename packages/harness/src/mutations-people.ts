@@ -106,4 +106,40 @@ export const PEOPLE_MUTATIONS: Mutation[] = [
     replace: '',
     scenarios: 'letting turns go',
   },
+  {
+    name: "Updates keeps an archived conversation's messages in its sender's days",
+    file: core('senders.rs'),
+    find: '                sum.messages -= counts.messages;\n                sum.unread -= counts.unread;\n',
+    replace: '                let _ = (counts, &sum);\n',
+    scenarios: 'per day',
+  },
+  {
+    name: 'Updates counts unread messages, not senders with unread mail, for the sidebar',
+    file: core('senders.rs'),
+    find: '        self.unread_senders = self.unread_senders - u64::from(was > 0) + u64::from(now > 0);',
+    replace: '        self.unread_senders = self.unread;',
+    scenarios: 'per day',
+  },
+  {
+    name: 'no wake is booked for Updates, so its days never move on at midnight',
+    file: core('live_view.rs'),
+    find: '            return senders.wakes_at();',
+    replace: '            return None;',
+    scenarios: 'per day',
+  },
+  {
+    name: 'Updates answers again only on a commit, so a wake at midnight leaves the days where they were',
+    file: core('senders.rs'),
+    find: '        let mut moved = today != self.today;',
+    replace: '        let mut moved = false;',
+    scenarios: 'per day',
+  },
+  {
+    name: 'Updates reads its days off the epoch, not the clock, so every day is empty',
+    file: core('subscriptions.rs'),
+    find: '            if opening.any(|entry| LiveView::splits_on_age(&entry.query)) {',
+    replace:
+      '            if opening.any(|entry| matches!(&entry.query, Query::Threads { filter, .. } if filter.retired.is_some())) {',
+    scenarios: 'per day',
+  },
 ]

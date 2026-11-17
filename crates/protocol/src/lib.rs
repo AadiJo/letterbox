@@ -33,7 +33,7 @@ use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
-pub use lists::{SenderPage, SenderSummary, ThreadFilter};
+pub use lists::{SenderDay, SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
