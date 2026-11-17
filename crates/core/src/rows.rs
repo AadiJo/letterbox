@@ -210,9 +210,12 @@ fn summarize(
             .entry(address.address.to_lowercase())
             .or_insert_with(|| person(address, &account.address));
     }
+    // Only mail the provider holds moves the turn. A send still in the outbox, or one that
+    // failed, may never reach anyone, so the turn stays where it was (see outbox.rs).
     let turn = decide_turn(
         &records
             .iter()
+            .filter(|record| record.provider_ref().is_some())
             .map(|record| TurnMessage {
                 from_me: same(&record.facts.from.address, &account.address),
                 to_me: record.facts.to.iter().any(|to| same(&to.address, &account.address)),

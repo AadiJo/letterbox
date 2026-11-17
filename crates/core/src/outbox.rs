@@ -3,7 +3,8 @@
 //!
 //!   - Accepting writes the message (see draft.rs) and stores it in the same commit as its
 //!     change. The message shows in its conversation at once, in an outbox origin that
-//!     names its change (`Origin::Outbox`), and the turn rule reads it like any other.
+//!     names its change (`Origin::Outbox`). The turn rule leaves it out until the provider
+//!     holds it (see rows.rs), so a send held, sending, unconfirmed or failed moves no turn.
 //!   - It is `Held` for the core's undo window. `undo` removes it and settles it `undone`
 //!     while the clock reads before the saved deadline, whether or not its timer has run
 //!     (undo.rs passes every undo of a send here).
