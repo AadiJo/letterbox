@@ -200,7 +200,8 @@ function Earlier({ filter, from, count, scroller, render }: EarlierProps) {
   const [first, setFirst] = useState(0)
   const [fits, setFits] = useState(0)
 
-  // Follows the reader's scroll and height, which set the lines on screen.
+  // Follows the reader's scroll and height, which set the lines on screen, and the column's
+  // height: when the open message's body arrives, or Today fills in, Earlier starts lower.
   useEffect(() => {
     const element = scroller.current
     if (!element) return
@@ -212,6 +213,7 @@ function Earlier({ filter, from, count, scroller, render }: EarlierProps) {
     follow()
     const observer = new ResizeObserver(follow)
     observer.observe(element)
+    if (element.firstElementChild) observer.observe(element.firstElementChild)
     element.addEventListener('scroll', follow)
     return () => {
       observer.disconnect()

@@ -276,6 +276,36 @@ async function checkAvatars(page: Page) {
   )
 }
 
+/**
+ * With the open sender scrolled out of the list, j opens the next sender the list has loaded,
+ * and the list scrolls to it, even when its row was not painted. In a 1024 by 700 window, the
+ * last screen of the list leaves loaded rows above the painted ones.
+ */
+async function checkKeyboardPastTheWindow(page: Page) {
+  const list = page.locator('[role="listbox"][aria-label="Updates"]')
+  await page.setViewportSize(SIZES.narrow)
+  await list.evaluate((element) => element.scrollTo({ top: element.scrollHeight }))
+  await senderRow(page, lastSender?.name ?? '').waitFor()
+  equal(
+    await page.locator('[data-sender][aria-selected="true"]').count(),
+    0,
+    'the open sender has scrolled out of the list',
+  )
+  await page.keyboard.press('j')
+  const opened = page.locator('[data-sender][aria-selected="true"]')
+  await opened.waitFor()
+  const [row, box] = [await opened.boundingBox(), await list.boundingBox()]
+  equal(
+    row !== null && box !== null && row.y >= box.y && row.y + row.height <= box.y + box.height,
+    true,
+    'j opens a sender the list then scrolls fully into view',
+  )
+  await page.setViewportSize(SIZES.wide)
+  await list.evaluate((element) => element.scrollTo({ top: 0 }))
+  await senderRow(page, 'Codeyard').click()
+  await page.locator('[data-field="archive-count"]').waitFor()
+}
+
 export async function checkUpdatesScreens(browser: Browser, url: string) {
   const { page, errors, close } = await openPage(browser, url, 'trace-updates.zip', ZONE)
   await page.locator('[data-field="people-count"]').waitFor()
@@ -299,6 +329,8 @@ export async function checkUpdatesScreens(browser: Browser, url: string) {
       'narrow: the head is the short one',
     )
   })
+
+  await checkKeyboardPastTheWindow(page)
 
   // Mark read from a hovered row reads all of one sender's mail. z takes it back.
   const target = senderRow(page, 'Tasklane')

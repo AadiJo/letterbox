@@ -153,10 +153,18 @@ function SenderList({ slice, show, selected, most, onSelect, onAct }: ListProps)
     show({ offset: range.offset, limit: range.limit })
   }, [show, range.offset, range.limit])
 
-  // Keeps the open sender on screen when the keyboard moves past the edge.
+  // Keeps the open sender on screen when the keyboard moves past the edge. It scrolls by the
+  // sender's place in the whole list, so a sender in the loaded window but not yet painted still comes into view.
+  const position = slice && selected ? slice.page.senders.findIndex((sender) => sender.id === selected) : -1
+  const selectedIndex = slice && position !== -1 ? slice.offset + position : -1
   useEffect(() => {
-    if (selected) list.current?.querySelector(`[data-sender="${selected}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [selected])
+    const element = list.current
+    if (!element || selectedIndex === -1) return
+    const top = selectedIndex * ROW_HEIGHT
+    if (top < element.scrollTop) element.scrollTop = top
+    else if (top + ROW_HEIGHT > element.scrollTop + element.clientHeight)
+      element.scrollTop = top + ROW_HEIGHT - element.clientHeight
+  }, [selectedIndex])
 
   const total = slice?.page.total ?? 0
   const start = Math.max(0, first - OVERSCAN)
