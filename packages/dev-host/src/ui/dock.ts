@@ -166,6 +166,23 @@ export async function checkDraftFidelity(page: Page, subject: string, other: str
     await roundTrip(text, index === 0 ? 'blank lines in a row' : 'a newline at the end')
   }
 
+  // Typed with real keys, Enter by Enter: each blank line is one 26 px line of the textarea.
+  await write(page, '')
+  await body(page).pressSequentially('One\n\nTwo\n\nThree\n\nFour')
+  const typed = await body(page).evaluate((field) => {
+    const style = getComputedStyle(field)
+    const content = field.scrollHeight - Number.parseFloat(style.paddingTop) - Number.parseFloat(style.paddingBottom)
+    return {
+      text: field instanceof HTMLTextAreaElement ? field.value : '',
+      lines: content / Number.parseFloat(style.lineHeight),
+    }
+  })
+  equal(
+    typed,
+    { text: 'One\n\nTwo\n\nThree\n\nFour', lines: 7 },
+    'typed paragraphs keep their blank lines, each one 26 px line',
+  )
+
   // A real paste, through the clipboard, after typed text.
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.evaluate((text) => navigator.clipboard.writeText(text), PASTED)

@@ -119,6 +119,20 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
     <DockFrame
       onMount={(element) => arrive(element, id, reply.to.length > 0 ? '[data-field="draft"]' : 'input[data-line="to"]')}
       onKeyDown={onKeyDown}
+      notice={
+        reply.bccLost && (
+          <button
+            type="button"
+            data-field="bcc-notice"
+            title="Confirm the recipients"
+            onClick={() => confirmBcc(id)}
+            className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
+          >
+            <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
+            Bcc wasn't kept after the reload. Check recipients before sending.
+          </button>
+        )
+      }
       footer={
         <>
           <button
@@ -138,6 +152,10 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
             <p role="alert" data-field="send-problem" className="flex min-w-0 items-center gap-1.5 text-row text-red">
               <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
               <span className="truncate">{problem.text}</span>
+            </p>
+          ) : reply.bccLost ? (
+            <p role="status" data-field="send-locked" className="truncate text-row text-fg2">
+              Check the recipients before sending
             </p>
           ) : earlier ? (
             <p role="status" data-field="send-locked" className="truncate text-row text-fg2">
@@ -180,18 +198,6 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
         </>
       )}
       <DraftText id={id} text={reply.text} readOnly={busy} placeholder={`Reply to ${firstName(reply.to[0])}`} />
-      {reply.bccLost && (
-        <button
-          type="button"
-          data-field="bcc-notice"
-          title="Confirm the recipients"
-          onClick={() => confirmBcc(id)}
-          className="mx-4 mb-2 flex items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
-        >
-          <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
-          Bcc wasn't kept after the reload. Check recipients before sending.
-        </button>
-      )}
     </DockFrame>
   )
 }
@@ -200,6 +206,8 @@ type FrameProps = {
   /** Runs each time the dock renders, for the editor's entrance and focus. */
   onMount?: (element: HTMLElement) => void
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void
+  /** Why Send waits, kept in view above the footer however long the draft. */
+  notice?: ReactNode
   footer: ReactNode
   /** The address lines and the text. */
   children: ReactNode
@@ -209,7 +217,7 @@ type FrameProps = {
  * The dock: an inset field in the reading column that grows with what it holds, up to 40% of
  * the reader. Past that its lines and text scroll, and the footer stays in view.
  */
-function DockFrame({ onMount, onKeyDown, footer, children }: FrameProps) {
+function DockFrame({ onMount, onKeyDown, notice, footer, children }: FrameProps) {
   return (
     <section
       aria-label="Reply"
@@ -229,6 +237,7 @@ function DockFrame({ onMount, onKeyDown, footer, children }: FrameProps) {
           >
             {children}
           </div>
+          {notice}
           {/* Its last icon ends where the address lines' dividers end: 16 or 24 px in, less the button's 8 px around its glyph. */}
           <footer className="flex h-[50px] flex-none items-center gap-3 pr-2 pl-4 wide:pr-4 wide:pl-6">{footer}</footer>
         </div>
@@ -349,12 +358,16 @@ function AddressLine({ id, field, label, reply, problem, children }: LineProps) 
     edit(id, (current) => ({ ...current, [field]: current[field].filter((_, at) => at !== index) }))
   const mine = problem?.at === field ? problem : null
   return (
-    <div data-address-line={field} className="mx-4 border-b border-line wide:mx-6">
-      <div className="flex min-h-11 items-center gap-2.5 py-[9px]">
-        <label htmlFor={`${id}-${field}`} className="flex-none text-row text-muted">
-          {label}
-        </label>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+    // A grid, so a problem under the line starts where its field starts, whatever the label's width.
+    <div
+      data-address-line={field}
+      className="mx-4 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2.5 border-b border-line wide:mx-6"
+    >
+      <label htmlFor={`${id}-${field}`} className="text-row text-muted">
+        {label}
+      </label>
+      <div className="flex min-h-11 min-w-0 items-center py-[9px]">
+        <div data-field="address-field" className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           {people.map((person, index) => (
             <Chip key={`${person.address} ${index}`} person={person} onRemove={() => remove(index)} />
           ))}
@@ -389,13 +402,13 @@ function AddressLine({ id, field, label, reply, problem, children }: LineProps) 
             className="h-[26px] min-w-[120px] flex-1 bg-transparent text-row text-fg caret-blue outline-none"
           />
         </div>
-        {children}
       </div>
+      {children}
       {mine && (
         <p
           role="alert"
           data-field="address-problem"
-          className="-mt-0.5 flex items-center gap-1.5 pb-2 pl-[38px] text-addr text-red"
+          className="col-span-2 col-start-2 -mt-0.5 flex items-center gap-1.5 pb-2 text-addr text-red"
         >
           <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
           {mine.text}

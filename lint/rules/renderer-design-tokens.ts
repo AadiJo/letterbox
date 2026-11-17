@@ -7,7 +7,8 @@
 // as `text-sm` silently does nothing.
 //
 // Only styling is read, never other text, so "Issue #123" or '{"ticket":"#123"}' are fine:
-//   - class lists: a `className` attribute or property, and every argument of `cx` (cx.ts).
+//   - class lists: a `className` attribute or property, and every argument of `cx` (cx.ts),
+//     with any `const` they name in the same file read where it is declared.
 //     Arbitrary colors in any color-bearing utility (`bg-[#111]`, `border-l-[red]`), arbitrary
 //     type sizes (`text-[19px]`, `text-[length:19px]`, `leading-[1.4]`) and shadows
 //     (`shadow-[0_1px_2px_black]`), arbitrary color, type and shadow properties
@@ -51,7 +52,7 @@ const ONLY_TOKENS = (value: string) =>
 
 /** Inline style and arbitrary properties that carry color, type or a shadow, and which message fits. */
 const propertyMessage = (name: string) => {
-  if (/color$/i.test(name) || /^(?:background|fill|stroke)$/i.test(name)) return COLOR
+  if (/color$/i.test(name) || /^(?:background(?:-?image)?|fill|stroke)$/i.test(name)) return COLOR
   if (/^(?:font|font-?size|line-?height)$/i.test(name)) return TYPE
   if (/^(?:box|text)-?shadow$/i.test(name)) return SHADOW
   return null
@@ -77,10 +78,14 @@ function classMessage(token: string) {
     const message = propertyMessage(property[1])
     return message && !ONLY_TOKENS(property[2]) ? message : null
   }
-  if (/^(?:text|leading)-\[/.test(utility)) return TYPE
-  if (new RegExp(`^(?:${SHADOW_FAMILY})-\\[`).test(utility)) return SHADOW
-  const arbitrary = new RegExp(`^(?:${COLOR_FAMILY})-\\[([^\\]]*)\\]`).exec(utility)
-  if (arbitrary) return NOT_A_COLOR.test(arbitrary[1] ?? '') && !RAW_COLOR.test(arbitrary[1] ?? '') ? null : COLOR
+  // An arbitrary value, such as `bg-[…]`, with its kind: a `color:` hint makes it a color, whatever the utility.
+  const [, family = '', value = ''] = /^([a-z-]+?)-\[(.*)\]$/.exec(utility.replace(/\/[^/\]]*$/, '')) ?? []
+  const hinted = /^color:(.*)$/.exec(value)
+  if (hinted) return ONLY_TOKENS(hinted[1] ?? '') ? null : COLOR
+  if (/^(?:text|leading)$/.test(family)) return TYPE
+  if (new RegExp(`^(?:${SHADOW_FAMILY})$`).test(family)) return SHADOW
+  if (new RegExp(`^(?:${COLOR_FAMILY})$`).test(family))
+    return NOT_A_COLOR.test(value) && !RAW_COLOR.test(value) ? null : COLOR
   if (/^text-(?:xs|sm|base|lg|[2-9]?xl)(?:\/|$)/.test(utility)) return DEFAULTS
   const palette = `(?:white|black|(?:${PALETTE})-\\d{2,3})(?:\\/|$)`
   if (new RegExp(`^(?:${COLOR_FAMILY}|text|${SHADOW_FAMILY})-${palette}`).test(utility)) return DEFAULTS
@@ -108,9 +113,14 @@ export default defineRule({
     docs: { description: 'Disallow raw colors, off-scale type sizes and raw shadows in the renderer.' },
   },
   create(context) {
-    /** Reads every class in every string under `node`, once per string. */
+    /** `const` declarations of the file whose value is a string, by name. */
+    const constants = new Map<string, ESTree.Node>()
+    /** Names a class list uses, read once the whole file is known. */
+    const named = new Set<string>()
+    /** Reads every class in every string under `node`, once per string, and notes the names it uses. */
     const checkClasses = (root: ESTree.Node) =>
       walk(root, (node) => {
+        if (node.type === 'Identifier') named.add(node.name)
         const text =
           node.type === 'Literal' && typeof node.value === 'string'
             ? node.value
@@ -131,6 +141,21 @@ export default defineRule({
           context.report({ node: property, message: STYLE })
     }
     return {
+      VariableDeclaration(node) {
+        if (node.kind !== 'const') return
+        for (const declarator of node.declarations)
+          if (
+            declarator.id.type === 'Identifier' &&
+            (declarator.init?.type === 'Literal' || declarator.init?.type === 'TemplateLiteral')
+          )
+            constants.set(declarator.id.name, declarator.init)
+      },
+      'Program:exit'() {
+        for (const name of named) {
+          const value = constants.get(name)
+          if (value) checkClasses(value)
+        }
+      },
       JSXAttribute(node) {
         if (node.name.type !== 'JSXIdentifier' || !node.value) return
         if (node.name.name === 'className' || node.name.name === 'class') checkClasses(node.value)

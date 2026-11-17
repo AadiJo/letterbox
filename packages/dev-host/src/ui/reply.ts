@@ -200,6 +200,16 @@ export async function checkReply(browser: Browser) {
       'an address that is not plain ASCII is refused on the To line',
     )
     equal(await dock(page).locator('[data-chip="invalid"]').count(), 1, 'its chip is marked')
+    // The message starts where the line's field starts, whatever the label's width.
+    const [problemBox, fieldBox] = [
+      await problem.boundingBox(),
+      await dock(page).locator('[data-address-line="to"] [data-field="address-field"]').boundingBox(),
+    ]
+    equal(
+      problemBox && fieldBox ? Math.round(problemBox.x - fieldBox.x) : null,
+      0,
+      "an address problem lines up with its line's field",
+    )
     equal(
       [mailbox.calls().send, await page.locator('[data-delivery="held"]').count()],
       [0, 0],

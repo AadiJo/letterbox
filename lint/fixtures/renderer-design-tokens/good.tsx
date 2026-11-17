@@ -15,3 +15,5 @@ export const ticket = '{"ticket":"#123"}'
 export const link = 'https://mail.example/help#abc'
 export const docs = 'Write text-[13px] nowhere: use text-row.'
 export const title = <span title="Flag #1">Flag</span>
+export const brandText = <p className="text-[color:var(--brand)]">Brand</p>
+export const brandFill = cx('bg-[color:var(--brand)] ring-offset-[color:var(--brand)]')

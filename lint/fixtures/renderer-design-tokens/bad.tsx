@@ -1,4 +1,4 @@
-// expect: letterbox/renderer-design-tokens x19
+// expect: letterbox/renderer-design-tokens x22
 
 const cx = (...parts: string[]) => parts.join(' ')
 export const element = document.createElement('p')
@@ -21,3 +21,9 @@ export const inlineColor = <p style={{ color: 'red', boxShadow: '0 1px 2px black
 export const inlineTop = <p style={{ borderTopColor: 'red' }}>Top</p>
 export const css = '<style>p{color:#333}</style>'
 element.style.borderTopColor = 'red'
+// A class list kept in a constant is read where a className or cx() uses it.
+const CLASS = 'text-[15px] text-fg'
+const OTHER = `bg-[#fff]`
+export const constant = <p className={CLASS}>Fifteen</p>
+export const joined = cx(OTHER)
+export const gradient = <div style={{ backgroundImage: 'linear-gradient(red, blue)' }} />

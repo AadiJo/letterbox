@@ -46,6 +46,19 @@ export async function checkBccAfterReload(page: Page) {
     ["Bcc wasn't kept after the reload. Check recipients before sending.", true],
     'a reply rebuilt without its Bcc says so, and Send waits',
   )
+  // With a draft taller than the dock, the notice stays in view above the footer, and the
+  // footer says why Send waits. Nothing scrolls it into view first.
+  await body(page).fill(`${INVOICE}\n\n${'One more line.\n'.repeat(30)}`)
+  const shown = await bccNotice.evaluate((notice) => {
+    const box = notice.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return Boolean(hit && notice.contains(hit))
+  })
+  equal(
+    [shown, await dock(page).locator('footer [role="status"]').textContent()],
+    [true, 'Check the recipients before sending'],
+    'with a long draft, the Bcc notice stays in view and the footer says why Send waits',
+  )
   await bccNotice.click()
   equal(
     [await bccNotice.count(), await sendButton(page).isDisabled()],
