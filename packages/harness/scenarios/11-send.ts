@@ -232,8 +232,13 @@ scenario('sending the same send twice has one effect', async (t) => {
   const { core, box, accountId } = await start(t)
   const { threadId, question } = await asked(core)
   const change = 'change_send_twice' as ChangeId
+  // Sends are held at the provider until the second is answered, so the send cannot settle
+  // first. A copy that arrives after it settled is also told `settled` again, so unheld the
+  // transcript would change from run to run.
+  box.holdSends()
   const first = await core.command({ kind: 'send', draft: draft(accountId, question.id) }, change)
   const again = await core.command({ kind: 'send', draft: draft(accountId, question.id) }, change)
+  box.releaseSends()
   t.check(
     first.kind === 'accepted' && again.kind === 'accepted' && first.rev === again.rev,
     'the second send is answered with the first revision',

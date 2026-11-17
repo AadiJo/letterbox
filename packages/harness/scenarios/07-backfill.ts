@@ -22,7 +22,7 @@
 
 import type { SimMailbox } from '@letterbox/sim-provider/contract'
 import type { ThreadSummary } from '@letterbox/protocol'
-import type { CoreClient } from '../src/client.ts'
+import type { CoreClient, Subscription } from '../src/client.ts'
 import {
   ME,
   PASSWORD,
@@ -44,11 +44,26 @@ const FIRST_TWO_PAGES = [...FIRST_PAGE, 'Can you review the draft?', 'Re: Lunch 
 
 const subjects = (list: ThreadSummary[]) => list.map((item) => item.subject)
 
-/** Answers the snapshot page the provider holds, and holds the next one. Resolves once the core asks for it. */
-async function nextPage(box: SimMailbox) {
+/** How many messages the first open account's sync shows as stored, or null when it is not syncing. */
+const stored = (accounts: Subscription<'accounts'>) => {
+  const status = accounts.latest()?.[0]?.status
+  return status?.state === 'syncing' ? status.done : null
+}
+
+/**
+ * Answers the snapshot page the provider holds, and holds the next one. Resolves once the core
+ * asks for it. A scenario with an accounts view open passes it as `accounts`: then this also waits
+ * for the view to show the answered page stored. The core's update for it comes over its output
+ * and the next page's call over the provider's socket, in either order, so without the wait the
+ * update lands before or after the next step from run to run.
+ */
+async function nextPage(box: SimMailbox, accounts?: Subscription<'accounts'>) {
+  const before = accounts && stored(accounts)
   box.releaseSnapshots()
   box.holdSnapshots()
   await box.snapshotHeld()
+  if (!accounts) return
+  while (stored(accounts) === before) await accounts.next()
 }
 
 /** Seeds a three-page mailbox, starts a core, and signs in with snapshot pages held. Resolves with page 1 held. */
@@ -70,8 +85,8 @@ scenario('a failure in the middle of the first sync keeps the pages before it', 
   const accounts = core.subscribe({ view: 'accounts' })
   await signIn(t, core, ME, PASSWORD)
   await box.snapshotHeld()
-  await nextPage(box)
-  await nextPage(box)
+  await nextPage(box, accounts)
+  await nextPage(box, accounts)
   box.setOffline(true)
   box.releaseSnapshots()
   await untilAccounts(accounts, (list) => ['offline', 'error'].includes(list[0]?.status.state ?? ''))
@@ -90,7 +105,7 @@ scenario('a sync-now that resumes a saved snapshot also brings changes made befo
   const accounts = core.subscribe({ view: 'accounts' })
   await signIn(t, core, ME, PASSWORD)
   await box.snapshotHeld()
-  await nextPage(box)
+  await nextPage(box, accounts)
   box.setOffline(true)
   box.releaseSnapshots()
   await untilAccounts(accounts, (list) => ['offline', 'error'].includes(list[0]?.status.state ?? ''))
@@ -111,8 +126,8 @@ scenario('a sync-now that resumes only the last snapshot page also brings change
   const accounts = core.subscribe({ view: 'accounts' })
   await signIn(t, core, ME, PASSWORD)
   await box.snapshotHeld()
-  await nextPage(box)
-  await nextPage(box)
+  await nextPage(box, accounts)
+  await nextPage(box, accounts)
   box.setOffline(true)
   box.releaseSnapshots()
   await untilAccounts(accounts, (list) => ['offline', 'error'].includes(list[0]?.status.state ?? ''))
