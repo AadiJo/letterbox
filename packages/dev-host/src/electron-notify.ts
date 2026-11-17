@@ -3,7 +3,8 @@
 // reaches the desktop. It checks that mail from a machine stays quiet, that a person's mail
 // that is the user's turn shows one notification with the sender and subject only, that a
 // newer one in the same conversation replaces it, that the badge counts conversations, and
-// that choosing a notification brings the window forward and tells the page to open it.
+// that choosing a notification brings the window forward and opens the conversation in the
+// page, or says quietly that it is gone.
 
 import type { ThreadId } from '@letterbox/protocol'
 import type { SeedMessage } from '@letterbox/sim-provider/contract'
@@ -121,6 +122,30 @@ export const notifyRun = (sim: RunningSim, server: DevServer) =>
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMinimized()),
       false,
       'notify: choosing it brings the window back',
+    )
+
+    // The page opens it where it lives: People, since it is my turn, in the reader, with its row chosen.
+    const current = () =>
+      page.getByRole('navigation', { name: 'Sidebar' }).locator('[aria-current="page"]').textContent()
+    await page.locator('h3[data-field="reader-subject"]', { hasText: LUNCH }).waitFor({ timeout: WAIT_MS })
+    equal(
+      [
+        (await current())?.startsWith('People'),
+        await page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row'),
+      ],
+      [true, lunch],
+      'notify: the page opens that conversation in People, in the reader, with its row chosen',
+    )
+
+    // A conversation gone since its notification opens quietly: All mail, with the reader saying so.
+    sim.mailbox.expunge('notify-other')
+    await sync()
+    await app.evaluate(() => globalThis.letterboxNotifyStubs?.made[2]?.emit('click'))
+    await page.getByText('This conversation is gone').waitFor({ timeout: WAIT_MS })
+    equal(
+      [(await current())?.startsWith('All mail'), await page.getByRole('alert').count()],
+      [true, 0],
+      'notify: a conversation gone since its notification opens All mail, whose reader says it is gone, and nothing breaks',
     )
     checkQuit('notify', run, await quit(run))
   })

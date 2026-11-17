@@ -20,6 +20,8 @@ export type Chrome = {
   onToggleSidebar: () => void
   /** The search field or, in a narrow window, its icon. */
   search: ReactNode
+  /** A conversation to open, as when the person chose its notification. A new object for each. */
+  opening: { id: ThreadId } | null
 }
 
 /** True when focus is in a text field, where letters are typing, not shortcuts. */
@@ -158,6 +160,12 @@ type ScreenProps = {
 /** The list pane beside the reader pane. The toast floats over the reader, never over the rows. */
 export function Screen({ title, subtitle, chrome, accounts, selection, children }: ScreenProps) {
   const thread = useThread(selection.selected)
+  // Opens what App asks for once this screen is up, whether it just came or was already here.
+  const open = useEffectEvent((id: ThreadId) => selection.select(id))
+  const { opening } = chrome
+  useEffect(() => {
+    if (opening) open(opening.id)
+  }, [opening])
   return (
     <>
       <section

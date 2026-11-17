@@ -1,7 +1,9 @@
 // The main window: the sidebar, then the list pane and the reader pane of the place it shows.
-// Below 1100 px wide the sidebar folds away behind a toggle in the list's head.
+// Below 1100 px wide the sidebar folds away behind a toggle in the list's head. Choosing a
+// notification (the desktop shell's) opens its conversation where it lives.
 
-import { useState } from 'react'
+import type { ThreadId } from '@letterbox/protocol'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { useLost, useView } from './core.ts'
 import { MailboxesProvider } from './Label.tsx'
 import { MailScreen } from './MailScreen.tsx'
@@ -18,16 +20,41 @@ export function App() {
   const [place, setPlace] = useState<Place>({ kind: 'people' })
   const [query, setQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // The conversation a chosen notification names, for the screen to open. A new object each time.
+  const [opening, setOpening] = useState<{ id: ThreadId } | null>(null)
 
   const goTo = (next: Place) => {
     setPlace(next)
     setQuery('')
     setSidebarOpen(false)
+    setOpening(null)
   }
+
+  /**
+   * Opens the conversation a chosen notification names: in People when it is there, else in
+   * All mail, which holds every conversation. One that is gone opens to the reader saying so.
+   */
+  const openChosen = useEffectEvent((id: ThreadId) => {
+    const inPeople = people !== undefined && (people.mine.includes(id) || people.theirs.includes(id))
+    goTo(inPeople ? { kind: 'people' } : { kind: 'all' })
+    setOpening({ id })
+  })
+  // The shell brings the window forward first. A plain browser tab has no shell, and no notifications.
+  useEffect(() => window.letterbox?.onOpenConversation((id) => openChosen(id)), [])
+
   const chrome: Chrome = {
     mail: { accounts, mailboxes },
     onToggleSidebar: () => setSidebarOpen(!sidebarOpen),
-    search: <Search query={query} onSearch={setQuery} />,
+    search: (
+      <Search
+        query={query}
+        onSearch={(text) => {
+          setQuery(text)
+          setOpening(null)
+        }}
+      />
+    ),
+    opening,
   }
 
   const screen = () => {
