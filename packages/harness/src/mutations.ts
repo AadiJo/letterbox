@@ -1,6 +1,9 @@
 // Proves the checks catch real mistakes. Each entry breaks the code one way, runs
 // the scenarios that should notice, and puts the files back. Run it with
-// `pnpm scenarios:selftest`. It fails if any break goes unnoticed.
+// `pnpm scenarios:selftest`. It fails if any break goes unnoticed. A break counts as
+// caught at the first scenario run that fails, so the rest are skipped.
+// `pnpm scenarios:selftest --shard 2/4` runs only every fourth break, starting at the
+// second. CI runs the shards as parallel jobs.
 //
 // Most entries are mistakes an agent made, or nearly made, while this repo was built.
 // When a check is added for a new mistake, add the mistake here, so the check is

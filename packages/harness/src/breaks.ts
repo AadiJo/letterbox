@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parseArgs } from 'node:util'
 import { CORE_DID_NOT_BUILD } from './client.ts'
 
 export type Edit = {
@@ -48,12 +49,19 @@ function caught(mutation: Mutation): { ok: boolean; why: string } {
     writeFileSync(path, text.replace(edit.find, edit.replace))
   }
   try {
-    const run = spawnSync(process.execPath, ['packages/harness/src/run.ts', mutation.scenarios], {
+    // One failed run proves the break was caught, so `--bail` skips the rest.
+    const run = spawnSync(process.execPath, ['packages/harness/src/run.ts', '--bail', mutation.scenarios], {
       cwd: ROOT,
       encoding: 'utf8',
       timeout: 120_000,
-      // Transcripts of broken code go to a throwaway folder, never over the real run's.
-      env: { ...process.env, LETTERBOX_ARTIFACTS: SCRATCH },
+      env: {
+        ...process.env,
+        // Transcripts of broken code go to a throwaway folder, never over the real run's.
+        LETTERBOX_ARTIFACTS: SCRATCH,
+        // CI turns incremental builds off so its Cargo cache stays small. Every break rebuilds
+        // the core with one small edit, and incremental builds make that about 2 s faster each time.
+        CARGO_INCREMENTAL: '1',
+      },
     })
     const summary = run.stdout.trim().split('\n').at(-1) ?? ''
     if (run.status === CORE_DID_NOT_BUILD)
@@ -64,8 +72,26 @@ function caught(mutation: Mutation): { ok: boolean; why: string } {
   }
 }
 
-/** Runs every break and exits non-zero if any went unnoticed. */
-export function runBreaks(mutations: Mutation[]): never {
+/**
+ * Reads `--shard k/n` from the command line: run only every n-th break, starting at the k-th.
+ * CI runs the n shards as parallel jobs. With no flag, every break runs.
+ */
+function shardOf<Item>(items: Item[]): Item[] {
+  const { values } = parseArgs({ options: { shard: { type: 'string' } } })
+  if (values.shard === undefined) return items
+  const match = /^(\d+)\/(\d+)$/.exec(values.shard)
+  const k = Number(match?.[1])
+  const n = Number(match?.[2])
+  if (!match || n < 1 || k < 1 || k > n) throw new Error(`--shard takes k/n with 1 <= k <= n, not "${values.shard}"`)
+  // Every n-th break, so the slow breaks that sit together in a file spread across the shards.
+  const chosen = items.filter((_, index) => index % n === k - 1)
+  console.log(`Shard ${k} of ${n}: ${chosen.length} of the ${items.length} breaks.\n`)
+  return chosen
+}
+
+/** Runs every break, or one shard of them (see `shardOf`), and exits non-zero if any went unnoticed. */
+export function runBreaks(all: Mutation[]): never {
+  const mutations = shardOf(all)
   let missed = 0
   for (const mutation of mutations) {
     const result = caught(mutation)

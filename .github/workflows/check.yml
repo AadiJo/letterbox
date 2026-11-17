@@ -1,6 +1,9 @@
 # Runs every check on each pull request and on main: format, types, lint, the lint
-# self-test, the scenarios, the break test, the UI check and the Electron check. `pnpm check`
-# is the same command a person runs locally. The runner's preinstalled Rust toolchain builds the core.
+# self-test, the scenarios, the break test, the UI check and the Electron check. It is
+# `pnpm check`, the same command a person runs locally, split into parallel jobs: the
+# `checks` job runs everything but the break test, and the `breaks` jobs share out the break
+# test, which alone takes most of the time. The `check` job passes only when they all pass.
+# The runner's preinstalled Rust toolchain builds the core.
 
 name: check
 
@@ -13,11 +16,17 @@ on:
     # `edited` reruns the title check below when only the title changes.
     types: [opened, edited, synchronize, reopened]
 
+# A new run for a pull request stops the one before it, which checks a commit or title that
+# is gone. Runs on main all finish, so each merge gets its own result.
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
-  check:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -31,7 +40,10 @@ jobs:
           cache: pnpm
 
       # Keeps Cargo's registry and target folder between runs. SQLite compiles from source on a cold cache.
+      # The `breaks` jobs start from the same cache, and only this job saves it.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core
 
       - run: pnpm install --frozen-lockfile
 
@@ -56,7 +68,7 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # xvfb-run gives the Electron check a display. Without one it fails and says so.
-      - run: xvfb-run -a pnpm check
+      - run: xvfb-run -a pnpm check:without-breaks
         env:
           FILE_SIZE_BASE: ${{ github.event.pull_request.base.sha }}
 
@@ -68,3 +80,44 @@ jobs:
           name: artifacts
           path: artifacts
           if-no-files-found: warn
+
+  # The break test (`pnpm scenarios:selftest`), one shard per job. Each break rebuilds the core
+  # and runs scenarios, one at a time, so more jobs is the only way to run them side by side.
+  breaks:
+    runs-on: ubuntu-latest
+    strategy:
+      # Every shard finishes, so one run lists every missed break.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core
+          save-if: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm scenarios:selftest --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # The status the main branch's ruleset requires. It passes only when every job above passed.
+  check:
+    needs: [checks, breaks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          CHECKS: ${{ needs.checks.result }}
+          BREAKS: ${{ needs.breaks.result }}
+        run: |
+          echo "checks: $CHECKS, breaks: $BREAKS"
+          test "$CHECKS" = success && test "$BREAKS" = success
