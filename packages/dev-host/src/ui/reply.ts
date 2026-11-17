@@ -2,11 +2,12 @@
 // can tell the sim provider to refuse or hold a send and count the sends it got. R opens the
 // docked editor with To filled in, Shift+R adds Cc without the user, Esc keeps the draft, and
 // each conversation keeps its own. A bad address stops at its line. Send shows the reply at
-// once, hands the turn over and offers Undo for exactly as long as the core holds it: page
-// time, another screen or a reload do not end it, the core's update does. Meanwhile R shows
-// that reply read only and starts no second one, and Undo brings back exactly that reply,
-// even after someone else wrote. Past the window the reply goes exactly once. A refused send says why
-// and can be written again, and a send whose answer is lost waits as Checking, then goes once.
+// once and offers Undo for exactly as long as the core holds it: page time, another screen
+// or a reload do not end it, the core's update does. Meanwhile R shows that reply read only
+// and starts no second one, and Undo brings back exactly that reply, even after someone
+// else wrote. Past the window the reply goes exactly once, and only then does the turn move.
+// A refused send says why and can be written again, and a send whose answer is lost waits as
+// Checking, then goes once.
 // reply-recovery.ts adds a reload without session storage and a merge of conversations, and
 // reply-page.ts holds the mail and page helpers both share.
 //
@@ -226,7 +227,7 @@ export async function checkReply(browser: Browser) {
       "the user's own message sent only to Cc still offers a reply, and Reply all",
     )
 
-    // Send: the reply is in the thread at once, the turn moves, and the toast offers Undo.
+    // Send: the reply is in the thread at once, and the toast offers Undo. The turn waits for the provider.
     await nav(page, 'People').click()
     await open(page, 'Notes from Thursday')
     const mine = await yourTurn(page).count()
@@ -244,11 +245,11 @@ export async function checkReply(browser: Browser) {
       'the reply is marked Sending, with the seconds the core gave it',
     )
     equal(await toast(page).locator('[data-field="toast"]').textContent(), 'Sending', 'the toast says Sending')
-    await page.waitForFunction(
-      (count) => document.querySelectorAll('[aria-label="Your turn"] [role="option"]').length === count,
-      mine - 1,
+    equal(
+      [(await reason(page))?.startsWith('Your turn'), await yourTurn(page).count()],
+      [true, mine],
+      'a held reply has not gone, so it is still my turn',
     )
-    equal((await reason(page))?.startsWith('Waiting on them'), true, 'the conversation waits on Maya now')
 
     // Page time decides nothing. A minute of it passes, the core still holds the reply, and Undo stays.
     await page.clock.fastForward('01:00')
@@ -394,6 +395,17 @@ export async function checkReply(browser: Browser) {
       hasText: 'Northfield confirmed',
     })
     await delivered.waitFor()
+    await page
+      .locator('[role="listbox"][aria-label="Waiting on others"] [role="option"]', { hasText: 'Notes from Thursday' })
+      .waitFor()
+    equal(
+      [
+        (await reason(page))?.startsWith('Waiting on them'),
+        await yourTurn(page).filter({ hasText: 'Notes from Thursday' }).count(),
+      ],
+      [true, 0],
+      'once the provider holds it, the conversation waits on Maya',
+    )
     equal(await page.locator('[data-field="delivery"]').count(), 0, 'past its window the reply looks like any other')
     equal([mailbox.calls().send, mailbox.sent().length], [1, 1], 'the provider got it exactly once')
     await page.keyboard.press('r')

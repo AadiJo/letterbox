@@ -42,6 +42,13 @@ export const SEND_MUTATIONS: Mutation[] = [
     scenarios: 'a reply shows at once',
   },
   {
+    name: 'a reply moves the turn as soon as it is written, so one held, refused or unconfirmed shows waiting on them',
+    file: core('rows.rs'),
+    find: '            .filter(|record| record.provider_ref().is_some())\n            .map(|record| TurnMessage {',
+    replace: '            .map(|record| TurnMessage {',
+    scenarios: 'the turn waits for the provider',
+  },
+  {
     name: 'a full resync drops a reply the provider refused',
     file: core('reconcile.rs'),
     find: '        .filter(|record| record.provider_ref().is_some())\n        .filter(|record| &record.account_id == account_id && record.round != round)',

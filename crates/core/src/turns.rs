@@ -36,9 +36,11 @@ pub fn is_automated(facts: &RemoteFacts) -> bool {
         || NO_REPLY.is_match(&facts.from.address)
 }
 
-/// Decides the turn for one conversation. `messages` is oldest first.
+/// Decides the turn for one conversation. `messages` is oldest first, and holds only the
+/// messages the provider has, so a send of mine moves the turn once it surely went (rows.rs).
 /// The last person to write holds the turn until the other answers. Mail from
-/// machines and mail I am only copied on are nobody's turn.
+/// machines and mail I am only copied on are nobody's turn, and so is a conversation
+/// the provider holds nothing of yet: a new message of mine still in the outbox.
 pub fn decide_turn(messages: &[TurnMessage], turn_override: Option<Turn>) -> TurnState {
     let decided = |holder, reason| TurnState { holder, reason };
     if let Some(holder) = turn_override {
