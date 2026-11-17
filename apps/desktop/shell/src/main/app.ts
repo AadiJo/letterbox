@@ -3,13 +3,26 @@
 //   - gives each page load its own core: a reload stops the core and starts another, as
 //     the store allows one core at a time, and a port goes only to the document that asked;
 //   - opens the core's sign-in pages in the browser, https only;
+//   - saves and opens attachments for the page, which names them by blob id (attachments.ts);
 //   - on quit, closes the core's input, waits up to STOP_MS, then kills it by PID.
 // If the core exits on its own, the page hears it through the port. Nothing restarts it.
 
 import { join } from 'node:path'
 import { getCompileCacheDir } from 'node:module'
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, shell, type WebFrameMain } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+  MessageChannelMain,
+  shell,
+  type WebFrameMain,
+} from 'electron'
+import type { AttachmentOutcome } from '@letterbox/client/message-port'
+import type { BlobId } from '@letterbox/protocol'
 import type { Channel } from '../shared/channels.ts'
+import { openAttachment, saveAttachment } from './attachments.ts'
 import { coreCommand, readConfig } from './config.ts'
 import { type CoreSession, startCore, STOP_MS } from './core.ts'
 import { log, logTo } from './log.ts'
@@ -76,14 +89,41 @@ if (!read.ok) {
       .catch((error: unknown) => log(`could not give the page a core: ${String(error)}`))
   }
 
-  ipcMain.on('core:connect' satisfies Channel, (event, document: unknown) => {
-    // Only the top frame of our own window, showing our own page, may have a core.
+  /** The top frame of our own window, showing our own page, or null for any other sender. */
+  const ownPage = (event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>) => {
     const frame = event.senderFrame
-    if (window === undefined || event.sender !== window.webContents || frame === null || frame.parent !== null) return
-    if (frame.origin !== origin || typeof document !== 'string') return
+    if (window === undefined || event.sender !== window.webContents || frame === null || frame.parent !== null)
+      return null
+    return frame.origin === origin ? { frame, window } : null
+  }
+
+  ipcMain.on('core:connect' satisfies Channel, (event, document: unknown) => {
+    // Only our own page may have a core.
+    const page = ownPage(event)
+    if (!page || typeof document !== 'string') return
     log('a page asked for a core')
-    connect(frame, document)
+    connect(page.frame, document)
   })
+
+  /**
+   * Answers the page's save or open of an attachment with `act`, through the core the page
+   * has. Only our own page may ask, and only by a blob id, which main passes to the core
+   * as a JSON string and never reads as a path.
+   */
+  const attachments = (channel: Channel, act: typeof saveAttachment) =>
+    ipcMain.handle(channel, (event, blobId: unknown): Promise<AttachmentOutcome> | AttachmentOutcome => {
+      const page = ownPage(event)
+      if (!page) {
+        log(`refused ${channel} from a frame that is not our page`)
+        return { ok: false, reason: 'failed' }
+      }
+      if (typeof blobId !== 'string' || blobId.length > 200) return { ok: false, reason: 'gone' }
+      if (!core?.taken) return { ok: false, reason: 'failed' }
+      // The core makes blob ids, so the page's string is branded here, where it goes back to the core.
+      return act(core.session, page.window, blobId as BlobId)
+    })
+  attachments('attachment:save', saveAttachment)
+  attachments('attachment:open', openAttachment)
 
   registerScheme()
   lockNavigation(origin)

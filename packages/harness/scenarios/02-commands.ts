@@ -317,7 +317,7 @@ scenario('commands with nothing to act on, that cannot be written, or not built 
   const redo = await core.command({ kind: 'undo', change: unflag.change })
   t.equal(redo.kind === 'rejected' && redo.reason, 'not-supported', 'an undo cannot itself be undone')
   const blob = await core.request({ method: 'blob', blobId: 'blob_message_1_1' as BlobId })
-  t.equal(blob.ok === false && blob.error, 'not-supported', 'attachment bytes are not built yet and say so')
+  t.equal(blob.ok === false && blob.error, 'not-supported', 'inline image urls are not built yet and say so')
 })
 
 scenario('a command after a restart is not mistaken for one made before it', async (t) => {

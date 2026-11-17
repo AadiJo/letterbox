@@ -2,6 +2,7 @@
 // loads this file behind `import.meta.env.DEV`. The routes it calls exist only in packages/dev-host.
 
 import type { Client } from '@letterbox/client'
+import type { Attachment } from '@letterbox/protocol'
 
 declare global {
   interface Window {
@@ -12,6 +13,8 @@ declare global {
       signIn(address: string, password: string): Promise<void>
       /** Resolves once the core has answered everything this tab sent before it. */
       settle(): Promise<void>
+      /** Syncs, then gives the files of the conversation with this subject once its bodies have loaded. */
+      attachments(subject: string): Promise<Attachment[]>
     }
   }
 }
@@ -31,6 +34,24 @@ export function installDevHooks(client: Client) {
     },
     // The core answers in the order it reads, so a query's answer comes after every earlier one.
     settle: async () => void (await client.query({ view: 'accounts' })),
+    attachments: async (subject) => {
+      const synced = await client.request({ method: 'sync-now' })
+      if (!synced.ok) throw new Error(`the sync before reading the files failed: ${synced.error}`)
+      // oxlint-disable-next-line letterbox/renderer-thread-lists -- a dev hook reads the list once and renders no row
+      const list = await client.query({ view: 'threads', filter: { text: subject }, offset: 0, limit: 10 })
+      const found = list.threads.find((thread) => thread.subject === subject)
+      if (!found) throw new Error(`no conversation is called "${subject}"`)
+      const open = client.subscribe({ view: 'thread', threadId: found.id })
+      try {
+        let detail = open.latest() ?? (await open.next())
+        while (detail?.messages.some((message) => message.body.state === 'loading'))
+          // oxlint-disable-next-line no-await-in-loop -- each update is the one after the last
+          detail = await open.next()
+        return detail?.messages.flatMap((message) => message.attachments) ?? []
+      } finally {
+        open.close()
+      }
+    },
     signIn: async (address, password) => {
       const options = await client.query({ view: 'sign-in-options' })
       const option = options.find((candidate) => candidate.method === 'password')

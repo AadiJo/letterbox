@@ -183,6 +183,8 @@ export interface SimMailbox {
   calls(): CallCounts
   /** Every message the core sent, in the order the provider delivered them. */
   sent(): SentCopy[]
+  /** The content the provider holds for the attachment at `index` in a message's body. */
+  attachmentBytes(key: string, index: number): Buffer
 }
 
 /** A pending sim oauth attempt, named by the url the core was told to open. */

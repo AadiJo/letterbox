@@ -27,6 +27,7 @@
 //! this workspace does.
 mod accounts;
 pub mod adapter;
+mod attachments;
 mod changes;
 pub mod clock;
 mod confirm;
@@ -242,8 +243,8 @@ impl Core {
 
 /// What the core holds while it runs. Its methods sit in one module per job: dispatch.rs
 /// takes client messages, subscriptions.rs commits and sends updates, queue.rs runs each
-/// account's jobs, sync.rs syncs, outbox.rs sends mail, undo.rs takes changes back, and
-/// accounts.rs signs accounts in and out.
+/// account's jobs, sync.rs syncs, outbox.rs sends mail, undo.rs takes changes back,
+/// accounts.rs signs accounts in and out, and attachments.rs fetches files.
 struct Inner {
     store: Store,
     env: Box<dyn Environment>,
