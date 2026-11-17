@@ -408,4 +408,4 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...UNDO_MUTATIONS, ...GMAIL_MUTATIONS])
+await runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...UNDO_MUTATIONS, ...GMAIL_MUTATIONS])
