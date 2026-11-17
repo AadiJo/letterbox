@@ -1,7 +1,7 @@
 // What every list screen shares: the list pane's head and sync strip, the reader pane, and
 // the selection with its keyboard. PeopleScreen and MailScreen fill in the list.
 
-import type { Account, Command, ThreadId } from '@letterbox/protocol'
+import type { Account, Command, MailboxId, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Action, actionForKey, canReply, type Mail, markRead, REPLY_KEY, run } from './actions.ts'
@@ -30,7 +30,7 @@ const typing = (target: EventTarget | null) =>
 /**
  * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
  * actions.ts's keys act on the open conversation, r opens a reply (Shift+R, Reply all), and z
- * undoes the last undoable action.
+ * undoes what the toast shows.
  * `leaves` says whether a command takes a conversation out of this list. When it does, the
  * row slides out and the next one opens in its place.
  */
@@ -73,11 +73,11 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     const index = order.indexOf(thread.id)
     const next = index === -1 ? null : (order[index + 1] ?? order[index - 1] ?? null)
     const started = generation.current
-    const command = await run(action, thread, mail)
+    const accepted = await run(action, thread, mail)
     if (!live.current) return
-    if (!command) return shake(thread.id)
-    notify(action, thread)
-    if (!leaves(command)) return
+    if (!accepted) return shake(thread.id)
+    notify(action, thread.id, accepted.change)
+    if (!leaves(accepted.command)) return
     await leave(thread.id)
     if (generation.current === started) select(next)
   }
@@ -95,7 +95,14 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
    */
   const undoLast = async () => {
     const started = generation.current
-    const id = hasNotice() ? await undo() : await undoSend()
+    const names = {
+      provider: (threadId: ThreadId) => {
+        const accountId = threadRecord(threadId)?.accountId
+        return mail.accounts.find((account) => account.id === accountId)?.providerLabel ?? 'the provider'
+      },
+      mailbox: (mailboxId: MailboxId) => mail.mailboxes.find((mailbox) => mailbox.id === mailboxId)?.name,
+    }
+    const id = hasNotice() ? await undo(names) : await undoSend()
     if (!id || !live.current) return
     release(id)
     if (generation.current === started) select(id)

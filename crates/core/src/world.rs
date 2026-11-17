@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapter::{
     AdapterCapabilities, AdapterFailure, BodyResult, Cursor, MailboxRef, MessageRef, PageToken, RemoteFacts,
 };
+use crate::effect::{Effect, effect_or_earlier};
 use crate::maps::{HashMap, IndexMap, IndexSet};
-use crate::outbox::Outbound;
 use crate::store::{Record, Store, Transaction};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -151,7 +151,8 @@ pub struct ThreadRecord {
     pub turn_override: Option<Turn>,
 }
 
-/// A change in the core's own terms: which messages, and what to set on them.
+/// One edit in the core's own terms: which messages, and what to set on them. A change
+/// carries its Ops in its `Effect` (see effect.rs).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Op {
@@ -168,8 +169,6 @@ pub enum Op {
         add: Vec<MailboxId>,
         remove: Vec<MailboxId>,
     },
-    /// A message the user sent, on its way out (see outbox.rs).
-    Send(Outbound),
 }
 
 /// `Sets` adds and removes membership. `Move` takes a message that is in one
@@ -185,7 +184,6 @@ impl Op {
     pub fn message_ids(&self) -> &[MessageId] {
         match self {
             Op::Flags { message_ids, .. } | Op::Mailboxes { message_ids, .. } => message_ids,
-            Op::Send(outbound) => std::slice::from_ref(&outbound.message_id),
         }
     }
 }
@@ -195,8 +193,9 @@ impl Op {
 pub struct ChangeRecord {
     pub id: ChangeId,
     pub account_id: AccountId,
-    /// None for a change that never leaves the device.
-    pub op: Option<Op>,
+    /// What it does, and what it altered. Stores from before effects read `op` (see effect.rs).
+    #[serde(alias = "op", deserialize_with = "effect_or_earlier")]
+    pub effect: Effect,
     pub accepted_rev: Rev,
     /// None while the change waits to reach the provider.
     pub outcome: Option<ChangeOutcome>,
@@ -273,9 +272,9 @@ impl World {
     }
 }
 
-/// Marks the threads of the messages an Op names. Those messages look different while it is pending.
-fn touch_op(touched: &mut Touched, messages: &IndexMap<MessageId, MessageRecord>, op: Option<&Op>) {
-    let named = op.map_or(&[][..], Op::message_ids).iter();
+/// Marks the threads of the messages a change names. Those messages look different while it is pending.
+fn touch_effect(touched: &mut Touched, messages: &IndexMap<MessageId, MessageRecord>, effect: Option<&Effect>) {
+    let named = effect.into_iter().flat_map(Effect::named);
     for record in named.filter_map(|id| messages.get(id)) {
         touched.threads.insert(record.thread_id.clone());
     }
@@ -462,15 +461,15 @@ pub fn remove_thread(world: &mut World, tx: &Transaction<'_>, id: &ThreadId) {
 
 pub fn put_change(world: &mut World, tx: &Transaction<'_>, record: ChangeRecord) {
     tx.put(&record);
-    let old = world.changes.get(&record.id).and_then(|old| old.op.as_ref());
-    touch_op(&mut world.touched, &world.messages, old);
-    touch_op(&mut world.touched, &world.messages, record.op.as_ref());
+    let old = world.changes.get(&record.id).map(|old| &old.effect);
+    touch_effect(&mut world.touched, &world.messages, old);
+    touch_effect(&mut world.touched, &world.messages, Some(&record.effect));
     world.changes.0.insert(record.id.clone(), record);
 }
 
 pub fn remove_change(world: &mut World, tx: &Transaction<'_>, id: &ChangeId) {
     if let Some(record) = world.changes.0.shift_remove(id) {
-        touch_op(&mut world.touched, &world.messages, record.op.as_ref());
+        touch_effect(&mut world.touched, &world.messages, Some(&record.effect));
     }
     tx.remove::<ChangeRecord>(id);
 }

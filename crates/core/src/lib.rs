@@ -32,10 +32,12 @@ pub mod clock;
 mod confirm;
 mod dispatch;
 mod draft;
+mod effect;
 mod live_view;
 mod maps;
 mod mime;
 mod outbox;
+mod push;
 mod queue;
 mod reconcile;
 mod rows;
@@ -46,6 +48,7 @@ mod store;
 mod subscriptions;
 mod sync;
 mod turns;
+mod undo;
 mod views;
 mod work;
 mod world;
@@ -193,6 +196,8 @@ impl Core {
                     attempts: Attempts::default(),
                     backfills: HashMap::default(),
                     checks: HashSet::default(),
+                    pushing: HashSet::default(),
+                    held_undos: Vec::new(),
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -234,7 +239,8 @@ impl Core {
 
 /// What the core holds while it runs. Its methods sit in one module per job: dispatch.rs
 /// takes client messages, subscriptions.rs commits and sends updates, queue.rs runs each
-/// account's jobs, sync.rs syncs, outbox.rs sends mail, and accounts.rs signs accounts in and out.
+/// account's jobs, sync.rs syncs, outbox.rs sends mail, undo.rs takes changes back, and
+/// accounts.rs signs accounts in and out.
 struct Inner {
     store: Store,
     env: Box<dyn Environment>,
@@ -270,6 +276,10 @@ struct State {
     backfills: HashMap<AccountId, Backfill>,
     /// Sends with a check booked (see confirm.rs). Each has at most one at a time.
     checks: HashSet<ChangeId>,
+    /// Changes a pass is carrying to the provider right now (see `Carrying` in push.rs).
+    pushing: HashSet<ChangeId>,
+    /// Undos that wait for a change a pass is carrying (see undo.rs).
+    held_undos: Vec<crate::undo::HeldUndo>,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }

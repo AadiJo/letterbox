@@ -1,4 +1,4 @@
-//! The sync pass. A pass pushes an account's pending changes to the provider, pulls
+//! The sync pass. A pass pushes an account's pending changes to the provider (push.rs), pulls
 //! what changed there, or one snapshot page (see snapshot.rs), and records how it went.
 //! It runs in the account's queue, and stops writing once a sign-out or a new sign-in
 //! takes the account (`still_current`). Bodies load here too, one fetch per message
@@ -6,19 +6,14 @@
 
 use std::rc::Rc;
 
-use letterbox_protocol::{
-    AccountId, Answer, ChangeResult, CoreMessage, Empty, MessageId, Refusal, RequestId, Response, SyncNowError,
-};
+use letterbox_protocol::{AccountId, Answer, Empty, MessageId, RequestId, Response, SyncNowError};
 
 use tokio::sync::oneshot;
 
-use crate::adapter::{AdapterFailure, ApplyResult, ChangesResult};
-use crate::changes::{overlay, plan};
+use crate::adapter::{AdapterFailure, ChangesResult};
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
-use crate::world::{
-    AccountRecord, ChangeOutcome, ChangeRecord, Health, MessageRecord, Op, Origin, put_account, put_change, put_message,
-};
+use crate::world::{AccountRecord, Health, MessageRecord, put_account, put_message};
 use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
@@ -68,25 +63,6 @@ impl Inner {
         }
     }
 
-    pub(crate) fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
-        let id = change.id.clone();
-        let rev = self.commit(|world, tx, at| {
-            put_change(
-                world,
-                tx,
-                ChangeRecord {
-                    outcome: Some(ChangeOutcome { rev: at, result }),
-                    ..change
-                },
-            );
-        });
-        self.send(CoreMessage::Settled {
-            change: id,
-            rev,
-            result,
-        });
-    }
-
     /// True while `linked` still serves the account. A sign-out unlinks it and a new sign-in
     /// links another. A pass checks this after every provider call and writes nothing once
     /// it is false, so it cannot bring back records a sign-out deleted, or overwrite the
@@ -97,79 +73,6 @@ impl Inner {
             .adapters
             .get(account_id)
             .is_some_and(|current| current.link == linked.link)
-    }
-
-    /// Carries every pending change for one account to the provider, oldest first. A send
-    /// still in its undo window is passed by (see outbox.rs). Stops when the provider is unreachable.
-    async fn push(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> PassResult {
-        let adapter = &linked.adapter;
-        let waiting: Vec<ChangeRecord> = self
-            .state
-            .borrow()
-            .world
-            .changes
-            .values()
-            .filter(|change| &change.account_id == account_id && change.outcome.is_none())
-            .cloned()
-            .collect();
-        for change in waiting {
-            if !self.still_current(account_id, linked) {
-                return Ok(());
-            }
-            let Some(op) = change.op.clone() else { continue };
-            if let Op::Send(outbound) = op {
-                self.deliver(account_id, linked, change, outbound).await?;
-                continue;
-            }
-            let planned = plan(&self.state.borrow().world, &op);
-            let Some(steps) = planned else {
-                self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));
-                continue;
-            };
-            let mut refused = None;
-            for step in steps {
-                let outcome = adapter.apply(step.mutation).await?;
-                if !self.still_current(account_id, linked) {
-                    return Ok(());
-                }
-                match outcome {
-                    ApplyResult::Refused { reason } => {
-                        refused = Some(reason);
-                        break;
-                    }
-                    ApplyResult::Applied { moved } => {
-                        // The provider now holds this part of the change, so it becomes part of what the provider reported.
-                        self.commit(|world, tx, _| {
-                            for id in &step.message_ids {
-                                let Some(record) = world.messages.get(id).cloned() else {
-                                    continue;
-                                };
-                                let Some(old) = record.provider_ref().cloned() else {
-                                    continue;
-                                };
-                                let r#ref = moved
-                                    .iter()
-                                    .find(|pair| pair.from == old)
-                                    .map_or(old, |pair| pair.to.clone());
-                                let server = overlay(&record.server, &step.part, id);
-                                put_message(
-                                    world,
-                                    tx,
-                                    MessageRecord {
-                                        origin: Origin::Provider { r#ref },
-                                        server,
-                                        ..record
-                                    },
-                                );
-                            }
-                        });
-                    }
-                }
-            }
-            let result = refused.map_or(ChangeResult::Done, |reason| ChangeResult::Failed(reason.into()));
-            self.settle(change, result);
-        }
-        Ok(())
     }
 
     /// Fetches what changed at the provider. Lists one snapshot page instead while a snapshot
@@ -237,12 +140,41 @@ impl Inner {
             self.state.borrow_mut().syncing.insert(account_id.clone());
             self.commit(|_, _, _| {});
         }
-        let mut result = self.push(&account_id, &linked).await;
-        // Synced once the core is in step with the provider, which a backfill is only at its last page.
+        // While the provider has not confirmed what a change did (push.rs), a pass pulls first.
+        // Once a pull brings the core in step with the provider (a change set, or a snapshot's
+        // last page, a backfill's included), `confirm` settles each change whose answer never
+        // came from what the provider holds, and the push may carry the changes after it on
+        // the same messages: their refs are current again. Until then the push passes them by.
+        let mut result = Ok(());
+        let mut pulled = None;
+        if self.unsure(&account_id) && !self.backfilling(&account_id) {
+            match self.pull(&account_id, &linked).await {
+                Ok(done) => pulled = Some(done),
+                Err(failure) => result = Err(failure),
+            }
+        }
+        let caught_up = |done: &Pulled| matches!(done, Pulled::Done) && self.still_current(&account_id, &linked);
+        if pulled.as_ref().is_some_and(caught_up) {
+            self.confirm(&account_id);
+        }
+        if result.is_ok() {
+            let refreshed = !self.unsure(&account_id);
+            result = self.push(&account_id, &linked, refreshed).await;
+        }
+        // Synced once the core is in step with the provider, which a backfill is only at its
+        // last page. A pass that pulled first pulls no more: a snapshot's next page is queued.
         let mut synced = false;
         if result.is_ok() && with_pull {
-            match self.pull(&account_id, &linked).await {
-                Ok(pulled) => synced = matches!(pulled, Pulled::Done),
+            let done = match pulled {
+                Some(done) => Ok(done),
+                None => self.pull(&account_id, &linked).await.inspect(|done| {
+                    if caught_up(done) {
+                        self.confirm(&account_id);
+                    }
+                }),
+            };
+            match done {
+                Ok(done) => synced = matches!(done, Pulled::Done),
                 Err(failure) => result = Err(failure),
             }
         }

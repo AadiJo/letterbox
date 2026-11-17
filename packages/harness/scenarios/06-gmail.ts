@@ -217,12 +217,13 @@ scenario(
     const { core, box } = await start(t)
     const lunch = await thread(core, 'Lunch on Friday?')
     box.setOffline(true)
-    const answer = await core.command({ kind: 'set-flags', threadIds: [lunch.id], unread: true })
+    // Neither message is flagged, so the flag names both, in one batch.
+    const flag = await core.command({ kind: 'set-flags', threadIds: [lunch.id], flagged: true })
     box.expunge('lunch-answer')
     box.setOffline(false)
     await sync(core)
-    t.equal((await core.settled(answer.change)).result, 'done', 'the change settles as done')
-    t.equal(truthOf(box, 'lunch-ask')?.unread, true, 'the remaining message took it')
+    t.equal((await core.settled(flag.change)).result, 'done', 'the change settles as done')
+    t.equal(truthOf(box, 'lunch-ask')?.flagged, true, 'the remaining message took it')
   },
   ['gmail'],
 )

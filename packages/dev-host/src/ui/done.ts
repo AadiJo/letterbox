@@ -1,7 +1,9 @@
 // The UI check for the reader's layout and the done states, over a `people-first` dev host
-// of its own: the reading column stays by the list at 1920 px, Done slides the row out with an undo toast and
-// z brings it back, archive and Trash say what they did with nothing to undo, a late answer
-// or a scroll moves no row it should not, an empty Your turn says so, and reduced motion is instant.
+// of its own: the reading column stays by the list at 1920 px, Done slides the row out with an
+// undo toast and z brings it back, archive and Trash offer the same undo through the core,
+// trash from Sent keeps its row on a labels account, an undo says "Undoing…" until the core
+// answers and why when it is refused, a late answer or a scroll moves no row it should not,
+// an empty Your turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
 import {
@@ -17,14 +19,13 @@ import {
   SIZES,
   WAIT_MS,
 } from './record.ts'
+import { conversations, mailRows, nav, openInbox, settle, toast, waitForTotal } from './mail-list.ts'
+import { checkUndo } from './undo.ts'
 
 const yourTurn = (page: Page) => page.locator('[role="listbox"][aria-label="Your turn"] [role="option"]')
 const rowIds = (page: Page) => yourTurn(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
 const count = (page: Page) => page.locator('section[aria-label="Your turn"] [data-field="count"]').textContent()
 const selectedId = (page: Page) => page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row')
-const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
-const nav = (page: Page, name: string) =>
-  page.getByRole('navigation', { name: 'Sidebar' }).getByRole('button', { name: new RegExp(`^${name}`) })
 
 /**
  * Resolves, once the Your turn count next changes, with whether row `id` is still in the
@@ -160,29 +161,6 @@ async function checkDoneAndUndo(page: Page) {
   await capture(page, 'done-toast')
 }
 
-/** Resolves once the core has answered everything the page sent, and the page any reaction to that. */
-const settle = async (page: Page) => {
-  await page.evaluate(() => window.letterboxDev?.settle())
-  await page.evaluate(() => window.letterboxDev?.settle())
-}
-
-const mailRows = (page: Page) => page.locator('[data-list="mail"] [role="option"]')
-const conversations = async (page: Page) =>
-  Number.parseInt((await page.locator('[data-field="subtitle"]').textContent()) ?? '', 10)
-
-/** Waits for a mail list's header to count `total` conversations. */
-const waitForTotal = (page: Page, total: number) =>
-  page.waitForFunction(
-    (expected) => document.querySelector('[data-field="subtitle"]')?.textContent === `${expected} conversations`,
-    total,
-  )
-
-/** Opens Inbox and waits for its rows. */
-async function openInbox(page: Page) {
-  await nav(page, 'Inbox').click()
-  await mailRows(page).first().locator('[data-field="subject"]').waitFor()
-}
-
 /** An archive the core accepts after the user left Inbox moves nothing and says nothing where they went. */
 /** Opens Inbox on a conversation both lists show at once: in Inbox, and among All mail's first rows. */
 async function openSharedRow(page: Page) {
@@ -274,38 +252,6 @@ async function checkLeaveDuringExit(page: Page) {
   )
 }
 
-/** Archive and Trash say what they did, with nothing to undo: Undo waits for the core's own. */
-async function checkNoUndo(page: Page) {
-  await openInbox(page)
-  const total = await conversations(page)
-  const archived = await mailRows(page).first().getAttribute('data-row')
-  await mailRows(page).first().click()
-  await page.keyboard.press('e')
-  await toast(page).waitFor()
-  equal(await toast(page).locator('[data-field="toast"]').textContent(), 'Archived', 'archive shows "Archived"')
-  equal(await toast(page).getByRole('button').count(), 0, '"Archived" offers no Undo')
-  await page.locator(`[data-row="${archived}"]`).waitFor({ state: 'detached' })
-  await page.keyboard.press('z')
-  await settle(page)
-  equal(await conversations(page), total - 1, 'z does not bring an archived row back')
-
-  const trashed = await mailRows(page).first().getAttribute('data-row')
-  await mailRows(page).first().click()
-  await page.keyboard.press('#')
-  await toast(page).filter({ hasText: 'Moved to Trash' }).waitFor()
-  equal(await toast(page).getByRole('button').count(), 0, '"Moved to Trash" offers no Undo')
-  await page.locator(`[data-row="${trashed}"]`).waitFor({ state: 'detached' })
-
-  // Trash on a conversation already in Trash changes nothing there, so its row stays put.
-  await nav(page, 'Trash').click()
-  const inTrash = page.locator(`[data-list="mail"] [data-row="${trashed}"]`)
-  await inTrash.locator('[data-field="subject"]').waitFor()
-  await inTrash.click()
-  await page.keyboard.press('#')
-  await settle(page)
-  equal(await inTrash.evaluate((row) => row.getAnimations().length), 0, 'trash in Trash leaves the row where it is')
-}
-
 /**
  * A scroll while a row leaves a windowed list ends its exit at once. The row is never
  * placed in the window the scroll moved to, which would set it among rows it never sat
@@ -361,7 +307,7 @@ export async function checkDone(browser: Browser, url: string) {
   await checkDoneAndUndo(page)
   await checkLateArchive(page, relay)
   await checkLeaveDuringExit(page)
-  await checkNoUndo(page)
+  await checkUndo(page, relay)
   await checkScrollDuringExit(page)
 
   // Clearing Your turn leaves the empty state.

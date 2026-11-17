@@ -32,13 +32,17 @@ const byKey = new Map<string, Action>(ALL.map((action) => [SHORTCUTS[action], ac
 export const actionForKey = (key: string) => byKey.get(key)
 
 /**
- * Whether `command` takes a conversation out of the mailbox `mailboxId`. Trash moves it out
- * of every mailbox but Trash, and set-mailboxes out of each one it removes.
+ * Whether `command` takes a conversation out of the mailbox `mailboxId`, as the core does it.
+ * Set-mailboxes takes it out of each one it removes. Trash moves it out of every mailbox but
+ * Trash, except on a labels account, where it keeps Sent and Drafts, which the provider sets.
  */
-export function leavesMailbox(command: Command, mailboxId: MailboxId, mailboxes: readonly Mailbox[]) {
+export function leavesMailbox(command: Command, mailboxId: MailboxId, mail: Mail) {
   if (command.kind === 'set-mailboxes') return command.remove.includes(mailboxId)
-  if (command.kind === 'trash') return mailboxes.find((mailbox) => mailbox.id === mailboxId)?.role !== 'trash'
-  return false
+  if (command.kind !== 'trash') return false
+  const mailbox = mail.mailboxes.find((candidate) => candidate.id === mailboxId)
+  const account = mail.accounts.find((candidate) => candidate.id === mailbox?.accountId)
+  const kept: (Mailbox['role'] | undefined)[] = account?.can.multipleMailboxes ? ['trash', 'sent', 'drafts'] : ['trash']
+  return !kept.includes(mailbox?.role)
 }
 
 /**
@@ -76,22 +80,24 @@ export function commandFor(action: Action, thread: ThreadSummary, mail: Mail): C
 }
 
 /**
- * Sends `command` and resolves with it once the core accepts it, or with null when the core
- * refuses or is gone. The lists and the reader follow the core's views, which show the
+ * Sends `command` and resolves with the change the core accepted it as, or with null when the
+ * core refuses or is gone. The lists and the reader follow the core's views, which show the
  * change or its refusal.
  */
-export async function send<C extends Command>(command: C) {
+export async function send(command: Command) {
   const answer = await client.command(command).catch(() => null)
-  return answer?.kind === 'accepted' ? command : null
+  return answer?.kind === 'accepted' ? answer.change : null
 }
 
 /**
- * Sends `action` for `thread` if the account allows it. Resolves with the command once the
- * core accepts it, or null when the account cannot do it, the core refuses, or the core is gone.
+ * Sends `action` for `thread` if the account allows it. Resolves with the command and the
+ * change the core accepted it as, or null when the account cannot do it, the core refuses,
+ * or the core is gone.
  */
 export async function run(action: Action, thread: ThreadSummary, mail: Mail) {
   const command = commandFor(action, thread, mail)
-  return command ? send(command) : null
+  const change = command ? await send(command) : null
+  return command && change ? { command, change } : null
 }
 
 /** Marks a conversation read when it opens, as Apple Mail does. */

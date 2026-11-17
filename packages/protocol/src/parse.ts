@@ -37,6 +37,14 @@ const turnReason = type(
 const refusal = type(
   "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed'",
 )
+const undoField = type({ kind: "'mailbox'", messageId: 'string', mailboxId: 'string' })
+  .or({ kind: "'unread'", messageId: 'string' })
+  .or({ kind: "'flagged'", messageId: 'string' })
+  .or({ kind: "'turn'", threadId: 'string' })
+const undoConflict = type({ kind: "'changed'", field: undoField })
+  .or({ kind: "'partly-applied'", field: undoField })
+  .or({ kind: "'outcome-unknown'" })
+  .or({ kind: "'mailbox-gone'", mailboxId: 'string' })
 
 const status = type({ state: "'syncing'", done: 'number', total: 'number | null', lastSyncedAt: 'string | null' })
   .or({ state: "'idle'", lastSyncedAt: 'string' })
@@ -123,7 +131,7 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
 const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' })
   .or(type({ kind: "'update'", sub: 'string', rev: 'number' }).and(update))
   .or({ kind: "'accepted'", change: 'string', rev: 'number' })
-  .or({ kind: "'rejected'", change: 'string', reason: refusal })
+  .or({ kind: "'rejected'", change: 'string', reason: refusal, 'conflict?': undoConflict })
   .or({ kind: "'settled'", change: 'string', rev: 'number', result: type("'done' | 'undone'").or({ failed: refusal }) })
   .or(type({ kind: "'response'", id: 'string' }).and(response))
   .or({ kind: "'open-url'", id: 'string', url: 'string' })

@@ -88,6 +88,8 @@ async function relayCore(page: Page) {
   let close: (() => Promise<void>) | undefined
   const fromPage: string[] = []
   let watched: { text: string; seen: () => void } | undefined
+  // The answer the relay gives the page's next undo itself, instead of passing it to the core.
+  let refuseUndo: { conflict?: unknown } | undefined
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -129,9 +131,17 @@ async function relayCore(page: Page) {
       closed()
     })
     socket.onMessage((message) => {
-      fromPage.push(String(message))
+      const text = String(message)
+      fromPage.push(text)
+      if (refuseUndo && text.includes('"kind":"undo"')) {
+        const { conflict } = refuseUndo
+        refuseUndo = undefined
+        const { change } = JSON.parse(text) as { change: string }
+        const rejected = { kind: 'rejected', change, reason: 'conflict', ...(conflict ? { conflict } : {}) }
+        return void socket.send(JSON.stringify(rejected))
+      }
       core.send(message)
-      if (watched && String(message).includes(watched.text)) {
+      if (watched && text.includes(watched.text)) {
         held ??= []
         watched.seen()
         watched = undefined
@@ -159,6 +169,10 @@ async function relayCore(page: Page) {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
     /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
     pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),
+    /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. It never reaches the core. */
+    refuseNextUndo: (conflict?: unknown) => {
+      refuseUndo = { conflict }
+    },
     sees,
     /** Every message the page sent its cores, in order, as sent. */
     fromPage: () => [...fromPage],

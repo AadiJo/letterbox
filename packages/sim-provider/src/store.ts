@@ -73,8 +73,8 @@ export type Engine = {
   flagsChanged(message: Stored): void
   /** Records that the message is gone. The caller deletes it from the store. */
   expunged(message: Stored): void
-  /** Records that a mailbox was added to the store. */
-  mailboxCreated(): void
+  /** Records that a mailbox was added to the store or deleted from it. */
+  mailboxesChanged(): void
   /** Makes every cursor handed out so far stop working. */
   expire(): void
   /** The cursor for the store as it is now. */

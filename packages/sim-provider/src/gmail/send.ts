@@ -5,7 +5,7 @@
 // https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send
 
 import type { MessageRef } from '../adapter.ts'
-import type { SendDamage } from '../contract.ts'
+import type { AnswerDamage } from '../contract.ts'
 import type { MailboxEntry } from '../mailbox.ts'
 import { withoutBcc } from '../sent.ts'
 import { isRecord } from '../wire.ts'
@@ -18,6 +18,7 @@ const REFUSAL_STATUS = {
   'refused-by-provider': 400,
   'not-supported': 400,
   'unknown-target': 404,
+  'unknown-mailbox': 400,
   conflict: 409,
 }
 
@@ -31,7 +32,7 @@ export const send = async (
   entry: MailboxEntry,
   body: unknown,
   hasThread: (threadId: string) => boolean,
-): Promise<{ ref: MessageRef; threadId: string | null; damage: SendDamage | null } | Failure | 'dropped'> => {
+): Promise<{ ref: MessageRef; threadId: string | null; damage: AnswerDamage | null } | Failure | 'dropped'> => {
   const raw = isRecord(body) && typeof body.raw === 'string' ? body.raw : null
   if (raw === null) return { status: 400, message: "'raw' RFC822 payload message string required" }
   const threadId = isRecord(body) && typeof body.threadId === 'string' ? body.threadId : null
@@ -39,7 +40,7 @@ export const send = async (
   const message = withoutBcc(Buffer.from(raw, 'base64url').toString('utf8'))
   const messageId = /^Message-ID:\s*<([^>]+)>/im.exec(message.raw)?.[1] ?? ''
   const arg = { raw: message.raw, bcc: message.bcc, messageId, replyTo: null }
-  const { result, damage } = await new Promise<{ result: CallResult; damage: SendDamage | null }>((resolve) =>
+  const { result, damage } = await new Promise<{ result: CallResult; damage: AnswerDamage | null }>((resolve) =>
     entry.respond({ method: 'send', arg }, (answer, how) => resolve({ result: answer, damage: how ?? null })),
   )
   if (result.method !== 'send') return { status: 503, message: 'Backend error' }

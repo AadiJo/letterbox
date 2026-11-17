@@ -16,8 +16,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'an undone reply stays in its conversation',
     file: core('outbox.rs'),
-    find: '                remove_with_thread(world, tx, &message_id);\n',
-    replace: '',
+    find: 'self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));',
+    replace: 'self.cancel(change, record, |_, _| drop(message_id));',
     scenarios: 'undo inside the window',
   },
   {
@@ -157,8 +157,9 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'sim: a send whose answer is lost reads as offline, so the core sends it again',
     file: 'crates/sim-client/src/lib.rs',
-    find: '                _ => Ok(SendResult::Unconfirmed),',
-    replace: '                _ => Err(AdapterFailure::Offline),',
+    find: '        Box::pin(self.call_untrusted(Call::Send(message), send_outcome, SendResult::Unconfirmed))',
+    replace:
+      '        Box::pin(async move {\n            match self.call_untrusted(Call::Send(message), send_outcome, SendResult::Unconfirmed).await {\n                Ok(SendResult::Unconfirmed) => Err(AdapterFailure::Offline),\n                other => other,\n            }\n        })',
     scenarios: 'answer comes back damaged',
   },
   {

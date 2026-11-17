@@ -93,6 +93,9 @@ export const foldersEngine = (store: Store): Engine => {
       const present = new Set(now.map((message) => message.number))
       for (const number of before) if (!present.has(number)) removed.push(refOf(box, number))
     }
+    // A mailbox the cursor saw that is gone now. An empty folder can be deleted, and its messages left it before.
+    const refs = new Set<string>([...store.boxes.values()].map((box) => box.ref))
+    if ([...seen.keys()].some((ref) => !refs.has(ref))) listChanged = true
     return {
       kind: 'changes',
       added: added.toSorted(byDelivery).map((message) => remoteMessage(store, message)),
@@ -117,7 +120,7 @@ export const foldersEngine = (store: Store): Engine => {
     },
     // The number leaves the mailbox with the message, and the next cursor diff reports it.
     expunged: () => {},
-    mailboxCreated: () => {},
+    mailboxesChanged: () => {},
     expire: () => {
       for (const box of store.boxes.values()) {
         const messages = messagesIn(box)

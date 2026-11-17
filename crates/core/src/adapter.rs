@@ -14,7 +14,8 @@
 //!      A provider with plain folders may give a moved message a new ref. It then
 //!      reports the old ref as removed and the new one as added in the same result.
 //!   5. `apply` skips refs that no longer exist. It answers `unknown-target` only
-//!      when none of them exist.
+//!      when none of them exist, and only for messages: a mailbox it names that does not
+//!      exist is `unknown-mailbox`, a refusal of the whole call.
 //!   6. `apply` sets values, so applying the same mutation twice is harmless
 //!      wherever the provider keeps refs stable.
 //!   7. No method reads or writes anything outside the provider. Adapters keep
@@ -33,6 +34,16 @@
 //!      A provider offers no way to send a message only once, so after `unconfirmed`, or a
 //!      core that stopped during the call, the core never calls `send` for it again. It calls
 //!      `find` with its Message-ID instead (see outbox.rs).
+//!  11. `apply` answers a failure only when the mutation surely did not reach the provider,
+//!      or the provider turned it away before acting on it. It answers `unconfirmed` when the
+//!      provider may have acted on it, all of it or part: the request went out and no whole
+//!      answer came back, the provider failed while handling it, or an earlier call for it
+//!      went through. After a failure the core tries it again later, since `apply` sets
+//!      values (rule 6). After `unconfirmed` it does not: a sync settles the change from what
+//!      the provider holds (push.rs), and until then an undo of it waits (undo.rs). An adapter that splits
+//!      one call into several requests, and has one turned away after an earlier one went
+//!      through, answers `refused` with `landed`: the core settles it failed, and only a sync
+//!      shows which part went through.
 //!
 //! The core runs on one thread, so adapters and their futures need not be `Send`.
 
@@ -257,12 +268,16 @@ pub enum Mutation {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ApplyResult {
     /// `moved` lists every ref the provider replaced. See rule 4.
-    Applied {
-        moved: Vec<Moved>,
-    },
+    Applied { moved: Vec<Moved> },
     Refused {
         reason: ProviderRefusal,
+        /// True when part of the call took effect before the refusal. See rule 11.
+        #[serde(default)]
+        landed: bool,
     },
+    /// The provider may have acted on it, all of it or part, without saying so. See rule 11.
+    /// `failure` is how the account's health reads meanwhile.
+    Unconfirmed { failure: AdapterFailure },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -278,6 +293,8 @@ pub enum ProviderRefusal {
     NotPermitted,
     NotSupported,
     UnknownTarget,
+    /// A mailbox the mutation names does not exist. See rule 5.
+    UnknownMailbox,
     Conflict,
     RefusedByProvider,
 }
@@ -287,7 +304,7 @@ impl From<ProviderRefusal> for Refusal {
         match reason {
             ProviderRefusal::NotPermitted => Refusal::NotPermitted,
             ProviderRefusal::NotSupported => Refusal::NotSupported,
-            ProviderRefusal::UnknownTarget => Refusal::UnknownTarget,
+            ProviderRefusal::UnknownTarget | ProviderRefusal::UnknownMailbox => Refusal::UnknownTarget,
             ProviderRefusal::Conflict => Refusal::Conflict,
             ProviderRefusal::RefusedByProvider => Refusal::RefusedByProvider,
         }

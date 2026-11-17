@@ -130,8 +130,8 @@ export const GMAIL_MUTATIONS: Mutation[] = [
   {
     name: 'gmail: a change made under a daily limit is refused as not permitted and undone',
     file: gmail('adapter.rs'),
-    find: '            Err(error) if error.is_usage_limit() => Err(AdapterFailure::ProviderError),',
-    replace: '            Err(error) if error.is_rate_limit() => Err(AdapterFailure::ProviderError),',
+    find: '            _ if error.is_usage_limit() => {}',
+    replace: '            _ if error.is_rate_limit() => {}',
     scenarios: 'daily limit',
   },
   {

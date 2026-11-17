@@ -20,8 +20,9 @@ use tokio::task::spawn_local;
 use crate::Inner;
 use crate::adapter::Found;
 use crate::clock::{iso, parse};
+use crate::effect::Effect;
 use crate::outbox::{Outbound, Stage};
-use crate::world::{ChangeRecord, Op};
+use crate::world::ChangeRecord;
 
 /// How many more times an unconfirmed send is looked up after the first, spread across the window.
 const MORE_LOOKUPS: u32 = 4;
@@ -77,7 +78,7 @@ impl Inner {
         };
         // Settled meanwhile, or signed out: a later pass books a check again if it is needed.
         let Some((record, linked)) = found else { return };
-        let Some(Op::Send(outbound)) = record.op.clone() else {
+        let Effect::Send(outbound) = record.effect.clone() else {
             return;
         };
         let (record, until) = match outbound.stage.clone() {

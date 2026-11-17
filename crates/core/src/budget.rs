@@ -24,7 +24,7 @@ use crate::clock::FixedEnvironment;
 use crate::reconcile::{Incoming, reconcile};
 use crate::secrets::{Secrets, SecretsError};
 use crate::work::Work;
-use crate::world::{AccountRecord, ChangeOutcome, Health, put_account, put_change};
+use crate::world::{AccountRecord, ChangeOutcome, Health, MessageRecord, put_account, put_change, put_message};
 use crate::{Core, CoreOptions};
 
 /// Large enough that a view which reads every thread costs thousands of rows per commit.
@@ -291,7 +291,17 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                 .get(&ChangeId::new("change_1"))
                 .cloned();
             let change = change.expect("the command was accepted");
+            // As a pass settles it: what the provider now holds, and the outcome, in one commit.
             inner.commit(|world, tx, at| {
+                for op in change.effect.ops() {
+                    for id in op.message_ids() {
+                        let Some(record) = world.messages.get(id).cloned() else {
+                            continue;
+                        };
+                        let server = crate::changes::overlay(&record.server, op, id);
+                        put_message(world, tx, MessageRecord { server, ..record });
+                    }
+                }
                 let outcome = Some(ChangeOutcome {
                     rev: at,
                     result: ChangeResult::Done,
@@ -299,6 +309,24 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                 put_change(world, tx, crate::world::ChangeRecord { outcome, ..change });
             });
         });
+        measure("undo the settled command", 1, &|| {
+            receive(json!({
+                "kind": "command",
+                "change": "change_undo",
+                "command": { "kind": "undo", "change": "change_1" },
+            }));
+        });
+        let reversed = inner
+            .state
+            .borrow()
+            .world
+            .changes
+            .get(&ChangeId::new("change_undo"))
+            .is_some_and(|change| change.outcome.is_none());
+        assert!(
+            reversed,
+            "the undo was accepted as a reversal, so its step measured a real undo"
+        );
         let answered = inner
             .state
             .borrow()

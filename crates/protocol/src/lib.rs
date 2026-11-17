@@ -1,6 +1,6 @@
 //! The protocol between the core and every UI. Version 0.
 //!
-//! This file is the only place the protocol is written by hand. `cargo xtask protocol-ts`
+//! This crate is the only place the protocol is written by hand. `cargo xtask protocol-ts`
 //! writes the TypeScript types from it (packages/protocol/src/generated.ts), and `pnpm
 //! check` fails while that copy is stale. The harness also checks every message the core
 //! sends against a schema that the TypeScript build holds to those generated types.
@@ -23,14 +23,18 @@
 //!   8. Updates caused by a command or request are sent before its `settled` or
 //!      `response`. A client that has the answer has already seen the effects.
 
+mod answer;
+mod command;
 mod outcome;
 mod send;
 
 use std::num::NonZeroU64;
 
-pub use outcome::{ChangeResult, Refusal};
+pub use answer::{Answer, Empty, False, Never, True};
+pub use command::{Command, TurnChoice};
+pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use send::{Delivery, Draft};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
 pub const PROTOCOL: u32 = 0;
@@ -374,68 +378,6 @@ pub struct ThreadPage {
     pub threads: Vec<ThreadSummary>,
 }
 
-// ---------------------------------------------------------------- command
-
-/// A user intent. Every command acts on whole threads.
-/// Only set-turn works with read-only access, because it never leaves the device.
-#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
-pub enum Command {
-    /// Correct the rule, or hand the thread back to it with `auto`.
-    SetTurn {
-        thread_ids: Vec<ThreadId>,
-        turn: TurnChoice,
-    },
-    SetFlags {
-        thread_ids: Vec<ThreadId>,
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        unread: Option<bool>,
-        #[serde(default, deserialize_with = "present")]
-        #[ts(optional)]
-        flagged: Option<bool>,
-    },
-    /// Archive is `remove: [inbox]`. A move is one add and one remove.
-    SetMailboxes {
-        thread_ids: Vec<ThreadId>,
-        add: Vec<MailboxId>,
-        remove: Vec<MailboxId>,
-    },
-    Trash {
-        thread_ids: Vec<ThreadId>,
-    },
-    Send {
-        draft: Draft,
-    },
-    /// Cancels a send still in its undo window. No other change can be undone yet.
-    Undo {
-        change: ChangeId,
-    },
-}
-
-/// The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum TurnChoice {
-    Mine,
-    Theirs,
-    #[serde(rename = "none")]
-    Nobody,
-    Auto,
-}
-
-impl TurnChoice {
-    /// The turn the user fixed, or None when the rule decides.
-    pub fn fixed(self) -> Option<Turn> {
-        match self {
-            TurnChoice::Mine => Some(Turn::Mine),
-            TurnChoice::Theirs => Some(Turn::Theirs),
-            TurnChoice::Nobody => Some(Turn::Nobody),
-            TurnChoice::Auto => None,
-        }
-    }
-}
-
 // ---------------------------------------------------------------- request
 
 /// A way to add an account. The UI lists these and never hard-codes a provider.
@@ -495,55 +437,6 @@ pub enum Response {
     SyncNow(Answer<Empty, SyncNowError>),
     Blob(Answer<BlobUrl, BlobError>),
 }
-
-/// A result or an error. On the wire: `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}`.
-/// Build one from a `Result` with `Answer::from`.
-#[derive(Clone, Debug, PartialEq, Serialize, TS)]
-#[serde(untagged)]
-pub enum Answer<T, E> {
-    Ok { ok: True, result: T },
-    Err { ok: False, error: E },
-}
-
-impl<T, E> From<Result<T, E>> for Answer<T, E> {
-    fn from(result: Result<T, E>) -> Self {
-        match result {
-            Ok(result) => Answer::Ok { ok: True, result },
-            Err(error) => Answer::Err { ok: False, error },
-        }
-    }
-}
-
-/// `true` on the wire, and `true` in TypeScript: the `ok` of a success.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TS)]
-#[ts(type = "true")]
-pub struct True;
-
-impl Serialize for True {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bool(true)
-    }
-}
-
-/// `false` on the wire, and `false` in TypeScript: the `ok` of a failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TS)]
-#[ts(type = "false")]
-pub struct False;
-
-impl Serialize for False {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bool(false)
-    }
-}
-
-/// A result with no fields: `{}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-#[ts(type = "Record<string, never>")]
-pub struct Empty {}
-
-/// An error that cannot happen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-pub enum Never {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -630,10 +523,14 @@ pub enum CoreMessage {
         change: ChangeId,
         rev: Rev,
     },
-    /// The change was never applied.
+    /// The change was never applied. `conflict` says why an undo was refused `conflict`,
+    /// when one field or mailbox does.
     Rejected {
         change: ChangeId,
         reason: Refusal,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        conflict: Option<UndoConflict>,
     },
     /// The last word on a change. A failed change is already reverted at `rev`.
     Settled {
