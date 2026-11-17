@@ -17,7 +17,7 @@ import type {
   RemoteState,
 } from './adapter.ts'
 import type { Mailbox } from '@letterbox/protocol'
-import type { SeedAddress, SeedMessage } from './contract.ts'
+import type { SeedAddress, SeedAttachment, SeedMessage } from './contract.ts'
 
 /** One folder or label. The last three fields are used by the folders dialect only. */
 export type Box = {
@@ -141,7 +141,7 @@ export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean |
   sentAt: seed.sentAt,
   preview: previewOf(seed.text),
   size: Buffer.byteLength(seed.text) + Buffer.byteLength(seed.html ?? ''),
-  hasAttachments: (seed.attachments ?? 0) > 0,
+  hasAttachments: attachmentsOf(seed).length > 0,
   headers: {
     listUnsubscribe: seed.headers?.listUnsubscribe ?? false,
     listId: seed.headers?.listId ?? false,
@@ -155,10 +155,15 @@ export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean |
 export const bodyOf = (seed: SeedMessage): RemoteBody => ({
   text: seed.text,
   html: seed.html ?? null,
-  attachments: Array.from({ length: seed.attachments ?? 0 }, (_, index) => ({
-    name: `file-${index + 1}.bin`,
-    mime: 'application/octet-stream',
-    size: 1000,
-    inline: false,
-  })),
+  attachments: attachmentsOf(seed).map(({ name, mime, size }) => ({ name, mime, size, inline: false })),
 })
+
+/** A seed message's attachments: as it names them, or that many placeholder files. */
+const attachmentsOf = ({ attachments = 0 }: SeedMessage): readonly SeedAttachment[] =>
+  typeof attachments === 'number'
+    ? Array.from({ length: attachments }, (_, index) => ({
+        name: `file-${index + 1}.bin`,
+        mime: 'application/octet-stream',
+        size: 1000,
+      }))
+    : attachments

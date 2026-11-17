@@ -1,37 +1,92 @@
-// The toast at the bottom of the list pane: what the last action did, and Undo (z), or why
-// an undo was refused. undo.ts decides what it says and for how long.
+// The toast, raised over the bottom of the reader and never over the list's rows: what the
+// last action did, and Undo (z), or why there is nothing to undo. With the reply dock up it
+// sits 12 px above the dock (CSS anchor positioning, the dock is `--dock`), so it never covers
+// Send or Undo. undo.ts decides what it says and for how long. With no notice up, it offers
+// Undo for a reply in its undo window, for exactly as long as the core holds it (sending.ts).
 
-import { Check, Info } from 'lucide-react'
-import { UNDO_KEY, useNotice } from './undo.ts'
+import { CircleCheck, Clock, Info } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { useSecondsUntil } from './clock.ts'
+import { Key } from './Key.tsx'
+import { type Offer, useSendOffer } from './sending.ts'
+import { type Notice, UNDO_KEY, useNotice } from './undo.ts'
 
 export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
   const notice = useNotice()
-  if (!notice) return null
+  const offer = useSendOffer()
+  if (notice)
+    return (
+      // A new offer is a new toast, so it rises again.
+      <Frame key={notice.serial} undo={notice.change ? 'ready' : 'none'} onUndo={onUndo}>
+        <NoticeIcon icon={notice.icon} />
+        <span data-field="toast">{notice.label}</span>
+      </Frame>
+    )
+  if (!offer) return null
+  return (
+    <Frame key={offer.change} undo={offer.located ? 'ready' : 'waiting'} onUndo={onUndo}>
+      <Clock className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
+      <span data-field="toast">Sending</span>
+      {offer.located ? (
+        <Countdown offer={offer} />
+      ) : (
+        // A merge moved the reply. Undo waits until the conversation that holds it is found.
+        <span className="-ml-1 font-normal text-muted" data-field="toast-note">
+          Finding the conversation…
+        </span>
+      )}
+    </Frame>
+  )
+}
+
+/** What kind of word the notice is: done, waiting on the provider, or why there is nothing to undo. */
+function NoticeIcon({ icon }: { icon: Notice['icon'] }) {
+  switch (icon) {
+    case 'done':
+      return <CircleCheck className="size-[17px] text-green" strokeWidth={2} aria-hidden />
+    case 'clock':
+      return <Clock className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
+    case 'info':
+      return <Info className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
+  }
+}
+
+/** The toast's box. `undo` says whether it offers Undo, and whether Undo can run yet. */
+function Frame({
+  undo,
+  onUndo,
+  children,
+}: {
+  undo: 'ready' | 'waiting' | 'none'
+  onUndo: () => Promise<void>
+  children: ReactNode
+}) {
   return (
     <div
-      // A new offer is a new toast, so it rises again.
-      key={notice.serial}
       role="status"
-      className="absolute bottom-4 left-1/2 z-10 flex h-[34px] -translate-x-1/2 animate-rise items-center gap-2.5 rounded-[10px] border border-key bg-raised pr-1.5 pl-3 text-[12.5px] whitespace-nowrap shadow-[0_8px_24px_rgb(0_0_0/0.5)]"
+      className={`absolute bottom-[calc(anchor(--dock_top,12px)+12px)] left-1/2 z-30 flex h-11 -translate-x-1/2 animate-rise items-center gap-2.5 rounded-xl bg-float pl-3.5 ${undo === 'none' ? 'pr-4' : 'pr-[7px]'} text-row font-medium whitespace-nowrap shadow-float`}
     >
-      {notice.change ? (
-        <Check className="size-3.5 text-green" strokeWidth={2} aria-hidden />
-      ) : (
-        <Info className="size-3.5 text-faint" strokeWidth={2} aria-hidden />
-      )}
-      <span data-field="toast">{notice.label}</span>
-      {notice.change && (
-        <button
-          type="button"
-          onClick={() => void onUndo()}
-          className="inline-flex h-6 items-center gap-1.5 rounded-md border border-line2 bg-pill px-2 text-xs font-medium text-fg hover:bg-hover"
-        >
-          Undo
-          <kbd className="rounded border border-key px-[5px] font-mono text-[11px] leading-4 text-faint">
-            {UNDO_KEY.toUpperCase()}
-          </kbd>
-        </button>
+      {children}
+      {undo !== 'none' && (
+        <>
+          <span aria-hidden className="mx-0.5 h-[18px] w-px bg-hover" />
+          <button
+            type="button"
+            disabled={undo === 'waiting'}
+            onClick={() => void onUndo()}
+            className="inline-flex h-[30px] items-center gap-2 rounded-lg bg-pill pr-2 pl-2.5 text-fg enabled:hover:bg-hover disabled:opacity-50"
+          >
+            Undo
+            <Key>{UNDO_KEY.toUpperCase()}</Key>
+          </button>
+        </>
       )}
     </div>
   )
+}
+
+/** The seconds left by the core's deadline. Display only: the core's update ends the offer. */
+function Countdown({ offer }: { offer: Offer }) {
+  const seconds = useSecondsUntil(offer.until)
+  return seconds > 0 ? <span className="-ml-1 font-normal text-muted tabular-nums">in {seconds} s</span> : null
 }

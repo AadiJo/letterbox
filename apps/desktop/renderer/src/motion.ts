@@ -1,7 +1,8 @@
 // Row motion, and the only place the renderer animates an element from script
 // (lint/rules/renderer-motion.ts keeps it that way). A row an action takes out of a list
 // slides right and fades, then folds closed. A row whose action the core refused shakes once,
-// and so does a leaving row the core takes back. Each step runs once, takes 250 ms or less,
+// and so does a leaving row the core takes back. The reply editor slides up once as it docks.
+// Each step runs once, takes 250 ms or less,
 // and moves only transform, opacity and height. With the system's reduced motion setting
 // every step is instant. styles.css holds the CSS half.
 
@@ -13,6 +14,7 @@ const EASE = 'cubic-bezier(0.2, 0.7, 0.2, 1)'
 const SLIDE_MS = 160
 const FOLD_MS = 180
 const SHAKE_MS = 120
+const DOCK_MS = 160
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -111,6 +113,18 @@ function shakeElement(element: HTMLElement | undefined) {
   element?.animate(
     [{ transform: 'none' }, { transform: 'translateX(2px)' }, { transform: 'translateX(-2px)' }, { transform: 'none' }],
     { duration: SHAKE_MS },
+  )
+}
+
+/** Slides the reply editor up into its dock, once, as the user opens it. */
+export function slideUp(element: HTMLElement) {
+  if (reduced()) return
+  element.animate(
+    [
+      { transform: 'translateY(24px)', opacity: 0 },
+      { transform: 'none', opacity: 1 },
+    ],
+    { duration: DOCK_MS, easing: EASE },
   )
 }
 

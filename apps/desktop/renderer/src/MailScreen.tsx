@@ -111,11 +111,12 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
       aria-label={label}
       data-list="mail"
       onScroll={(event) => setFirst(Math.floor(event.currentTarget.scrollTop / ROW_HEIGHT))}
-      className="relative min-h-0 flex-1 overflow-y-auto [scrollbar-color:var(--color-line2)_transparent] [scrollbar-width:thin]"
+      className="relative min-h-0 flex-1 overflow-y-auto pb-2 [scrollbar-color:var(--color-pill)_transparent] [scrollbar-width:thin]"
     >
       <div style={{ height: start * ROW_HEIGHT }} />
       {ids.map((id, index) => {
-        if (!id) return <div key={`empty ${start + index}`} data-row="" className="mx-1.5 h-[73px]" />
+        if (!id)
+          return <div key={`empty ${start + index}`} data-row="" className="mx-2" style={{ height: ROW_HEIGHT }} />
         const above = index > 0 ? ids[index - 1] : idAt(start - 1)
         return (
           <Row

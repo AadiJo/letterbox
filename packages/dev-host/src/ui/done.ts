@@ -1,20 +1,31 @@
 // The UI check for the reader's layout and the done states, over a `people-first` dev host
-// of its own: the reader fills a 1920 px pane, Done slides the row out with an undo toast and
-// z brings it back, archive and Trash offer the same undo through the core, trash from Sent
-// keeps its row on a labels account, an undo says "Undoing…" until the core answers and why
-// when it is refused, a late answer or a scroll moves no row it should not, an empty Your
-// turn says so, and reduced motion is instant.
+// of its own: the reading column stays by the list at 1920 px, Done slides the row out with an
+// undo toast and z brings it back, archive and Trash offer the same undo through the core,
+// trash from Sent keeps its row on a labels account, an undo says "Undoing…" until the core
+// answers and why when it is refused, a late answer or a scroll moves no row it should not,
+// an empty Your turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
-import { appErrors, capture, equal, openPage, type Relay, SIZES, WAIT_MS } from './record.ts'
+import {
+  appErrors,
+  boxOf,
+  capture,
+  captureC2,
+  equal,
+  openPage,
+  overlaps,
+  type Relay,
+  ROW_HEIGHT,
+  SIZES,
+  WAIT_MS,
+} from './record.ts'
+import { conversations, mailRows, nav, openInbox, settle, toast, waitForTotal } from './mail-list.ts'
+import { checkUndo } from './undo.ts'
 
 const yourTurn = (page: Page) => page.locator('[role="listbox"][aria-label="Your turn"] [role="option"]')
 const rowIds = (page: Page) => yourTurn(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
 const count = (page: Page) => page.locator('section[aria-label="Your turn"] [data-field="count"]').textContent()
 const selectedId = (page: Page) => page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row')
-const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
-const nav = (page: Page, name: string) =>
-  page.getByRole('navigation', { name: 'Sidebar' }).getByRole('button', { name: new RegExp(`^${name}`) })
 
 /**
  * Resolves, once the Your turn count next changes, with whether row `id` is still in the
@@ -39,57 +50,75 @@ const rowWhenCountDrops = (page: Page, id: string) =>
     id,
   )
 
-/** At 1920 px the reader fills its pane: toolbar and messages 40 px in from each side, plain text capped near 72ch. */
+/**
+ * At 1920 px the reading column keeps its width but stays within 64 px of the list, and the
+ * toolbar, subject, messages and reply bar all start on its edge. Plain text is capped at 62ch.
+ */
 async function checkReaderLayout(page: Page) {
   await page.setViewportSize(SIZES.full)
   await yourTurn(page).first().click()
-  await page.locator('[data-message="open"] [data-field="body"] p').first().waitFor()
-  const box = async (selector: string) => {
-    const found = await page.locator(selector).first().boundingBox()
-    if (!found) throw new Error(`the reader shows no ${selector}`)
-    return { left: found.x, right: found.x + found.width, width: found.width }
+  const paragraph = '[data-message="open"] [data-field="body"] p'
+  await page.locator(paragraph).first().waitFor()
+  const list = await boxOf(page, 'section[aria-label="People"]')
+  const subject = await boxOf(page, '[data-field="reader-subject"]')
+  const edges = {
+    toolbar: (await boxOf(page, 'section[aria-label="Reader"] button[aria-keyshortcuts="d"]')).left,
+    folded: (await boxOf(page, '[data-message="folded"]')).left,
+    open: (await boxOf(page, '[data-message="open"]')).left,
+    body: (await boxOf(page, paragraph)).left,
+    reply: (await boxOf(page, '[data-field="reply-bar"]')).left,
   }
-  const pane = await box('section[aria-label="Reader"]')
-  const paragraph = await box('[data-message="open"] [data-field="body"] p')
-  // 72ch in the paragraph's own font.
-  const measure = await page
-    .locator('[data-message="open"] [data-field="body"] p')
+  equal(Math.round(list.right - list.left), 392, '1920 px: the list is 392 px wide')
+  equal(
+    await page.locator('[data-field="attachment"]').count(),
+    0,
+    'a message with no attachments shows no attachment chip',
+  )
+  equal(
+    subject.left - list.right <= 64,
+    true,
+    `1920 px: the reading column starts ${subject.left - list.right} px from the list, at most 64`,
+  )
+  equal(
+    Object.entries(edges).filter(([, left]) => Math.abs(left - subject.left) > 0.5),
+    [],
+    "1920 px: the toolbar, messages, body and reply bar start on the subject's edge",
+  )
+  const search = await boxOf(page, 'section[aria-label="Reader"] form[role="search"]')
+  equal(Math.round(search.right - subject.left), 720, "1920 px: search ends on the 720 px column's right edge")
+  // 62ch in the paragraph's own font.
+  const capped = await page
+    .locator(paragraph)
     .first()
     .evaluate((element) => {
       const ruler = document.createElement('span')
-      ruler.style.cssText = 'position:absolute;width:72ch;height:0'
+      ruler.style.cssText = 'position:absolute;width:62ch;height:0'
       element.append(ruler)
-      const width = ruler.getBoundingClientRect().width
+      const measure = ruler.getBoundingClientRect().width
       ruler.remove()
-      return width
+      return Math.abs(element.getBoundingClientRect().width - measure) < 1
     })
-  const scrollbar = await page
-    .locator('article[aria-label="Conversation"] > div')
-    .evaluate((element) => element.getBoundingClientRect().width - element.clientWidth)
-  const layout = {
-    leftGap: (await box('section[aria-label="Reader"] button[title^="Done"]')).left - pane.left,
-    searchGap: pane.right - (await box('section[aria-label="Reader"] form[role="search"]')).right,
-    timeGap: pane.right - (await box('[data-message="open"] [data-field="message-time"]')).right,
-    scrollbar,
-    paragraph: paragraph.width,
-    paragraphLeft: paragraph.left,
-    bodyLeft: (await box('[data-message="open"] [data-field="body"]')).left,
-    measure,
-  }
-  equal(layout.leftGap <= 40, true, `1920 px: Done sits at the pane's left edge (${layout.leftGap} px in)`)
-  equal(layout.searchGap <= 40, true, `1920 px: search sits at the pane's right edge (${layout.searchGap} px in)`)
-  equal(
-    layout.timeGap <= 40 + layout.scrollbar,
-    true,
-    `1920 px: the message time lines up with the same right margin (${layout.timeGap} px in)`,
-  )
-  equal(
-    Math.abs(layout.paragraph - layout.measure) < 1,
-    true,
-    `1920 px: a plain-text paragraph is capped at 72ch (${Math.round(layout.paragraph)} px of ${Math.round(layout.measure)} px)`,
-  )
-  equal(layout.paragraphLeft, layout.bodyLeft, '1920 px: the capped paragraph stays left-aligned')
+  equal(capped, true, '1920 px: a plain-text paragraph is capped at 62ch')
   await capture(page, 'reader')
+}
+
+/** Checks the toast floats over the reader and covers no list row, at `size`. */
+async function checkToastClear(page: Page, size: keyof typeof SIZES) {
+  await page.setViewportSize(SIZES[size])
+  const box = await boxOf(page, '[role="status"]:has([data-field="toast"])')
+  const reader = await boxOf(page, 'section[aria-label="Reader"]')
+  const rows = await page.locator('[role="option"]').evaluateAll((found) =>
+    found.map((row) => {
+      const { left, top, right, bottom } = row.getBoundingClientRect()
+      return { left, top, right, bottom }
+    }),
+  )
+  equal(
+    [rows.filter((row) => overlaps(box, row)).length, box.left >= reader.left && box.right <= reader.right],
+    [0, true],
+    `${size}: the toast sits over the reader and covers no list row`,
+  )
+  await page.setViewportSize(SIZES.wide)
 }
 
 /** Done: the row slides out with a toast, the next one opens, and z puts it back, open. */
@@ -114,33 +143,22 @@ async function checkDoneAndUndo(page: Page) {
   equal(await count(page), `${before.length}`, 'z restores the Your turn count')
   equal(await toast(page).count(), 0, 'z takes the toast down')
 
-  // Done again, for the picture.
+  // Done again, for the pictures, once the row has folded away.
   await page.keyboard.press('d')
   await toast(page).waitFor()
-  await capture(page, 'done-toast')
-}
-
-/** Resolves once the core has answered everything the page sent, and the page any reaction to that. */
-const settle = async (page: Page) => {
-  await page.evaluate(() => window.letterboxDev?.settle())
-  await page.evaluate(() => window.letterboxDev?.settle())
-}
-
-const mailRows = (page: Page) => page.locator('[data-list="mail"] [role="option"]')
-const conversations = async (page: Page) =>
-  Number.parseInt((await page.locator('[data-field="subtitle"]').textContent()) ?? '', 10)
-
-/** Waits for a mail list's header to count `total` conversations. */
-const waitForTotal = (page: Page, total: number) =>
-  page.waitForFunction(
-    (expected) => document.querySelector('[data-field="subtitle"]')?.textContent === `${expected} conversations`,
-    total,
+  await page.locator(`[data-row="${first}"]`).waitFor({ state: 'detached' })
+  // Tomas's lease addendum carries its PDF, shown as a chip under the body.
+  equal(
+    await page
+      .locator('[data-message="open"] [data-field="attachment"]')
+      .evaluateAll((files) => files.map((file) => [...file.children].map((part) => part.textContent))),
+    [['PDF', 'Addendum-4B-signed-TO.pdf', '212 KB']],
+    "a message's attachment shows as a chip with its type, name and size",
   )
-
-/** Opens Inbox and waits for its rows. */
-async function openInbox(page: Page) {
-  await nav(page, 'Inbox').click()
-  await mailRows(page).first().locator('[data-field="subject"]').waitFor()
+  await checkToastClear(page, 'wide')
+  await checkToastClear(page, 'narrow')
+  await captureC2(page, 'done-1440')
+  await capture(page, 'done-toast')
 }
 
 /** An archive the core accepts after the user left Inbox moves nothing and says nothing where they went. */
@@ -235,155 +253,6 @@ async function checkLeaveDuringExit(page: Page) {
 }
 
 /**
- * The action under `key` on Inbox's first row offers Undo too. z takes the change back
- * through the core, and the row comes back where it was, open, with the count it had.
- */
-async function checkUndoOf(page: Page, key: string, label: string) {
-  const total = await conversations(page)
-  const before = await mailRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
-  const [id] = before
-  if (!id) throw new Error('Inbox shows no conversation')
-  await mailRows(page).first().click()
-  await page.keyboard.press(key)
-  await toast(page).filter({ hasText: label }).waitFor()
-  equal(await toast(page).getByRole('button', { name: /^Undo/ }).count(), 1, `"${label}" offers Undo`)
-  await page.locator(`[data-list="mail"] [data-row="${id}"]`).waitFor({ state: 'detached' })
-  await waitForTotal(page, total - 1)
-  await page.keyboard.press('z')
-  await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
-  await waitForTotal(page, total)
-  // The window may have filled in more rows meanwhile. The rows both readings hold must match.
-  const after = await mailRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row')))
-  const shared = Math.min(before.length, after.length)
-  equal(after.slice(0, shared), before.slice(0, shared), `${label}: z brings the row back where it was, open`)
-  equal(await conversations(page), total, `${label}: z restores the Inbox count`)
-  equal(await toast(page).count(), 0, `${label}: z takes the toast down`)
-}
-
-/** Archive and Trash offer the same undo as Done, and Trash in Trash moves nothing. */
-async function checkArchiveAndTrashUndo(page: Page) {
-  await openInbox(page)
-  await checkUndoOf(page, 'e', 'Archived')
-  await checkUndoOf(page, '#', 'Moved to Trash')
-
-  // Trash on a conversation already in Trash changes nothing there, so its row stays put.
-  const trashed = await mailRows(page).first().getAttribute('data-row')
-  await mailRows(page).first().click()
-  await page.keyboard.press('#')
-  await toast(page).filter({ hasText: 'Moved to Trash' }).waitFor()
-  await page.locator(`[data-row="${trashed}"]`).waitFor({ state: 'detached' })
-  await nav(page, 'Trash').click()
-  const inTrash = page.locator(`[data-list="mail"] [data-row="${trashed}"]`)
-  await inTrash.locator('[data-field="subject"]').waitFor()
-  await inTrash.click()
-  await page.keyboard.press('#')
-  await settle(page)
-  equal(await inTrash.evaluate((row) => row.getAnimations().length), 0, 'trash in Trash leaves the row where it is')
-}
-
-/**
- * Trash on a labels account keeps Sent, as the core does, so trash from Sent keeps its row,
- * whole and still. Undo then shows it as it was, even once any exit has ended.
- */
-async function checkTrashFromSent(page: Page) {
-  await nav(page, 'Sent').click()
-  await mailRows(page).first().locator('[data-field="subject"]').waitFor()
-  const total = await conversations(page)
-  const id = await mailRows(page).first().getAttribute('data-row')
-  const row = page.locator(`[data-list="mail"] [data-row="${id}"]`)
-  const looks = () =>
-    row.evaluate((element) => ({
-      moving: element.getAnimations().length,
-      shown: element.getBoundingClientRect().height > 0 && getComputedStyle(element).opacity === '1',
-    }))
-  await row.click()
-  await page.keyboard.press('#')
-  await toast(page).filter({ hasText: 'Moved to Trash' }).waitFor()
-  await settle(page)
-  equal(await looks(), { moving: 0, shown: true }, 'trash from Sent keeps the row, whole and still')
-  equal(await conversations(page), total, 'trash from Sent keeps the Sent count')
-  // Lets any exit run to its end, so the undo below finds it ended.
-  await row.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
-  await page.keyboard.press('z')
-  await toast(page).waitFor({ state: 'detached' })
-  await settle(page)
-  equal(await looks(), { moving: 0, shown: true }, 'undo after trash shows the row as it was')
-}
-
-/** Archives Inbox's first row and waits for its toast. */
-async function archiveFirst(page: Page) {
-  await mailRows(page).first().click()
-  await page.keyboard.press('e')
-  await toast(page).filter({ hasText: 'Archived' }).waitFor()
-}
-
-/** z while the core has not answered the undo shows "Undoing…", with Undo in place, until it does. */
-async function checkUndoing(page: Page, relay: Relay) {
-  await openInbox(page)
-  const id = await mailRows(page).first().getAttribute('data-row')
-  await archiveFirst(page)
-  const paused = relay.pauseAtAccepted()
-  await page.keyboard.press('z')
-  await paused
-  equal(
-    await toast(page).locator('[data-field="toast"]').textContent(),
-    'Undoing…',
-    'z says "Undoing…" until the core answers',
-  )
-  equal(
-    await toast(page).getByRole('button', { name: /^Undo/ }).count(),
-    1,
-    'Undo stays in place while the core decides',
-  )
-  relay.resume()
-  await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
-  await toast(page).waitFor({ state: 'detached' })
-}
-
-/** Archives Inbox's first row, has the relay refuse its undo with `conflict`, and reads the toast. */
-async function refusalSays(page: Page, relay: Relay, conflict: unknown) {
-  await archiveFirst(page)
-  relay.refuseNextUndo(conflict)
-  await page.keyboard.press('z')
-  const said = toast(page).locator('[data-field="toast"]')
-  await page.waitForFunction(() => document.querySelector('[data-field="toast"]')?.textContent !== 'Undoing…')
-  return { text: await said.textContent(), undo: await toast(page).getByRole('button', { name: /^Undo/ }).count() }
-}
-
-/** Every refused undo says why in the toast, naming the mailbox the core names. */
-async function checkRefusals(page: Page, relay: Relay) {
-  await openInbox(page)
-  const plain = await refusalSays(page, relay, undefined)
-  equal(plain, { text: "This can't be undone", undo: 0 }, 'a refused undo with no reason says it cannot be undone')
-  const move = relay.lastMove() as { remove?: string[] } | undefined
-  const inbox = move?.remove?.[0]
-  if (!inbox) throw new Error('the archive named no mailbox to take the conversation out of')
-  const field = { kind: 'mailbox', messageId: 'message_1', mailboxId: inbox }
-  equal(
-    (await refusalSays(page, relay, { kind: 'changed', field })).text,
-    "Its place in Inbox changed since, so it can't be undone",
-    'a change since names the field and its mailbox',
-  )
-  equal(
-    (await refusalSays(page, relay, { kind: 'changed', field: { kind: 'flagged', messageId: 'message_1' } })).text,
-    "Its flag changed since, so it can't be undone",
-    'a change since names the field',
-  )
-  equal(
-    (await refusalSays(page, relay, { kind: 'mailbox-gone', mailboxId: inbox })).text,
-    "Inbox is gone, so it can't be undone",
-    'a mailbox that is gone is named',
-  )
-  equal(
-    (await refusalSays(page, relay, { kind: 'partly-applied', field })).text,
-    "Only part of this went through, so it can't be undone",
-    'a partly applied change says only part went through',
-  )
-  const unknown = await refusalSays(page, relay, { kind: 'outcome-unknown' })
-  equal(unknown.text?.startsWith("Can't undo yet: waiting for "), true, 'an unconfirmed change says undo must wait')
-}
-
-/**
  * A scroll while a row leaves a windowed list ends its exit at once. The row is never
  * placed in the window the scroll moved to, which would set it among rows it never sat
  * beside and add a row past the window's size.
@@ -396,7 +265,7 @@ async function checkScrollDuringExit(page: Page) {
   // Once the row starts to slide, scroll ten rows down, then report whether the row is
   // still there when the list first renders the moved window (its top spacer changes).
   const placed = page.locator('[data-list="mail"]').evaluate(
-    (list, leaving) =>
+    (list, [leaving, rowHeight]) =>
       new Promise<boolean>((resolve) => {
         const row = list.querySelector(`[data-row="${leaving}"]`)
         const spacer = list.firstElementChild
@@ -410,11 +279,11 @@ async function checkScrollDuringExit(page: Page) {
             resolve(list.querySelector(`[data-row="${leaving}"]`) !== null)
           })
           observer.observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
-          list.scrollTop += 10 * 73
+          list.scrollTop += 10 * rowHeight
         }
         scroll()
       }),
-    id,
+    [id, ROW_HEIGHT] as const,
   )
   await page.keyboard.press('e')
   equal(await placed, false, 'scrolling during an exit drops the leaving row from the moved window')
@@ -438,10 +307,7 @@ export async function checkDone(browser: Browser, url: string) {
   await checkDoneAndUndo(page)
   await checkLateArchive(page, relay)
   await checkLeaveDuringExit(page)
-  await checkArchiveAndTrashUndo(page)
-  await checkTrashFromSent(page)
-  await checkUndoing(page, relay)
-  await checkRefusals(page, relay)
+  await checkUndo(page, relay)
   await checkScrollDuringExit(page)
 
   // Clearing Your turn leaves the empty state.

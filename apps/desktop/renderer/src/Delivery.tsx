@@ -1,0 +1,73 @@
+// How far a reply the user sent has got, on its message in the conversation. Only messages
+// with a `delivery` show anything: the provider holds the rest, and they look like any other.
+
+import type { Delivery, Message, ThreadDetail } from '@letterbox/protocol'
+import { CircleAlert, Clock, TriangleAlert } from 'lucide-react'
+import { useEffect } from 'react'
+import { useSecondsUntil } from './clock.ts'
+import { adopt, editAndSendAgain, REFUSALS } from './sending.ts'
+
+type MarkProps = { thread: ThreadDetail; delivery: Exclude<Delivery, { state: 'failed' }> }
+
+/**
+ * Where the time goes on a message still on its way: "Sending in 8 s" in its undo window,
+ * then "Sending". A held one is followed, so the toast offers Undo for it (sending.ts).
+ */
+export function DeliveryMark({ thread, delivery }: MarkProps) {
+  const held = delivery.state === 'held'
+  // Follows the core's held reply in sending.ts, which lives outside React.
+  useEffect(() => {
+    if (held) adopt(thread)
+  }, [held, thread])
+  return (
+    <span
+      className="ml-auto inline-flex items-center gap-1.5 self-center text-meta whitespace-nowrap text-fg2 tabular-nums"
+      data-field="delivery"
+    >
+      <Clock className="size-3.5" strokeWidth={1.75} aria-hidden />
+      {delivery.state === 'held' ? <Held until={delivery.until} /> : 'Sending'}
+    </span>
+  )
+}
+
+function Held({ until }: { until: string }) {
+  const seconds = useSecondsUntil(until)
+  return <>{seconds > 0 ? `Sending in ${seconds} s` : 'Sending'}</>
+}
+
+/**
+ * A reply that did not go: why, and a way to write it again. "Unconfirmed" is not a refusal.
+ * The provider may hold it, so the user is told to look in Sent before sending it twice.
+ */
+export function NotSent({
+  thread,
+  message,
+  delivery,
+}: {
+  thread: ThreadDetail
+  message: Message
+  delivery: Extract<Delivery, { state: 'failed' }>
+}) {
+  const unsure = delivery.reason === 'unconfirmed'
+  const Icon = unsure ? TriangleAlert : CircleAlert
+  return (
+    <div
+      role="alert"
+      data-field="not-sent"
+      className="mt-4 flex items-center gap-3 rounded-[10px] bg-red/[0.07] py-2 pr-2 pl-3 inset-ring inset-ring-red/35"
+    >
+      <Icon className="size-4 flex-none text-red" strokeWidth={2} aria-hidden />
+      <p className="min-w-0 flex-1 text-row text-fg2">
+        <b className="font-semibold text-fg">{unsure ? 'May not have been sent.' : 'Not sent.'}</b>{' '}
+        {unsure ? 'Check Sent before sending again.' : REFUSALS[delivery.reason]}
+      </p>
+      <button
+        type="button"
+        onClick={() => editAndSendAgain(thread, message)}
+        className="inline-flex h-7 flex-none items-center rounded-lg px-2.5 text-row font-medium text-fg shadow-outline hover:bg-hover"
+      >
+        Edit and send again
+      </button>
+    </div>
+  )
+}

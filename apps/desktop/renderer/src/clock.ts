@@ -32,3 +32,27 @@ const subscribe = (onChange: () => void) => {
 export function useNow() {
   return useSyncExternalStore(subscribe, () => Math.floor(now() / MINUTE) * MINUTE)
 }
+
+const SECOND = 1000
+const secondWatchers = new Set<() => void>()
+let secondTicker: ReturnType<typeof setInterval> | undefined
+
+/** Ticks once a second while anyone watches, and never when the time is fixed. */
+const subscribeSeconds = (onChange: () => void) => {
+  secondWatchers.add(onChange)
+  if (fixed === undefined) secondTicker ??= setInterval(() => secondWatchers.forEach((watcher) => watcher()), SECOND)
+  return () => {
+    secondWatchers.delete(onChange)
+    if (secondWatchers.size > 0 || secondTicker === undefined) return
+    clearInterval(secondTicker)
+    secondTicker = undefined
+  }
+}
+
+/** Whole seconds from now until `until` (an ISO time), never below 0, for a countdown such as a send's undo window. */
+export function useSecondsUntil(until: string) {
+  return useSyncExternalStore(subscribeSeconds, () => secondsUntil(until))
+}
+
+/** The same, read once, for an event handler. */
+export const secondsUntil = (until: string) => Math.max(0, Math.ceil((Date.parse(until) - now()) / SECOND))

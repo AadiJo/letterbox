@@ -7,7 +7,7 @@
 import { createClient, type Subscription, type Transport } from '@letterbox/client'
 import { messagePortTransport, shellPort, type ShellBridge } from '@letterbox/client/message-port'
 import { webSocketTransport } from '@letterbox/client/websocket'
-import type { Queries, Query } from '@letterbox/protocol'
+import type { ChangeId, Command, Queries, Query } from '@letterbox/protocol'
 import { useState, useSyncExternalStore } from 'react'
 
 type View = keyof Queries
@@ -47,12 +47,26 @@ const transport: Transport = {
 /** A random id. `crypto.randomUUID` needs a secure context, and the dev page may be served over plain http. */
 const randomId = () => Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(36)).join('')
 
+/** Change ids must differ across restarts too, so they are random, not counted. */
+const newId = (kind: 'sub' | 'req' | 'change') => `${kind}-${randomId()}`
+
 export const client = createClient(transport, {
-  // Change ids must differ across restarts too, so they are random, not counted.
-  newId: (kind) => `${kind}-${randomId()}`,
+  newId,
   // Nothing in this renderer waits for a message no request asked for yet.
   unclaimed: () => {},
 })
+
+/**
+ * Sends `command` and hands back its change id at once, with the core's answer to come. For a
+ * caller that must keep the id even if the answer never arrives, since the core may have
+ * stored the change anyway (sending.ts). Passing an earlier `change` again asks about that
+ * same change: the core answers a repeated id from what it stored (protocol guarantee 4).
+ */
+export function command(sent: Command, change?: ChangeId) {
+  // The client makes change ids (ClientMessage `command`), so this is where one is branded.
+  const id = change ?? (newId('change') as ChangeId)
+  return { change: id, answer: client.command(sent, id) }
+}
 
 // A failed hello ends the connection, which `useLost` reports.
 client.hello().catch(() => {})

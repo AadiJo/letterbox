@@ -63,9 +63,12 @@ export type SeedMessage = {
   headers?: { listUnsubscribe?: boolean; listId?: boolean; precedence?: string; autoSubmitted?: string }
   /** The provider's own bulk verdict. Only the labels dialect reports it. Defaults to false. */
   bulk?: boolean
-  /** Number of attachments. Defaults to 0. */
-  attachments?: number
+  /** Its attachments: a number of placeholder files, or files as named. Defaults to 0. */
+  attachments?: number | readonly SeedAttachment[]
 }
+
+/** One attachment a seed names, as a mail client would show it. */
+export type SeedAttachment = { name: string; mime: string; size: number }
 
 export type Seed = {
   /** The address the mailbox belongs to. Also the sign-in username. */

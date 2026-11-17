@@ -12,6 +12,9 @@ export const ARTIFACTS = join(root, 'artifacts/ui')
 /** The longest any one wait in a check may take. */
 export const WAIT_MS = 15_000
 
+/** A list row's height in px: the renderer's ROW_HEIGHT (apps/desktop/renderer/src/Row.tsx). */
+export const ROW_HEIGHT = 78
+
 /** The window sizes every scene is captured at. */
 export const SIZES = {
   wide: { width: 1440, height: 900 },
@@ -74,7 +77,7 @@ const closeOptions = (code: number | undefined, reason: string | undefined) => (
 /**
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
- * in order. The returned promise resolves once the relay holds that `accepted`. `sees`
+ * in order, or until `drop` ends the connection with them still unsent. The returned promise resolves once the relay holds that `accepted`. `sees`
  * resolves once the core sends a message, held or not, that contains `text`. It rejects
  * after WAIT_MS, or when the connection closes first, naming what never came.
  */
@@ -82,10 +85,11 @@ async function relayCore(page: Page) {
   let armed: (() => void) | undefined
   let held: string[] | undefined
   let toPage: ((message: string) => void) | undefined
+  let close: (() => Promise<void>) | undefined
+  const fromPage: string[] = []
+  let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
-  // The page's last set-mailboxes command, as it sent it.
-  let lastMove: unknown
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -127,24 +131,27 @@ async function relayCore(page: Page) {
       closed()
     })
     socket.onMessage((message) => {
-      const text = message.toString()
-      const sent = JSON.parse(text) as { kind?: string; change?: string; command?: { kind?: string } }
-      if (sent.command?.kind === 'set-mailboxes') lastMove = sent.command
-      if (refuseUndo && sent.command?.kind === 'undo') {
+      const text = String(message)
+      fromPage.push(text)
+      if (refuseUndo && text.includes('"kind":"undo"')) {
         const { conflict } = refuseUndo
         refuseUndo = undefined
-        return void socket.send(
-          JSON.stringify({
-            kind: 'rejected',
-            change: sent.change,
-            reason: 'conflict',
-            ...(conflict ? { conflict } : {}),
-          }),
-        )
+        const { change } = JSON.parse(text) as { change: string }
+        const rejected = { kind: 'rejected', change, reason: 'conflict', ...(conflict ? { conflict } : {}) }
+        return void socket.send(JSON.stringify(rejected))
       }
       core.send(message)
+      if (watched && text.includes(watched.text)) {
+        held ??= []
+        watched.seen()
+        watched = undefined
+      }
     })
     toPage = (message) => socket.send(message)
+    close = async () => {
+      await socket.close({ code: 1011, reason: 'the check dropped the connection' })
+      await core.close()
+    }
     core.onMessage((frame) => {
       const message = frame.toString()
       see(message)
@@ -160,13 +167,22 @@ async function relayCore(page: Page) {
   })
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
-    /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. */
+    /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
+    pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),
+    /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. It never reaches the core. */
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }
     },
-    /** The page's last set-mailboxes command. */
-    lastMove: () => lastMove,
     sees,
+    /** Every message the page sent its cores, in order, as sent. */
+    fromPage: () => [...fromPage],
+    /** Ends the connection both ways. What the relay held is never delivered, as when an answer is lost. */
+    drop: async () => {
+      held = undefined
+      armed = undefined
+      watched = undefined
+      await close?.()
+    },
     resume: () => {
       const queued = held ?? []
       held = undefined
@@ -230,3 +246,52 @@ export async function capture(page: Page, name: string) {
   await shot(SIZES.narrow, `${name}-narrow.png`)
   await page.setViewportSize(SIZES.wide)
 }
+
+/** The C2 design's screens, each named for the mock it is compared with: `c2-<screen>.png`. */
+export type C2Screen = 'people-1440' | 'people-1920' | 'done-1440' | 'reply-1440' | 'narrow-1024'
+
+const C2_SIZES = {
+  'people-1440': SIZES.wide,
+  'people-1920': SIZES.full,
+  'done-1440': SIZES.wide,
+  'reply-1440': SIZES.wide,
+  'narrow-1024': SIZES.narrow,
+} as const satisfies Record<C2Screen, (typeof SIZES)[keyof typeof SIZES]>
+
+/**
+ * Screenshots the page as `c2-<screen>.png` at the screen's size and twice its pixels, as the
+ * mocks are, then gives the page back its own size. `before` runs once the page is at that
+ * size, for a hover that must land on the final layout.
+ */
+export async function captureC2(page: Page, screen: C2Screen, before?: () => Promise<void>) {
+  const size = C2_SIZES[screen]
+  const cdp = await page.context().newCDPSession(page)
+  await page.setViewportSize(size)
+  await cdp.send('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 2, mobile: false })
+  await before?.()
+  // Every one-shot animation finished, as `capture` has them. Playwright's own screenshot
+  // keeps its scale of 1, so the page takes this one itself.
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().map((animation) => animation.finished)))
+  const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' })
+  writeFileSync(join(ARTIFACTS, `c2-${screen}.png`), Buffer.from(data, 'base64'))
+  await cdp.send('Emulation.clearDeviceMetricsOverride')
+  await cdp.detach()
+  // Playwright sends its own size again, which the override replaced.
+  await page.setViewportSize(SIZES.wide)
+}
+
+/** A box on screen, as `boxOf` reads it. */
+export type Box = { left: number; top: number; right: number; bottom: number }
+
+/** Where `selector`'s first match is on screen. Throws if nothing matches or it is hidden. */
+export async function boxOf(page: Page, selector: string): Promise<Box> {
+  const found = await page.locator(selector).first().boundingBox()
+  if (!found) throw new Error(`the page shows no ${selector}`)
+  return { left: found.x, top: found.y, right: found.x + found.width, bottom: found.y + found.height }
+}
+
+/** True when two boxes share any area. */
+export const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+/** A box's vertical middle, to the nearest half pixel. */
+export const middle = (box: Box) => Math.round(box.top + box.bottom) / 2

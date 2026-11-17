@@ -1,5 +1,6 @@
 // What the last action did, in a toast for 5 s: "Marked done", "Archived" or "Moved to Trash",
-// with Undo (or z). A new action replaces it.
+// with Undo (or z). A new action replaces it. With no notice up, the toast offers Undo for a
+// reply in its undo window instead (sending.ts), and z acts on whichever the toast shows.
 //
 // Undo is the core's: `undo` names the change the action made, and the core takes back exactly
 // what that change altered. The renderer never builds an opposite command. While the core
@@ -18,10 +19,18 @@ const NOTICE_MS = 5000
 
 /**
  * The toast's content: what was done, and the change Undo takes back, or null for a toast
- * that says why an undo was refused. `undoing` is true from z until the core answers the undo.
+ * that says why there is nothing to undo. `undoing` is true from z until the core answers the
+ * undo. `icon` says what kind of word it is: done, waiting on the provider, or a refusal.
  * `serial` rises with each one, so a new toast replays its entrance.
  */
-export type Notice = { serial: number; threadId: ThreadId; label: string; change: ChangeId | null; undoing: boolean }
+export type Notice = {
+  serial: number
+  threadId: ThreadId
+  label: string
+  change: ChangeId | null
+  undoing: boolean
+  icon: 'done' | 'clock' | 'info'
+}
 
 /** How a refusal names the provider of a conversation, and a mailbox. */
 export type Names = { provider: (threadId: ThreadId) => string; mailbox: (id: MailboxId) => string | undefined }
@@ -59,8 +68,17 @@ export function notify(action: Action, threadId: ThreadId, change: ChangeId) {
   const label = labelFor(action)
   if (!label) return
   serial += 1
-  setNotice({ serial, threadId, label, change, undoing: false })
+  setNotice({ serial, threadId, label, change, undoing: false, icon: 'done' })
 }
+
+/** Says, for a while, that a reply's undo window ended before its undo reached the core (sending.ts). */
+export function sayTooLate(threadId: ThreadId) {
+  serial += 1
+  setNotice({ serial, threadId, label: "Too late to undo. It's sending.", change: null, undoing: false, icon: 'clock' })
+}
+
+/** Whether the toast shows a notice. While it does, z and Undo act on it, not on a reply in its undo window (sending.ts). */
+export const hasNotice = () => notice !== null
 
 /** Takes the toast down. */
 export const withdraw = () => setNotice(null)
@@ -109,7 +127,7 @@ function refusal(conflict: UndoConflict | undefined, names: Names, threadId: Thr
 export async function undo(names: Names) {
   const taken = notice
   if (!taken?.change || taken.undoing) return null
-  const undoing: Notice = { ...taken, label: 'Undoing…', undoing: true }
+  const undoing: Notice = { ...taken, label: 'Undoing…', undoing: true, icon: 'clock' }
   setNotice(undoing)
   const answer = await client.command({ kind: 'undo', change: taken.change }).catch(() => null)
   const ours = notice === undoing
@@ -119,8 +137,10 @@ export async function undo(names: Names) {
   }
   if (!ours) return null
   serial += 1
-  const label = refusal(answer?.kind === 'rejected' ? answer.conflict : undefined, names, taken.threadId)
-  setNotice({ serial, threadId: taken.threadId, label, change: null, undoing: false })
+  const conflict = answer?.kind === 'rejected' ? answer.conflict : undefined
+  const label = refusal(conflict, names, taken.threadId)
+  const icon = conflict?.kind === 'outcome-unknown' ? 'clock' : 'info'
+  setNotice({ serial, threadId: taken.threadId, label, change: null, undoing: false, icon })
   return null
 }
 

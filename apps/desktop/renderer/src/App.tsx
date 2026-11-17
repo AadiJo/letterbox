@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { useLost, useView } from './core.ts'
+import { MailboxesProvider } from './Label.tsx'
 import { MailScreen } from './MailScreen.tsx'
 import { PeopleScreen, usePeople } from './PeopleScreen.tsx'
 import type { Chrome } from './Screen.tsx'
@@ -62,33 +63,35 @@ export function App() {
   }
 
   return (
-    <div className="h-screen bg-desk font-sans text-[13px] leading-[1.45] text-fg antialiased">
+    <div className="h-screen bg-desk font-sans text-row text-fg antialiased">
       {/* The rounded window. The hairline sits above the panes. */}
-      <div className="relative flex h-full overflow-hidden rounded-2xl bg-win after:pointer-events-none after:absolute after:inset-0 after:rounded-2xl after:border after:border-fg/10 after:content-['']">
-        <div
-          className={`z-20 flex-none p-2 pr-0 wide:static wide:block ${sidebarOpen ? 'absolute inset-y-0 left-0 block rounded-l-2xl bg-win pr-2 wide:bg-transparent wide:pr-0' : 'hidden'}`}
-        >
-          <Sidebar
-            place={place}
-            onPlace={goTo}
-            accounts={accounts}
-            mailboxes={mailboxes}
-            people={people && { count: people.mine.length, late: people.late }}
-          />
-        </div>
-        {sidebarOpen && (
-          <button
-            type="button"
-            aria-label="Hide the sidebar"
-            onClick={() => setSidebarOpen(false)}
-            className="absolute inset-0 z-10 bg-desk/40 wide:hidden"
-          />
-        )}
-        <div className="flex min-w-0 flex-1">{screen()}</div>
+      <div className="relative flex h-full overflow-hidden rounded-2xl bg-side after:pointer-events-none after:absolute after:inset-0 after:z-40 after:rounded-2xl after:border after:border-fg/10 after:content-['']">
+        <MailboxesProvider value={mailboxes}>
+          <div
+            className={`z-30 flex-none wide:static wide:block ${sidebarOpen ? 'absolute inset-y-0 left-0 block shadow-float' : 'hidden'}`}
+          >
+            <Sidebar
+              place={place}
+              onPlace={goTo}
+              accounts={accounts}
+              mailboxes={mailboxes}
+              people={people && { count: people.mine.length, late: people.late }}
+            />
+          </div>
+          {sidebarOpen && (
+            <button
+              type="button"
+              aria-label="Hide the sidebar"
+              onClick={() => setSidebarOpen(false)}
+              className="absolute inset-0 z-20 bg-desk/40 wide:hidden"
+            />
+          )}
+          <div className="flex min-w-0 flex-1">{screen()}</div>
+        </MailboxesProvider>
         {lost && (
           <p
             role="alert"
-            className="absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-lg border border-line2 bg-panel px-3 py-2 text-xs text-fg2"
+            className="absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-xl bg-float px-3.5 py-2.5 text-meta text-fg2 shadow-float"
           >
             Lost the core: {lost}. Reload to connect again.
           </p>

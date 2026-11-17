@@ -3,15 +3,16 @@
 //   8 conversations where it is my turn, 1 hour to 26 days old
 //   12 where I am waiting on them, 2 hours to 29 days old
 //   27 turns older than 30 days, some mine and some theirs
-// Receipts, travel mail and a few conversations carry labels, and one newsletter is HTML
+// The people and their letters are in people-mail.ts. Receipts, travel mail and some
+// conversations carry labels (Projects, Home, Receipts, Travel), and one newsletter is HTML
 // that tries to run script and load remote content, which the reader must block.
 // Every name, address and company here is made up.
 
 import type { SeedAddress, SeedMessage } from '../contract.ts'
 import type { DevSeed, PersonConversation } from '../seeds.ts'
+import { agesOf, CONVERSATIONS, type Conversation, ME, PEOPLE } from './people-mail.ts'
 
 const NOW = '2026-03-09T16:00:00.000Z'
-const ME = { name: 'Robin Vale', address: 'robin@vale.test' }
 
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
@@ -19,117 +20,29 @@ const DAY = 24 * HOUR
 /** The time `ms` before NOW. */
 const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString()
 
-/** People I write with, by first name. */
-const PEOPLE = {
-  maya: { name: 'Maya Lindqvist', address: 'maya@lindqvist.example' },
-  tomas: { name: 'Tomas Okafor', address: 'tomas.okafor@fernway.example' },
-  priya: { name: 'Priya Raman', address: 'priya@ramanstudio.example' },
-  jonah: { name: 'Jonah Feld', address: 'jonah.feld@example.org' },
-  ines: { name: 'Ines Carvalho', address: 'ines@harbourlane.example' },
-  wen: { name: 'Wen Zhao', address: 'wen.zhao@example.net' },
-  dara: { name: 'Dara Quinn', address: 'dara@quinnandco.example' },
-  felix: { name: 'Felix Brandt', address: 'felix@brandt.example' },
-  amara: { name: 'Amara Osei', address: 'amara.osei@example.org' },
-  leo: { name: 'Leo Marchetti', address: 'leo@marchetti.example' },
-  sana: { name: 'Sana Mirza', address: 'sana@mirzalab.example' },
-  owen: { name: 'Owen Hale', address: 'owen.hale@example.net' },
-  noor: { name: 'Noor Haddad', address: 'noor@haddad.example' },
-  kit: { name: 'Kit Ashworth', address: 'kit@ashworth.example' },
-} satisfies Record<string, SeedAddress>
+/** Whose turn a conversation is: theirs when I wrote last, mine when they did. */
+const turnOf = (conversation: Conversation) => (conversation.says.at(-1)?.me ? 'theirs' : 'mine')
 
-/** One conversation with a person: who, about what, whose turn the seed means, how long ago it last moved, and a label. */
-type Spec = {
-  with: keyof typeof PEOPLE
-  subject: string
-  turn: 'mine' | 'theirs'
-  age: number
-  length: 1 | 2 | 3
-  label?: 'projects'
-}
-
-/** Newest first within each group. */
-const SPECS: Spec[] = [
-  // My turn, 1 hour to 26 days.
-  { with: 'maya', subject: 'Notes from Thursday', turn: 'mine', age: 1 * HOUR, length: 3, label: 'projects' },
-  { with: 'tomas', subject: 'Can you sign the lease addendum?', turn: 'mine', age: 5 * HOUR, length: 1 },
-  { with: 'priya', subject: 'Draft cover for the zine', turn: 'mine', age: 26 * HOUR, length: 3, label: 'projects' },
-  { with: 'jonah', subject: 'Climbing on Saturday?', turn: 'mine', age: 3 * DAY, length: 1 },
-  { with: 'ines', subject: 'Invoice question', turn: 'mine', age: 6 * DAY, length: 3 },
-  { with: 'wen', subject: 'Reference letter', turn: 'mine', age: 11 * DAY, length: 1 },
-  { with: 'dara', subject: 'Quote for the kitchen shelves', turn: 'mine', age: 16 * DAY, length: 3 },
-  { with: 'felix', subject: 'Old photos from the reunion', turn: 'mine', age: 26 * DAY, length: 1 },
-  // Waiting on them, 2 hours to 29 days.
-  { with: 'amara', subject: 'Dinner next week', turn: 'theirs', age: 2 * HOUR, length: 2 },
-  { with: 'leo', subject: 'Bike for sale', turn: 'theirs', age: 7 * HOUR, length: 2 },
-  { with: 'sana', subject: 'Sample results', turn: 'theirs', age: 20 * HOUR, length: 1 },
-  { with: 'owen', subject: 'Spare keys', turn: 'theirs', age: 2 * DAY, length: 2 },
-  { with: 'noor', subject: 'Translation help', turn: 'theirs', age: 4 * DAY, length: 1 },
-  { with: 'kit', subject: 'Garden plot rota', turn: 'theirs', age: 5 * DAY, length: 2 },
-  { with: 'maya', subject: 'Book club pick', turn: 'theirs', age: 8 * DAY, length: 1 },
-  { with: 'tomas', subject: 'Deposit return', turn: 'theirs', age: 10 * DAY, length: 2 },
-  { with: 'priya', subject: 'Print shop contact', turn: 'theirs', age: 13 * DAY, length: 1 },
-  { with: 'jonah', subject: 'Borrowed tent', turn: 'theirs', age: 18 * DAY, length: 2 },
-  { with: 'ines', subject: 'Contract renewal', turn: 'theirs', age: 22 * DAY, length: 1 },
-  { with: 'wen', subject: 'Conference talk slot', turn: 'theirs', age: 29 * DAY, length: 2, label: 'projects' },
-  // Turns older than 30 days, alternating mine and theirs, 13 days apart.
-  ...(
-    [
-      ['Housewarming', 'maya'],
-      ['Recipe you asked about', 'tomas'],
-      ['Moving boxes', 'priya'],
-      ['Piano tuner', 'jonah'],
-      ['Tax documents', 'ines'],
-      ['Wedding playlist', 'wen'],
-      ['Lost scarf', 'dara'],
-      ['Choir schedule', 'felix'],
-      ['Camera lens', 'amara'],
-      ['Allotment shed', 'leo'],
-      ['Recommendation for a dentist', 'sana'],
-      ['Car share', 'owen'],
-      ['Birthday plans', 'noor'],
-      ['Old laptop', 'kit'],
-      ['Language exchange', 'maya'],
-      ['Volunteer shifts', 'tomas'],
-      ['Paint colours', 'priya'],
-      ['Train tickets', 'jonah'],
-      ['Running club', 'ines'],
-      ['Holiday cottage', 'wen'],
-      ['Ceramics class', 'dara'],
-      ['Window repair', 'felix'],
-      ['Podcast idea', 'amara'],
-      ['School fundraiser', 'leo'],
-      ['Chess rematch', 'sana'],
-      ['Board game night', 'owen'],
-      ['Plant cuttings', 'noor'],
-    ] as const
-  ).map(([subject, person], index): Spec => ({
-    with: person,
-    subject,
-    turn: index % 2 === 0 ? 'mine' : 'theirs',
-    age: (31 + index * 13) * DAY,
-    length: index % 3 === 0 ? 2 : 1,
-  })),
-]
-
-/** The messages of one conversation, oldest first. The last is from them on my turn, from me on theirs. */
-const conversation = (spec: Spec, number: number): SeedMessage[] => {
+/** The messages of one conversation, oldest first, each answering all before it. */
+const conversation = (spec: Conversation, number: number): SeedMessage[] => {
   const them = PEOPLE[spec.with]
-  const keys = Array.from({ length: spec.length }, (_, index) => `person-${number}-${index}`)
-  return keys.map((key, index) => {
-    const fromEnd = spec.length - 1 - index
-    const mine = (fromEnd % 2 === 0) === (spec.turn === 'theirs')
+  const keys = spec.says.map((_, index) => `person-${number}-${index}`)
+  const ages = agesOf(spec)
+  return spec.says.map((say, index): SeedMessage => {
+    const mine = say.me === true
     const from: SeedAddress = mine ? ME : them
     const to: SeedAddress = mine ? them : ME
     return {
-      key,
+      key: keys[index] ?? `person-${number}-${index}`,
       mailboxes: [mine ? 'sent' : 'inbox', ...(spec.label ? [spec.label] : [])],
       from,
       to: [to],
       subject: index === 0 ? spec.subject : `Re: ${spec.subject}`,
-      text: mine ? 'Thanks, I will get back to you on this.' : `Hi Robin, about "${spec.subject}". What do you think?`,
-      sentAt: ago(spec.age + fromEnd * 3 * HOUR),
-      unread: !mine && fromEnd === 0 && spec.turn === 'mine',
+      text: say.text,
+      sentAt: ago(ages[index] ?? spec.age),
+      unread: !mine && index === spec.says.length - 1 && spec.unread === true,
       replyTo: keys.slice(0, index),
+      ...(say.attachments && { attachments: say.attachments }),
     }
   })
 }
@@ -239,6 +152,16 @@ const SENDERS: { name: string; address: string; kind: Kind; subject: string; tra
   { name: 'Market Notes', address: 'notes@marketnotes.example', kind: 'newsletter', subject: 'Morning briefing' },
 ]
 
+/** What each kind of machine says, so automated previews read like the real thing. */
+const AUTOMATED_TEXT: Record<Kind, (name: string, index: number) => string> = {
+  notification: (name) =>
+    `You have a new notification from ${name}. Open ${name} to see it, or change how often we email you in your settings.`,
+  receipt: (name, index) =>
+    `Thanks for your order with ${name}. Total paid: €${10 + ((index * 7) % 90)}.${String(index % 100).padStart(2, '0')}. Receipt ${4000 + index}. Keep this email for your records.`,
+  newsletter: (name) =>
+    `This week from ${name}: what we read, what we made, and what is coming up. Read it online, or unsubscribe at any time.`,
+}
+
 /** How many automated messages the seed holds, each its own conversation: about 95% of the conversations. */
 const AUTOMATED = 900
 
@@ -257,7 +180,7 @@ const automated = (index: number, sentAt: string): SeedMessage => {
     from: { name: sender.name, address: sender.address },
     to: [ME],
     subject: `${sender.subject} #${1000 + index}`,
-    text: `${sender.subject}. This message was sent automatically.`,
+    text: AUTOMATED_TEXT[sender.kind](sender.name, index),
     sentAt,
     // Older automated mail has been read. The newest day's is not.
     unread: index >= AUTOMATED - 8,
@@ -294,7 +217,7 @@ const htmlNewsletter: SeedMessage = {
   bulk: true,
 }
 
-const people = SPECS.flatMap(conversation)
+const people = CONVERSATIONS.flatMap(conversation)
 // Spread over the last 120 days, oldest first, the newest 30 minutes before NOW.
 const machines = Array.from({ length: AUTOMATED }, (_, index) =>
   automated(index, ago(30 * 60_000 + (AUTOMATED - 1 - index) * Math.floor((120 * DAY) / AUTOMATED))),
@@ -311,15 +234,16 @@ export const peopleFirst: DevSeed = {
       { key: 'sent', name: 'Sent', role: 'sent' },
       { key: 'trash', name: 'Trash', role: 'trash' },
       { key: 'projects', name: 'Projects', role: null },
+      { key: 'home', name: 'Home', role: null },
       { key: 'receipts', name: 'Receipts', role: null },
       { key: 'travel', name: 'Travel', role: null },
     ],
     messages: [...people, ...machines, htmlNewsletter].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
   },
   delivery: (n) => automated(AUTOMATED + n, NOW),
-  conversations: SPECS.map((spec): PersonConversation => ({
+  conversations: CONVERSATIONS.map((spec): PersonConversation => ({
     subject: spec.subject,
-    turn: spec.turn,
+    turn: turnOf(spec),
     lastAt: ago(spec.age),
   })),
 }

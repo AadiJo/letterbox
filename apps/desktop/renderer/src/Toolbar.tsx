@@ -1,10 +1,13 @@
-// The reader's toolbar: the actions the core has for the open conversation, and search.
-// A button is disabled when the core cannot do its action here (actions.ts decides).
+// The reader's toolbar: Done, the actions the core has for the open conversation, and search,
+// in the reading column. A button is disabled when the core cannot do its action here
+// (actions.ts decides). Each one's tooltip names its key from SHORTCUTS.
 
 import type { ThreadSummary } from '@letterbox/protocol'
-import { Archive, Check, Flag, Mail as MailIcon, MailOpen, type LucideIcon, Trash2 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { Archive, Check, Flag, MailOpen, Trash2 } from 'lucide-react'
+import type { ComponentType, ReactNode } from 'react'
 import { type Action, commandFor, type Mail, SHORTCUTS } from './actions.ts'
+import { MailDot } from './MailDot.tsx'
+import { Tooltip } from './Tooltip.tsx'
 
 type Props = {
   thread: ThreadSummary | undefined
@@ -14,45 +17,53 @@ type Props = {
   search: ReactNode
 }
 
-/** A button's tooltip: what it does and its key. */
-const title = (label: string, action: Action) => `${label} (${SHORTCUTS[action]})`
+type Icon = ComponentType<{ className?: string; strokeWidth?: number }>
 
 export function Toolbar({ thread, mail, onAct, search }: Props) {
   const can = (action: Action) => thread !== undefined && commandFor(action, thread, mail) !== null
-  const icon = (action: Action, label: string, Icon: LucideIcon) => (
-    <button
-      type="button"
-      aria-label={label}
-      title={title(label, action)}
-      disabled={!can(action)}
-      onClick={() => void onAct(action)}
-      className="inline-flex h-[26px] w-8 items-center justify-center text-fg2 not-first:border-l not-first:border-line2 enabled:hover:bg-hover disabled:text-faint"
-    >
-      <Icon className="size-[15px]" strokeWidth={1.75} aria-hidden />
-    </button>
+  const icon = (action: Action, label: string, Glyph: Icon) => (
+    <Tooltip label={label} shortcut={SHORTCUTS[action]}>
+      {(describedBy) => (
+        <button
+          type="button"
+          aria-label={label}
+          aria-describedby={describedBy}
+          aria-keyshortcuts={SHORTCUTS[action]}
+          disabled={!can(action)}
+          onClick={() => void onAct(action)}
+          className="inline-flex size-8 items-center justify-center rounded-lg text-fg2 enabled:hover:bg-hover enabled:hover:text-fg disabled:text-faint"
+        >
+          <Glyph className="size-[17px]" strokeWidth={1.75} />
+        </button>
+      )}
+    </Tooltip>
   )
   return (
-    // Spans the reader pane, 40 px in from each side like the conversation below it.
-    <div className="flex h-[72px] flex-none items-center gap-0.5 px-10">
-      <button
-        type="button"
-        title={title('Done', 'done')}
-        disabled={!can('done')}
-        onClick={() => void onAct('done')}
-        className="inline-flex h-7 items-center gap-1.5 rounded-[7px] border border-key bg-raised px-2.5 text-[12.5px] font-medium whitespace-nowrap text-fg enabled:hover:bg-hover disabled:text-faint"
-      >
-        <Check className="size-3.5" strokeWidth={1.75} aria-hidden />
-        Done
-      </button>
-      <span className="w-2" />
-      <div className="inline-flex h-7 overflow-hidden rounded-[7px] border border-line2 bg-raised">
+    // Its controls start on the top band's line, low enough for a tooltip to fit above them.
+    <div className="top-band relative z-20 bg-reader px-6 wide:px-10">
+      <div className="reading-column flex items-center gap-2">
+        <Tooltip label="Done" shortcut={SHORTCUTS.done}>
+          {(describedBy) => (
+            <button
+              type="button"
+              aria-describedby={describedBy}
+              aria-keyshortcuts={SHORTCUTS.done}
+              disabled={!can('done')}
+              onClick={() => void onAct('done')}
+              className="mr-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-row font-medium whitespace-nowrap text-fg shadow-outline enabled:hover:bg-hover disabled:text-faint"
+            >
+              <Check className="size-4" strokeWidth={1.75} aria-hidden />
+              Done
+            </button>
+          )}
+        </Tooltip>
         {icon('archive', 'Archive', Archive)}
         {icon('trash', 'Move to Trash', Trash2)}
         {icon('flag', thread?.flagged ? 'Unflag' : 'Flag', Flag)}
-        {thread?.unread ? icon('unread', 'Mark as read', MailOpen) : icon('unread', 'Mark as unread', MailIcon)}
+        {thread?.unread ? icon('unread', 'Mark as read', MailOpen) : icon('unread', 'Mark as unread', MailDot)}
+        <span className="flex-1" />
+        {search}
       </div>
-      <span className="flex-1" />
-      {search}
     </div>
   )
 }
