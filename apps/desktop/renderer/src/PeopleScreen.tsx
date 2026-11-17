@@ -1,5 +1,5 @@
 // People: conversations where it is my turn, newest first, then those waiting on someone
-// else. Conversations quiet for more than 30 days leave People; a later Let go? view will hold them.
+// else. The core leaves out conversations quiet for 30 days (`retired`); a later Let go? view will hold them.
 
 import type { ThreadId } from '@letterbox/protocol'
 import { CircleCheck, Hourglass, Reply, type LucideIcon } from 'lucide-react'
@@ -8,25 +8,23 @@ import { useNow } from './clock.ts'
 import { useHeld } from './motion.ts'
 import { Row, type Slot } from './Row.tsx'
 import { type Chrome, Screen, useSelection } from './Screen.tsx'
-import { type Entry, useThreadSection } from './threads.ts'
-import { isLate, isRetired } from './time.ts'
+import { useThreadSection } from './threads.ts'
+import { isLate } from './time.ts'
 import type { Account } from '@letterbox/protocol'
 
 /** The most conversations one section asks the core for. The core sends the newest first. */
 const LIMIT = 200
 
-/** Both People sections, without conversations older than 30 days. Undefined until the core answers. */
+/** Both People sections, without conversations 30 days old or more. Undefined until the core answers. */
 export function usePeople() {
   const now = useNow()
-  const mine = useThreadSection({ turn: 'mine' }, LIMIT)
-  const theirs = useThreadSection({ turn: 'theirs' }, LIMIT)
+  const mine = useThreadSection({ turn: 'mine', retired: false }, LIMIT)
+  const theirs = useThreadSection({ turn: 'theirs', retired: false }, LIMIT)
   if (!mine || !theirs) return undefined
-  const fresh = (entries: readonly Entry[]) => entries.filter((entry) => !isRetired(entry.lastMessageAt, now))
-  const yours = fresh(mine.entries)
   return {
-    mine: yours.map((entry) => entry.id),
-    theirs: fresh(theirs.entries).map((entry) => entry.id),
-    late: yours.some((entry) => isLate(entry.lastMessageAt, now)),
+    mine: mine.entries.map((entry) => entry.id),
+    theirs: theirs.entries.map((entry) => entry.id),
+    late: mine.entries.some((entry) => isLate(entry.lastMessageAt, now)),
   }
 }
 

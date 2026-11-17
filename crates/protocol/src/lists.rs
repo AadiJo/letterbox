@@ -1,0 +1,68 @@
+//! What the lists of conversations take and show: the filter a threads view takes, and
+//! Updates, where automated mail is grouped by sender.
+
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::{AccountId, MailboxId, SenderId, Time, Turn, present};
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadFilter {
+    /// Leave out to list every account together.
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub account_id: Option<AccountId>,
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub mailbox_id: Option<MailboxId>,
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub turn: Option<Turn>,
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub unread: Option<bool>,
+    /// Full-text search over the local index.
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub text: Option<String>,
+    /// True lists only conversations whose last message is 30 days old or more, false only the
+    /// newer ones. With `turn: mine` these are Let go? and Your turn. The core's clock decides,
+    /// so a conversation moves from one list to the other while the app runs. Leave out for both.
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub retired: Option<bool>,
+    /// Only the conversations Updates groups under this sender (see `SenderSummary`).
+    #[serde(default, deserialize_with = "present")]
+    #[ts(optional)]
+    pub sender: Option<SenderId>,
+}
+
+/// One row of Updates: every automated conversation from one sender, in one account. A
+/// conversation is automated when its newest message from someone else is (see turns.rs in
+/// the core). Its sender is that message's address, compared without case, so news@ and
+/// no-reply@ of one company are two senders. To act on all of a sender's conversations, list
+/// them with `sender` in a threads filter and send one command naming their ids.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SenderSummary {
+    pub id: SenderId,
+    pub account_id: AccountId,
+    /// The name and address the newest conversation's message came from.
+    pub name: Option<String>,
+    pub address: String,
+    /// How many conversations, how many messages are in them, and how many of those are unread.
+    pub threads: u64,
+    pub messages: u64,
+    pub unread: u64,
+    /// The newest conversation's subject, and when its last message came.
+    pub subject: String,
+    pub last_message_at: Time,
+}
+
+/// One window of Updates, newest sender first. `total` counts every sender in it.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub struct SenderPage {
+    pub total: u64,
+    pub senders: Vec<SenderSummary>,
+}

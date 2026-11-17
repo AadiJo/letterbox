@@ -25,6 +25,7 @@
 
 mod answer;
 mod command;
+mod lists;
 mod outcome;
 mod send;
 
@@ -32,6 +33,7 @@ use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
+pub use lists::{SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -78,6 +80,8 @@ ids!(
     MessageId = "Id<'Message'>",
     BlobId = "Id<'Blob'>",
     SignInOptionId = "Id<'SignInOption'>",
+    /// One per sender in Updates, in one account.
+    SenderId = "Id<'Sender'>",
     /// One per subscription.
     SubscriptionId = "Id<'Subscription'>",
     /// One per command.
@@ -99,6 +103,7 @@ macro_rules! minted_by_core {
 }
 
 minted_by_core!(AccountId, MailboxId, ThreadId, MessageId, BlobId, SignInOptionId);
+minted_by_core!(SenderId);
 
 /// Ids a client makes, one per subscription, command or request, so it can match the answers.
 macro_rules! minted_by_client {
@@ -317,28 +322,6 @@ pub struct Attachment {
 
 // ---------------------------------------------------------------- subscribe
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadFilter {
-    /// Leave out to list every account together.
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub account_id: Option<AccountId>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub mailbox_id: Option<MailboxId>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub turn: Option<Turn>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub unread: Option<bool>,
-    /// Full-text search over the local index.
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub text: Option<String>,
-}
-
 /// Every live view. Add a variant here and a matching one to `Update`.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "view", rename_all = "kebab-case", rename_all_fields = "camelCase")]
@@ -359,6 +342,17 @@ pub enum Query {
     Thread {
         thread_id: ThreadId,
     },
+    /// Updates: the automated conversations in the account and mailbox given, grouped by sender.
+    Senders {
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        account_id: Option<AccountId>,
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        mailbox_id: Option<MailboxId>,
+        offset: u64,
+        limit: NonZeroU64,
+    },
 }
 
 /// The answer to a query. A threads update replaces the whole window.
@@ -370,6 +364,7 @@ pub enum Update {
     Mailboxes { data: Vec<Mailbox> },
     Threads { data: ThreadPage },
     Thread { data: Option<ThreadDetail> },
+    Senders { data: SenderPage },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

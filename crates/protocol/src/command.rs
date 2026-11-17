@@ -10,7 +10,8 @@ use crate::{ChangeId, Draft, MailboxId, ThreadId, Turn, present};
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
-    /// Correct the rule, or hand the thread back to it with `auto`.
+    /// Correct the rule, or hand the thread back to it with `auto`. `none` is Done, and is how
+    /// a turn in Let go? is let go: it leaves Your turn and Let go? both. `undo` brings it back.
     SetTurn {
         thread_ids: Vec<ThreadId>,
         turn: TurnChoice,

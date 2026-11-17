@@ -169,16 +169,21 @@ async function run(size: number): Promise<Phases> {
     await core.hello()
     phases['start (ms)'] = now() - at
 
-    // What a UI keeps open: the accounts, the mailbox list, the first page of the inbox and
-    // the People screen's first page, which filters by turn and so reads every thread's turn.
+    // What a UI keeps open: the accounts, the mailbox list, the first page of the inbox, the
+    // People screen's Your turn and Let go?, which filter by turn and split on age, and Updates,
+    // which groups automated mail by sender. Each reads every thread's row when it opens.
     const accounts = core.subscribe({ view: 'accounts' })
     await accounts.next()
     const mailboxes = core.subscribe({ view: 'mailboxes' })
     await mailboxes.next()
     const list = core.subscribe({ view: 'threads', filter: {}, offset: 0, limit: 50 })
     await list.next()
-    const people = core.subscribe({ view: 'threads', filter: { turn: 'mine' }, offset: 0, limit: 50 })
+    const people = core.subscribe({ view: 'threads', filter: { turn: 'mine', retired: false }, offset: 0, limit: 50 })
     await people.next()
+    const letGo = core.subscribe({ view: 'threads', filter: { turn: 'mine', retired: true }, offset: 0, limit: 50 })
+    await letGo.next()
+    const updates = core.subscribe({ view: 'senders', offset: 0, limit: 50 })
+    await updates.next()
 
     const options = await core.query({ view: 'sign-in-options' })
     const password = options.find((option) => option.method === 'password')
@@ -221,6 +226,8 @@ async function run(size: number): Promise<Phases> {
     phases['peak memory (MB)'] = core.peakMegabytes()
     list.close()
     people.close()
+    letGo.close()
+    updates.close()
     at = now()
     await core.stop()
     phases['stop (ms)'] = now() - at
