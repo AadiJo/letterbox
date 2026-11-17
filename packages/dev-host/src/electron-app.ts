@@ -1,6 +1,11 @@
 // The pieces the Electron check (electron-check.ts) drives the app with: where it keeps its
 // files, how it launches and quits the app, and how it records each check.
+//
+// Each launch records a Playwright trace, saved to artifacts/ui/trace-electron-<run>.zip as the
+// app quits, a failed run's too. Open one with
+//   pnpm --filter @letterbox/dev-host exec playwright show-trace "$PWD/artifacts/ui/trace-electron-busy.zip"
 
+import type { ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, type FSWatcher, readFileSync, readlinkSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -40,12 +45,15 @@ export const paths: Paths = {
 }
 export const checks: { ok: boolean; what: string }[] = []
 
+/** A check that did not hold. Its message says what was expected and what came, so it needs no stack. */
+export class CheckFailure extends Error {}
+
 /** Records a check and fails the run unless the two values are deeply equal. */
 export const equal = <Value>(actual: Value, expected: Value, what: string) => {
   const ok = isDeepStrictEqual(actual, expected)
   checks.push({ ok, what })
   if (ok) console.log(`ok   ${what}`)
-  else throw new Error(`${what}\n  expected ${JSON.stringify(expected)}\n  actual   ${JSON.stringify(actual)}`)
+  else throw new CheckFailure(`${what}\n  expected ${JSON.stringify(expected)}\n  actual   ${JSON.stringify(actual)}`)
 }
 
 /** Rejects with `what` if `promise` takes longer than WAIT_MS. */
@@ -66,7 +74,15 @@ export const isRunning = (pid: number) => {
 
 export type Launched = {
   app: ElectronApplication
+  /**
+   * Electron's main process, kept from the launch. Use it, never `app.process()`: once Playwright
+   * has seen the app close it forgets the app, and `app.process()` throws "Cannot read properties
+   * of undefined (reading '_object')". Whether it has, when the process exits, is a race.
+   */
+  process: ChildProcess
   page: Page
+  /** Saves this launch's trace to artifacts/ui/. Only the first call does anything. `quit` calls it. */
+  saveTrace(): Promise<void>
   /** Main's log lines from this launch so far. */
   lines(): string[]
   /** Resolves with Electron's exit code. */
@@ -100,6 +116,11 @@ export async function launch(name: string, renderer: string, switches: string[] 
     })
   const child = app.process()
   const exit = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)))
+  // Started before the first window, so the trace shows the page loading.
+  await app.context().tracing.start({ screenshots: true, snapshots: true })
+  let saved: Promise<void> | undefined
+  const saveTrace = () =>
+    (saved ??= app.context().tracing.stop({ path: join(ARTIFACTS, `trace-electron-${name}.zip`) }))
   // Playwright reads Electron's output from the start, so lines before this point reach main.log only.
   const record = (line: string) => appendFileSync(SHELL_LOG, `${name}: ${line}\n`)
   for (const output of [child.stdout, child.stderr]) if (output) createInterface({ input: output }).on('line', record)
@@ -107,7 +128,7 @@ export async function launch(name: string, renderer: string, switches: string[] 
   const page = await app.firstWindow()
   page.on('console', (message) => record(`page ${message.type()}: ${message.text()}`))
   page.on('pageerror', (error) => record(`page error: ${error.message}`))
-  return { app, page, lines, exit, startedAt }
+  return { app, process: child, page, saveTrace, lines, exit, startedAt }
 }
 
 /**
@@ -133,11 +154,12 @@ export const yourTurnShown = (page: Page) =>
 export const corePids = (lines: string[]) =>
   lines.flatMap((line) => /^\[shell\] core (\d+) started/.exec(line)?.[1] ?? []).map(Number)
 
-/** Quits the app the way a person does and resolves with its exit code. Kills it by PID if it hangs. */
-export async function quit({ app, exit }: Launched) {
-  await app.evaluate(({ app: electron }) => electron.quit())
-  return within(exit, 'quitting the app').catch((error: unknown) => {
-    const { pid } = app.process()
+/** Saves the trace, then quits the app the way a person does and resolves with its exit code. Kills it by PID if it hangs. */
+export async function quit(run: Launched) {
+  await run.saveTrace()
+  await run.app.evaluate(({ app: electron }) => electron.quit())
+  return within(run.exit, 'quitting the app').catch((error: unknown) => {
+    const { pid } = run.process
     if (pid !== undefined && isRunning(pid)) process.kill(pid, 'SIGKILL')
     throw error
   })
@@ -145,7 +167,8 @@ export async function quit({ app, exit }: Launched) {
 
 /**
  * Launches the app, hands it to `body`, and makes sure it is gone afterwards, even when
- * `body` fails part way: quit as a person does, then kill it by PID if that hangs.
+ * `body` fails part way: quit as a person does, which saves the trace, then kill it by PID
+ * if that hangs.
  */
 export async function withApp<Result>(
   name: string,
@@ -157,8 +180,7 @@ export async function withApp<Result>(
   try {
     return await body(run)
   } finally {
-    const child = run.app.process()
-    if (child.exitCode === null && child.signalCode === null) await quit(run).catch(() => undefined)
+    if (run.process.exitCode === null && run.process.signalCode === null) await quit(run).catch(() => undefined)
   }
 }
 
@@ -221,7 +243,7 @@ export async function sandboxGaps(run: Launched): Promise<string[]> {
     )
     return metric?.sandboxed === true ? [] : ['Electron reports the renderer as not sandboxed']
   }
-  const main = run.app.process().pid
+  const main = run.process.pid
   // A zygote child rewrites its command line into one string, so split it on spaces too.
   const switches = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split(/[\0 ]/)
   const gaps = SANDBOX_OFF.filter((off) => switches.includes(off)).map((off) => `the renderer runs with ${off}`)
