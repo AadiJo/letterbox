@@ -285,12 +285,14 @@ scenario("a core killed while it fetches a forward's files sends the forward onc
   const send = await first.core.command({ kind: 'send', draft: forward(first.accountId, first.original.id) })
   await first.box.attachmentHeld()
   await first.core.kill()
-  first.box.releaseAttachments()
   t.equal(first.box.sent(), [], 'the core stopped before it sent anything')
 
-  // A start runs no pass of its own, so the restart must carry the forward it found due.
+  // A start runs no pass of its own, so the restart must carry the forward it found due. The
+  // files stay held until its fetch waits too, so the pass commits nothing before the welcome.
   const core = t.startCore()
   await core.hello()
+  await first.box.attachmentHeld(2)
+  first.box.releaseAttachments()
   t.equal((await core.settled(send.change)).result, 'done', 'the restarted core sends it, with no sync')
   const { raw } = delivered(t, first.box)
   t.equal(filesOf(raw), expectedFiles(FILES), 'with every file')

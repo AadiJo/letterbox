@@ -179,8 +179,8 @@ export interface SimMailbox {
   releaseSends(): void
   /** From now on, attachment calls wait. Lets a scenario stop a core while it fetches a forward's files. */
   holdAttachments(): void
-  /** Resolves once an attachment call is waiting, at once if one already is. */
-  attachmentHeld(): Promise<void>
+  /** Resolves once `count` attachment calls (1 unless given) are waiting, at once if they already are. */
+  attachmentHeld(count?: number): Promise<void>
   /** Answers every waiting attachment call, from the truth as it is now, and stops holding. */
   releaseAttachments(): void
 
