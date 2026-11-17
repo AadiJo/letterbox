@@ -194,13 +194,33 @@ async function relayCore(page: Page) {
 /** The relay `openPage` puts between the page and its core. */
 export type Relay = Awaited<ReturnType<typeof relayCore>>
 
+/** Characters an artifact's file name may not hold: CI's artifact upload refuses them. As UNSAFE_IN_FILE_NAMES in packages/harness/src/scenario.ts. */
+const UNSAFE_IN_FILE_NAMES = /[":<>|*?\\/\r\n]/
+
+/** The `close` of every page `openPage` opened that has not closed yet. A check that failed part way leaves its page here. */
+const openPages = new Set<() => Promise<void>>()
+
+/**
+ * Saves the trace of every page a check left open, as one that failed part way does, and closes
+ * it. ui-check.ts calls it after each check, so a failed check still leaves its trace in artifacts/ui/.
+ */
+export async function closeLeftOpen() {
+  await Promise.all(Array.from(openPages, (close) => close().catch(fail)))
+}
+
 /**
  * A page at a fixed locale and time zone, so dates read the same on every machine. It
  * collects page errors and remote requests. Chromium reports a load that a frame's
  * Content Security Policy refused as a request that failed with "csp" before it reached
  * the network: those go in `blocked`. Every other remote request goes in `remote`.
+ * Its trace goes to artifacts/ui/`trace` when the check closes it, or when `closeLeftOpen` does.
  */
 export async function openPage(browser: Browser, url: string, trace: string) {
+  const unsafe = trace.match(UNSAFE_IN_FILE_NAMES)
+  if (unsafe)
+    throw new Error(
+      `the trace name "${trace}" has ${JSON.stringify(unsafe[0])} in it, which CI's artifact upload rejects`,
+    )
   const context: BrowserContext = await browser.newContext({ viewport: SIZES.wide, locale: 'en-US', timezoneId: 'UTC' })
   await context.tracing.start({ screenshots: true, snapshots: true })
   const page: Page = await context.newPage()
@@ -216,20 +236,16 @@ export async function openPage(browser: Browser, url: string, trace: string) {
     if (request.failure()?.errorText === 'csp') blocked.push(request.url())
     else remote.push(request.url())
   })
+  /** Saves the trace and closes the page. Only the first call does anything. */
+  const close = async () => {
+    if (!openPages.delete(close)) return
+    await context.tracing.stop({ path: join(ARTIFACTS, trace) })
+    await context.close()
+  }
+  openPages.add(close)
   const relay = await relayCore(page)
   await page.goto(url)
-  return {
-    page,
-    relay,
-    errors,
-    remote,
-    blocked,
-    /** Saves the trace and closes the page. */
-    close: async () => {
-      await context.tracing.stop({ path: join(ARTIFACTS, trace) })
-      await context.close()
-    },
-  }
+  return { page, relay, errors, remote, blocked, close }
 }
 
 /**
