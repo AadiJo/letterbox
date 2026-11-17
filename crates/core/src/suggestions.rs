@@ -193,7 +193,10 @@ fn contacts_of(world: &World, thread_id: &ThreadId) -> IndexMap<String, Contact>
         };
         let me = |who: &RemoteAddress| same(&who.address, &account.address);
         if me(&record.facts.from) {
-            for who in record.facts.to.iter().chain(&record.facts.cc).filter(|who| !me(who)) {
+            // An address in both To and Cc is still one message to them.
+            let mut named = BTreeSet::new();
+            let everyone = record.facts.to.iter().chain(&record.facts.cc).filter(|who| !me(who));
+            for who in everyone.filter(|who| named.insert(who.address.to_lowercase())) {
                 add(record, who, true);
             }
         } else if !is_automated(&record.facts) && !in_spam(world, record) {

@@ -189,7 +189,9 @@ inReplyTo: MessageId | null,
  * starts a conversation of its own: it does not answer the original, so it moves no turn
  * there. Refused `unknown-target` when the core has no such message, or its body is gone,
  * and `conflict` while its body has not loaded (it loads when its conversation is open).
- * If an attachment is gone by the time the send goes out, the send fails `unknown-target`.
+ * A forward of a send of the user's that the provider does not hold yet waits, `sending`,
+ * until it does. It fails `unknown-target` if that send fails, or if an attachment is gone
+ * by the time it goes out.
  */
 forwardOf?: MessageId, };
 
