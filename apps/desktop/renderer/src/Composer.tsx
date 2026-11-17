@@ -32,7 +32,18 @@ import { DraftText } from './DraftText.tsx'
 import { chord, Key } from './Key.tsx'
 import { slideUp } from './motion.ts'
 import { useSecondsUntil } from './clock.ts'
-import { hidePending, type Pending, sendReply, startReply, undoSend, usePendingIn } from './sending.ts'
+import {
+  dropUndone,
+  hidePending,
+  type Pending,
+  restoreUndone,
+  sendReply,
+  startReply,
+  type Undone,
+  undoSend,
+  usePendingIn,
+  useUndone,
+} from './sending.ts'
 import { Tooltip } from './Tooltip.tsx'
 import { UNDO_KEY } from './undo.ts'
 
@@ -103,6 +114,8 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
   const busy = composer.state !== 'open'
   // An earlier reply of this conversation still on its way, or a Bcc a reload lost, holds Send.
   const earlier = usePendingIn(id)
+  // A reply the core took back while this draft had text, waiting beside it to be restored or dropped.
+  const undone = useUndone(id)
   const blocked = busy || earlier !== null || reply.bccLost
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -120,18 +133,21 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
       onMount={(element) => arrive(element, id, reply.to.length > 0 ? '[data-field="draft"]' : 'input[data-line="to"]')}
       onKeyDown={onKeyDown}
       notice={
-        reply.bccLost && (
-          <button
-            type="button"
-            data-field="bcc-notice"
-            title="Confirm the recipients"
-            onClick={() => confirmBcc(id)}
-            className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
-          >
-            <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
-            Bcc wasn't kept after the reload. Check recipients before sending.
-          </button>
-        )
+        <>
+          {undone && <UndoneNotice undone={undone} over />}
+          {reply.bccLost && (
+            <button
+              type="button"
+              data-field="bcc-notice"
+              title="Confirm the recipients"
+              onClick={() => confirmBcc(id)}
+              className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
+            >
+              <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
+              Bcc wasn't kept after the reload. Check recipients before sending.
+            </button>
+          )}
+        </>
       }
       footer={
         <>
@@ -323,6 +339,35 @@ export function PendingReply({ pending }: { pending: Pending }) {
       ))}
       <DraftText id={pending.threadId} text={reply?.text ?? ''} readOnly placeholder="" />
     </DockFrame>
+  )
+}
+
+/**
+ * A reply the core took back while the conversation's draft had text: Restore it over the
+ * draft, or discard it. `over` says a draft is there to be replaced.
+ */
+export function UndoneNotice({ undone, over }: { undone: Undone; over: boolean }) {
+  return (
+    <div
+      data-field="undone-notice"
+      className="mx-4 mb-2 flex flex-none items-center gap-3 rounded-lg bg-pill py-1.5 pr-1.5 pl-3 inset-ring inset-ring-keycap wide:mx-6"
+    >
+      <p className="min-w-0 flex-1 truncate text-row text-fg2">Undid your earlier reply.</p>
+      <button
+        type="button"
+        onClick={() => restoreUndone(undone.change)}
+        className="inline-flex h-7 flex-none items-center rounded-lg px-2.5 text-row font-medium text-fg shadow-outline hover:bg-hover"
+      >
+        {over ? 'Restore it (replaces this draft)' : 'Restore it'}
+      </button>
+      <button
+        type="button"
+        onClick={() => dropUndone(undone.change)}
+        className="inline-flex h-7 flex-none items-center rounded-lg px-2.5 text-row font-medium text-fg2 hover:bg-hover hover:text-fg"
+      >
+        Discard it
+      </button>
+    </div>
   )
 }
 

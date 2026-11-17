@@ -16,35 +16,52 @@ export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
   if (notice)
     return (
       // A new offer is a new toast, so it rises again.
-      <Frame key={notice.serial} onUndo={notice.undo ? onUndo : null}>
+      <Frame key={notice.serial} undo={notice.undo ? 'ready' : 'none'} onUndo={onUndo}>
         <CircleCheck className="size-[17px] text-green" strokeWidth={2} aria-hidden />
         <span data-field="toast">{notice.label}</span>
       </Frame>
     )
   if (!offer) return null
   return (
-    <Frame key={offer.change} onUndo={onUndo}>
+    <Frame key={offer.change} undo={offer.located ? 'ready' : 'waiting'} onUndo={onUndo}>
       <Clock className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
       <span data-field="toast">Sending</span>
-      <Countdown offer={offer} />
+      {offer.located ? (
+        <Countdown offer={offer} />
+      ) : (
+        // A merge moved the reply. Undo waits until the conversation that holds it is found.
+        <span className="-ml-1 font-normal text-muted" data-field="toast-note">
+          Finding the conversation…
+        </span>
+      )}
     </Frame>
   )
 }
 
-function Frame({ onUndo, children }: { onUndo: (() => Promise<void>) | null; children: ReactNode }) {
+/** The toast's box. `undo` says whether it offers Undo, and whether Undo can run yet. */
+function Frame({
+  undo,
+  onUndo,
+  children,
+}: {
+  undo: 'ready' | 'waiting' | 'none'
+  onUndo: () => Promise<void>
+  children: ReactNode
+}) {
   return (
     <div
       role="status"
-      className={`absolute bottom-[calc(anchor(--dock_top,12px)+12px)] left-1/2 z-30 flex h-11 -translate-x-1/2 animate-rise items-center gap-2.5 rounded-xl bg-float pl-3.5 ${onUndo ? 'pr-[7px]' : 'pr-4'} text-row font-medium whitespace-nowrap shadow-float`}
+      className={`absolute bottom-[calc(anchor(--dock_top,12px)+12px)] left-1/2 z-30 flex h-11 -translate-x-1/2 animate-rise items-center gap-2.5 rounded-xl bg-float pl-3.5 ${undo === 'none' ? 'pr-4' : 'pr-[7px]'} text-row font-medium whitespace-nowrap shadow-float`}
     >
       {children}
-      {onUndo && (
+      {undo !== 'none' && (
         <>
           <span aria-hidden className="mx-0.5 h-[18px] w-px bg-hover" />
           <button
             type="button"
+            disabled={undo === 'waiting'}
             onClick={() => void onUndo()}
-            className="inline-flex h-[30px] items-center gap-2 rounded-lg bg-pill pr-2 pl-2.5 text-fg hover:bg-hover"
+            className="inline-flex h-[30px] items-center gap-2 rounded-lg bg-pill pr-2 pl-2.5 text-fg enabled:hover:bg-hover disabled:opacity-50"
           >
             Undo
             <Key>{UNDO_KEY.toUpperCase()}</Key>

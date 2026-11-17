@@ -11,12 +11,12 @@ import { canReply, type Mail } from './actions.ts'
 import { Attachments } from './Attachments.tsx'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
-import { Editor, isComposing, PendingReply, ReplyBar } from './Composer.tsx'
+import { Editor, isComposing, PendingReply, ReplyBar, UndoneNotice } from './Composer.tsx'
 import { DeliveryMark, NotSent } from './Delivery.tsx'
 import { useNow } from './clock.ts'
 import { useComposer } from './drafts.ts'
 import { LabelChip, useLabels } from './Label.tsx'
-import { useShownPending } from './sending.ts'
+import { useShownPending, useUndone } from './sending.ts'
 import { otherPerson, personName } from './Row.tsx'
 import { useThreadDetail } from './threads.ts'
 import { isLate, messageTime } from './time.ts'
@@ -31,6 +31,7 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
   const now = useNow()
   const composer = useComposer(id)
   const pending = useShownPending(id)
+  const undone = useUndone(id)
   // The dock is up: the editor, or with no draft, the user's reply on its way, read only.
   const docked = isComposing(composer) || (composer === undefined && pending !== null)
   const labels = useLabels(thread?.mailboxIds ?? [])
@@ -101,6 +102,12 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
                 ),
               )}
             </div>
+            {/* With no draft, a reply the core took back waits here to be restored or dropped. */}
+            {!docked && composer === undefined && undone && (
+              <div className="-mx-4 mt-4 wide:-mx-6">
+                <UndoneNotice undone={undone} over={false} />
+              </div>
+            )}
             {!docked && (composer || canReply(thread, mail)) && <ReplyBar thread={thread} composer={composer} />}
           </div>
         </div>

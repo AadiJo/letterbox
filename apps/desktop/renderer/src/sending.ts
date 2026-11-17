@@ -26,7 +26,6 @@ import {
   composerFor,
   flag,
   openReply,
-  refuse,
   type Reply,
   replyFrom,
   restore,
@@ -50,16 +49,32 @@ export const REFUSALS = {
 /**
  * A reply the core accepted and has not released yet. `until` is its undo window's end by the
  * core's clock, once the conversation shows it held. Until then it is null, and Undo waits.
+ * `located` is true while the core shows it held in `threadId`, and false while the renderer
+ * looks for the conversation it moved to. Undo stays off until it is found.
  */
-export type Pending = { threadId: ThreadId; change: ChangeId; reply: Reply | null; until: string | null }
+export type Pending = {
+  threadId: ThreadId
+  change: ChangeId
+  reply: Reply | null
+  until: string | null
+  located: boolean
+}
 
 /** A pending reply in its undo window, which the toast offers to take back. */
 export type Offer = Pending & { until: string }
 
 /** What each reply said, by change, so an undo or a retry gets back exactly what was written. */
 const replies = new Map<ChangeId, { threadId: ThreadId; reply: Reply }>()
+/** A reply the core took back, kept beside its conversation's draft until the user picks. */
+export type Undone = { change: ChangeId; threadId: ThreadId; reply: Reply }
+
 /** Sends whose answer was lost. Each is asked about again, under its change id, on the next connection. */
 const unknown = new Set<ChangeId>()
+/**
+ * Replies the core took back while their conversation's draft had text. Each waits beside that
+ * draft until the user restores it over the draft or discards it (`useUndone`).
+ */
+let undone: ReadonlyMap<ChangeId, Undone> = new Map()
 /** Accepted replies being followed until the core shows them past their window, oldest first. */
 let pending: ReadonlyMap<ChangeId, Pending> = new Map()
 /** Conversations whose pending reply the user asked to see, with R or Reply. */
@@ -88,7 +103,7 @@ const isOffer = (entry: Pending): entry is Offer => entry.until !== null
 
 const STORED = 'letterbox.sends'
 
-type Stored = { change: ChangeId; threadId: ThreadId; reply: Reply; phase: 'unknown' | 'followed' }
+type Stored = { change: ChangeId; threadId: ThreadId; reply: Reply; phase: 'unknown' | 'followed' | 'undone' }
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const isRecipients = (value: unknown) =>
@@ -103,7 +118,7 @@ const isRecipients = (value: unknown) =>
 /** A stored send, as this file wrote it. Anything else in storage is ignored. */
 function isStored(value: unknown): value is Stored {
   if (!isObject(value) || typeof value.change !== 'string' || typeof value.threadId !== 'string') return false
-  if (value.phase !== 'unknown' && value.phase !== 'followed') return false
+  if (value.phase !== 'unknown' && value.phase !== 'followed' && value.phase !== 'undone') return false
   const { reply } = value
   return (
     isObject(reply) &&
@@ -134,6 +149,7 @@ function writeStored() {
     const sent = replies.get(entry.change)
     return sent ? [{ ...entry, ...sent }] : []
   })
+  for (const { change, threadId, reply } of undone.values()) kept.push({ change, threadId, reply, phase: 'undone' })
   try {
     sessionStorage.setItem(STORED, JSON.stringify(kept))
   } catch {
@@ -147,7 +163,7 @@ const stops = new Map<ChangeId, () => void>()
 /** Starts following send `change` in `threadId` from revision `rev`, unless it is already followed. */
 function follow(threadId: ThreadId, change: ChangeId, rev: number) {
   if (pending.has(change)) return
-  setPending(change, { threadId, change, reply: replies.get(change)?.reply ?? null, until: null })
+  setPending(change, { threadId, change, reply: replies.get(change)?.reply ?? null, until: null, located: false })
   writeStored()
   watch(change, threadId, rev)
 }
@@ -168,7 +184,7 @@ function move(change: ChangeId, threadId: ThreadId, rev: number) {
   if (!current) return
   const sent = replies.get(change)
   if (sent) replies.set(change, { ...sent, threadId })
-  if (current.threadId !== threadId) setPending(change, { ...current, threadId })
+  setPending(change, { ...current, threadId, located: false })
   writeStored()
   watch(change, threadId, rev)
 }
@@ -194,12 +210,14 @@ function watch(change: ChangeId, threadId: ThreadId, rev: number) {
     const delivery = detail?.messages.find((message) => message.delivery?.change === change)?.delivery
     const current = pending.get(change)
     if (delivery?.state === 'held') {
-      if (current && current.until !== delivery.until) setPending(change, { ...current, until: delivery.until })
+      if (current && (current.until !== delivery.until || !current.located))
+        setPending(change, { ...current, until: delivery.until, located: true })
       return
     }
     end()
-    if (detail === null) void relocate(change, at)
-    else release(change)
+    if (detail !== null) return release(change)
+    if (current) setPending(change, { ...current, located: false })
+    void relocate(change, at)
   }
   unwatch = watchThreadDetail(threadId, listener)
   // The listener runs once inside `watchThreadDetail`, before `unwatch` is set.
@@ -212,7 +230,8 @@ function watch(change: ChangeId, threadId: ThreadId, rev: number) {
  * Until it is found the send stays pending, and Undo stays offered, since the core still holds it.
  */
 async function relocate(change: ChangeId, rev: number) {
-  const subject = replies.get(change)?.reply.subject.replace(/^re:\s*/i, '') ?? ''
+  // Every leading prefix, as the core strips them when it compares subjects. Only the change id proves a match.
+  const subject = replies.get(change)?.reply.subject.replace(/^(\s*(re|fwd?|aw|sv|antw)\s*:)+\s*/i, '') ?? ''
   const candidates = subject === '' ? [] : await threadsMatching(subject).catch(() => [])
   const details = await Promise.all(
     candidates.map((threadId) => client.query({ view: 'thread', threadId }).catch(() => null)),
@@ -250,6 +269,11 @@ async function deliver(id: ThreadId, reply: Reply, change: ChangeId | undefined)
 }
 
 for (const stored of readStored()) {
+  if (stored.phase === 'undone') {
+    const { change, threadId, reply } = stored
+    undone = new Map([...undone, [change, { change, threadId, reply }]])
+    continue
+  }
   replies.set(stored.change, { threadId: stored.threadId, reply: stored.reply })
   if (stored.phase === 'followed') follow(stored.threadId, stored.change, -1)
   else void deliver(stored.threadId, stored.reply, stored.change)
@@ -263,12 +287,12 @@ export function adopt(thread: ThreadDetail) {
   for (const message of thread.messages) {
     const change = message.delivery?.state === 'held' ? message.delivery.change : null
     if (!change) continue
-    // One followed in another conversation has moved here, as when the core merged them.
-    if (pending.get(change)?.threadId !== thread.id && pending.has(change)) move(change, thread.id, -1)
-    if (pending.has(change)) continue
-    const reply = replyFrom(thread, message)
-    if (!replies.has(change) && reply) replies.set(change, { threadId: thread.id, reply })
-    follow(thread.id, change, -1)
+    // The reply belongs to this conversation now, whatever was cached, as after a merge.
+    const reply = replies.get(change)?.reply ?? replyFrom(thread, message)
+    if (reply) replies.set(change, { threadId: thread.id, reply })
+    const current = pending.get(change)
+    if (!current) follow(thread.id, change, -1)
+    else if (current.threadId !== thread.id) move(change, thread.id, -1)
   }
 }
 
@@ -314,26 +338,59 @@ export function useShownPending(threadId: ThreadId) {
 }
 
 /**
- * Takes back a reply in its undo window: `change`, or else the newest. Resolves with its
- * conversation once the core accepts, with exactly that reply back in the editor, or null
- * when there is none or the window closed first. The core's update that drops it ends the offer.
- * Over a draft with text it asks for the draft to go first, and resolves with the conversation.
+ * Takes back a reply in its undo window: `change`, or else the newest, once it is located.
+ * It asks the core which conversation holds the reply first, since a merge may have moved it,
+ * and the reply comes back there, never to a conversation remembered from before. Resolves
+ * with that conversation once the core accepts, or null. Over a draft with text, the reply
+ * waits beside it (`useUndone`) and the draft stays. The core's update that drops it ends the offer.
  */
 export async function undoSend(change?: ChangeId) {
   const offer = change ? pending.get(change) : [...pending.values()].findLast(isOffer)
-  if (!offer || !isOffer(offer)) return null
-  // Its conversation already has a draft with text, as after a merge. Undo would replace it, so it waits.
-  const draft = composerFor(offer.threadId)
-  if (draft && draft.reply.text.trim() !== '') {
-    refuse(offer.threadId, 'Discard this draft to undo your earlier reply.')
-    return offer.threadId
+  if (!offer || !isOffer(offer) || !offer.located) return null
+  const held = await client.query({ view: 'thread', threadId: offer.threadId }).catch(() => null)
+  const here = held?.messages.some((message) => message.delivery?.change === offer.change)
+  if (!held || !here) {
+    // It moved since the last update. Undo waits until it is found again.
+    const current = pending.get(offer.change)
+    if (current) setPending(offer.change, { ...current, located: false })
+    void relocate(offer.change, -1)
+    return null
   }
   if (!(await send({ kind: 'undo', change: offer.change }))) return null
-  const sent = replies.get(offer.change)
+  const reply = replies.get(offer.change)?.reply
   replies.delete(offer.change)
-  hidePending(offer.threadId)
-  if (sent) restore(sent.threadId, sent.reply)
-  return offer.threadId
+  hidePending(held.id)
+  const draft = composerFor(held.id)
+  if (reply && draft && draft.reply.text.trim() !== '') {
+    undone = new Map([...undone, [offer.change, { change: offer.change, threadId: held.id, reply }]])
+    tell()
+    // Opens the draft, folded or not, so the choice shows beside it.
+    openReply(held, false)
+  } else if (reply) restore(held.id, reply)
+  writeStored()
+  return held.id
+}
+
+/** The oldest reply undone beside `threadId`'s draft, or null. */
+export function useUndone(threadId: ThreadId) {
+  return useSyncExternalStore(subscribe, () => [...undone.values()].find((kept) => kept.threadId === threadId) ?? null)
+}
+
+/** Puts the undone reply `change` in the editor, over the conversation's draft. The user chose this. */
+export function restoreUndone(change: ChangeId) {
+  const kept = undone.get(change)
+  if (!kept) return
+  dropUndone(change)
+  restore(kept.threadId, kept.reply)
+}
+
+/** Throws the undone reply `change` away. The user chose this. */
+export function dropUndone(change: ChangeId) {
+  const rest = new Map(undone)
+  rest.delete(change)
+  undone = rest
+  writeStored()
+  tell()
 }
 
 /**

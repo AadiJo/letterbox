@@ -87,6 +87,7 @@ async function relayCore(page: Page) {
   let toPage: ((message: string) => void) | undefined
   let close: (() => Promise<void>) | undefined
   const fromPage: string[] = []
+  let watched: { text: string; seen: () => void } | undefined
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -130,6 +131,11 @@ async function relayCore(page: Page) {
     socket.onMessage((message) => {
       fromPage.push(String(message))
       core.send(message)
+      if (watched && String(message).includes(watched.text)) {
+        held ??= []
+        watched.seen()
+        watched = undefined
+      }
     })
     toPage = (message) => socket.send(message)
     close = async () => {
@@ -151,6 +157,8 @@ async function relayCore(page: Page) {
   })
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
+    /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
+    pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),
     sees,
     /** Every message the page sent its cores, in order, as sent. */
     fromPage: () => [...fromPage],
@@ -158,6 +166,7 @@ async function relayCore(page: Page) {
     drop: async () => {
       held = undefined
       armed = undefined
+      watched = undefined
       await close?.()
     },
     resume: () => {

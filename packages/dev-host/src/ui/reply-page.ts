@@ -65,14 +65,18 @@ export const KIT = { name: 'Kit Ashworth', address: 'kit@ashworth.example' }
 export const ROBIN = { name: 'Robin Vale', address: ME }
 export const minutesAgo = (minutes: number) => new Date(Date.parse(seed.now) - minutes * 60_000).toISOString()
 
-/** Two conversations with one subject that nothing links yet: Owen's (older) and Kit's. */
+/**
+ * Two conversations with one subject that nothing links yet: Owen's (older) and Kit's. The core
+ * reads both subjects as "bike trip in may", but Owen's double space and Kit's two prefixes keep
+ * a plain search for one from finding the other.
+ */
 export const TRIPS = [
   {
     key: 'trip-1',
     mailboxes: ['inbox'],
     from: OWEN,
     to: [ROBIN],
-    subject: 'Bike trip in May',
+    subject: 'Bike  trip in May',
     text: 'Shall we ride to the coast in May?',
     sentAt: minutesAgo(3 * 24 * 60),
   },
@@ -81,7 +85,7 @@ export const TRIPS = [
     mailboxes: ['inbox'],
     from: KIT,
     to: [ROBIN],
-    subject: 'Bike trip in May',
+    subject: 'Re: Re: Bike trip in May',
     text: 'Are you coming on the May bike trip?',
     sentAt: minutesAgo(120),
   },
@@ -115,6 +119,8 @@ export const body = (page: Page) => dock(page).getByRole('textbox', { name: 'Mes
 export const toast = (page: Page) => page.getByRole('status').filter({ has: page.locator('[data-field="toast"]') })
 export const reason = (page: Page) => page.locator('[data-field="reason"]').textContent()
 /** The count of send commands the page has sent its cores. */
+/** The count of undo commands the page has sent its cores. */
+export const undos = (relay: Relay) => relay.fromPage().filter((text) => text.includes('"kind":"undo"')).length
 export const sends = (relay: Relay) => relay.fromPage().filter((text) => text.includes('"kind":"send"')).length
 /**
  * Opens the conversation `subject` with `person`, for subjects two conversations share. Then
