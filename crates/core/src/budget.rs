@@ -4,7 +4,7 @@
 //! The test fills a large mailbox, keeps open what the app keeps open (the accounts, the
 //! mailboxes, the inbox's first page, Your turn and Let go?, which filter by turn and split
 //! on age, Updates, which groups automated mail by sender, one conversation, and a recipient
-//! field's suggestions for a typed prefix), then counts the work (see work.rs) of each step a
+//! field's suggestions for a typed prefix, and where a send is), then counts the work (see work.rs) of each step a
 //! person causes. It counts instead of timing, so it gives the same answer on every machine.
 //!
 //! `pnpm bench:scale` times the same steps at 100k messages, for people to read.
@@ -271,6 +271,7 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
             json!({ "view": "threads", "filter": { "turn": "mine", "retired": true }, "offset": 0, "limit": 50 }),
             json!({ "view": "senders", "mailboxId": inbox, "offset": 0, "limit": 50 }),
             json!({ "view": "recipients", "accountId": account_id, "prefix": PREFIX, "limit": 8 }),
+            json!({ "view": "change", "change": "change-unknown" }),
         ];
         for (index, query) in views.into_iter().enumerate() {
             receive(json!({ "kind": "subscribe", "sub": format!("sub_{index}"), "query": query }));

@@ -8,6 +8,13 @@ const core = (file: string) => `crates/core/src/${file}`
 
 export const FORWARD_MUTATIONS: Mutation[] = [
   {
+    name: 'the change view keeps naming the conversation it opened with, after a merge or an undo',
+    file: core('live_view.rs'),
+    find: '                let now = holder_of(world, change);',
+    replace: '                let now = holder.clone();',
+    scenarios: 'the change view names the conversation holding a send',
+  },
+  {
     name: 'an undone new conversation stays where it was',
     file: core('outbox.rs'),
     find: 'self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));',
