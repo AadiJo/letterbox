@@ -3,6 +3,8 @@
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::Time;
+
 /// Someone a `recipients` view suggests for a recipient field on `account_id`: a person the
 /// user wrote to, or who wrote to the user, in the mail the core holds. Mail from machines
 /// (list or bulk headers, or the provider's bulk verdict) and mail in spam count for nothing.
@@ -15,9 +17,11 @@ use ts_rs::TS;
 /// much as one from 30 days before it. Then the one with the newest mail, then by address.
 ///
 /// `address` is as their newest mail wrote it, and `name` is the newest display name their
-/// mail gave, if any.
+/// mail gave, if any. `last_at` is when the newest mail with them was sent, either way.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct Recipient {
     pub name: Option<String>,
     pub address: String,
+    pub last_at: Time,
 }

@@ -152,9 +152,9 @@ export type ThreadPage = { total: number, threads: Array<ThreadSummary>, };
  * much as one from 30 days before it. Then the one with the newest mail, then by address.
  *
  * `address` is as their newest mail wrote it, and `name` is the newest display name their
- * mail gave, if any.
+ * mail gave, if any. `last_at` is when the newest mail with them was sent, either way.
  */
-export type Recipient = { name: string | null, address: string, };
+export type Recipient = { name: string | null, address: string, lastAt: string, };
 
 /**
  * A user intent. Every command acts on whole threads.

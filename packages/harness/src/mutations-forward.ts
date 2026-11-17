@@ -156,6 +156,13 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     scenarios: 'recipient suggestions stay live',
   },
   {
+    name: "a suggestion's last mail is its oldest",
+    file: core('suggestions.rs'),
+    find: '            let newest = person.seen.iter().next_back();',
+    replace: '            let newest = person.seen.iter().next();',
+    scenarios: 'put people I wrote to first',
+  },
+  {
     name: 'the sender of a newsletter is suggested',
     file: core('suggestions.rs'),
     find: '        } else if !is_automated(&record.facts) && !in_spam(world, record) {',
