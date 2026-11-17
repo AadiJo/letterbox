@@ -6,7 +6,7 @@ import { mailbox, start, sync, thread, truthOf } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 import { accept, allTruth, lunchSeed, targetRow } from '../src/undoing.ts'
 
-scenario('an undo while the change is on its way waits for its answer, then reverses it', async (t) => {
+scenario('an undo that lands while the change is on its way reverses it once it arrives', async (t) => {
   const { core, box } = await start(t)
   const truth = allTruth(box)
   const before = await targetRow(core)
@@ -19,14 +19,18 @@ scenario('an undo while the change is on its way waits for its answer, then reve
     'the archive',
   )
   await box.applyHeld()
-  // The provider may already hold it, so the undo cannot cancel it, and until it answers
-  // nobody knows what it holds.
-  const early = await core.command({ kind: 'undo', change })
-  t.equal(early.kind === 'rejected' && early.conflict, { kind: 'outcome-unknown' }, 'the undo waits for its answer')
+  // The provider may already hold it, so the undo cannot cancel it. It waits for it instead,
+  // and is answered once the archive settles. The query's answer shows the core has the undo.
+  const undoing = core.command({ kind: 'undo', change })
+  await core.query({ view: 'accounts' })
   box.releaseApplies()
-  t.equal((await core.settled(change)).result, 'done', 'the archive settles as done')
-  const undo = await accept(t, core, { kind: 'undo', change }, 'the undo after its answer')
-  t.equal((await core.settled(undo)).result, 'done', 'the undo settles')
+  const undo = (await undoing).change
+  t.equal((await undoing).kind, 'accepted', 'the undo is accepted once the archive settles')
+  t.equal(
+    [(await core.settled(change)).result, (await core.settled(undo)).result],
+    ['done', 'done'],
+    'the archive and its undo both settle as done',
+  )
   await sync(core)
   t.equal(await targetRow(core), before, 'the row is exactly as it was')
   t.equal(allTruth(box), truth, 'the provider holds every message as it was')

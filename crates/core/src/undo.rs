@@ -3,6 +3,9 @@
 //!
 //!   - A send follows its undo window (outbox.rs): inside it the send is cancelled, and after
 //!     it the undo is refused `conflict`, since mail cannot be unsent.
+//!   - An undo of a change a pass is carrying waits until the pass settles it or lets go of
+//!     it, then is answered by the rules below, so an undo pressed while its change is on its
+//!     way reverses it once it lands.
 //!   - A change no call has reached is cancelled. It never goes out, the view falls back to
 //!     what it was, and it settles `undone` in the commit that stores the undo, which settles `done`.
 //!   - A change the provider confirmed is reversed by a new change: the undo itself. It puts
@@ -26,7 +29,9 @@
 
 use std::rc::Rc;
 
-use letterbox_protocol::{ChangeId, ChangeResult, CoreMessage, MessageId, Refusal, ThreadId, Turn, UndoConflict};
+use letterbox_protocol::{
+    ChangeId, ChangeResult, Command, CoreMessage, MessageId, Refusal, ThreadId, Turn, UndoConflict,
+};
 
 use crate::Inner;
 use crate::changes::mode_of;
@@ -136,9 +141,31 @@ fn undone(world: &World, target: &ChangeId) -> bool {
     })
 }
 
+/// An undo that waits for its change, which a pass is carrying, to settle or be let go of.
+/// Its id is taken, so the same undo sent again waits with it (`resent`) and gets the answer too.
+pub(crate) struct HeldUndo {
+    change: ChangeId,
+    target: ChangeId,
+    resent: usize,
+}
+
 impl Inner {
-    /// Answers `undo` of `target` (see the module docs).
+    /// Answers `undo` of `target` (see the module docs). While a pass is carrying `target`, its
+    /// outcome is on its way, so the undo waits for it (`release_undos`) instead of answering
+    /// now. The pass may yet settle it, or leave it waiting, all of it or part.
     pub(crate) fn undo(self: &Rc<Self>, change: ChangeId, target: &ChangeId) {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.pushing.contains(target) {
+                let target = target.clone();
+                state.held_undos.push(HeldUndo {
+                    change,
+                    target,
+                    resent: 0,
+                });
+                return;
+            }
+        }
         let found = {
             let state = self.state.borrow();
             let record = state.world.changes.get(target).cloned();
@@ -158,6 +185,36 @@ impl Inner {
             Ok(Answer::Cancel) => self.cancel(change, record, |_, _| {}),
             Ok(Answer::Reverse(ops)) => self.accept_messages(change, account_id, ops, Some(target.clone())),
             Ok(Answer::ReverseTurns(sets)) => self.set_turns(change, account_id, &sets, Some(target.clone())),
+        }
+    }
+
+    /// True when `change` is an undo still waiting for its change. It is answered once more
+    /// when that ends, as a command sent twice is (guarantee 4).
+    pub(crate) fn resent_while_held(&self, change: &ChangeId) -> bool {
+        let mut state = self.state.borrow_mut();
+        let held = state.held_undos.iter_mut().find(|held| &held.change == change);
+        held.map(|held| held.resent += 1).is_some()
+    }
+
+    /// Answers each undo that waited for `target`, which a pass no longer carries: it settled,
+    /// or the pass ended with it unsettled. The rules decide as for any undo.
+    pub(crate) fn release_undos(self: &Rc<Self>, target: &ChangeId) {
+        let released: Vec<HeldUndo> = {
+            let mut state = self.state.borrow_mut();
+            let (released, kept) = std::mem::take(&mut state.held_undos)
+                .into_iter()
+                .partition(|held| &held.target == target);
+            state.held_undos = kept;
+            released
+        };
+        for held in released {
+            self.undo(held.change.clone(), &held.target);
+            for _ in 0..held.resent {
+                let command = Command::Undo {
+                    change: held.target.clone(),
+                };
+                self.on_command(held.change.clone(), command);
+            }
         }
     }
 

@@ -196,6 +196,8 @@ impl Core {
                     attempts: Attempts::default(),
                     backfills: HashMap::default(),
                     checks: HashSet::default(),
+                    pushing: HashSet::default(),
+                    held_undos: Vec::new(),
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -274,6 +276,10 @@ struct State {
     backfills: HashMap<AccountId, Backfill>,
     /// Sends with a check booked (see confirm.rs). Each has at most one at a time.
     checks: HashSet<ChangeId>,
+    /// Changes a pass is carrying to the provider right now (see `Carrying` in push.rs).
+    pushing: HashSet<ChangeId>,
+    /// Undos that wait for a change a pass is carrying (see undo.rs).
+    held_undos: Vec<crate::undo::HeldUndo>,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }

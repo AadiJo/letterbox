@@ -55,7 +55,14 @@ impl Inner {
             .filter(|change| &change.account_id == account_id && change.outcome.is_none())
             .map(|change| change.id.clone())
             .collect();
+        // Every change the provider has not confirmed holds its messages, until a refresh
+        // shows what it did: a change after it there may name refs it changed.
         let mut held: HashSet<MessageId> = HashSet::default();
+        if !refreshed {
+            let state = self.state.borrow();
+            let uncertain = state.world.changes.values().filter(|change| uncertain(change));
+            held.extend(uncertain.flat_map(|change| change.effect.named().cloned()));
+        }
         for id in waiting {
             if !self.still_current(account_id, linked) {
                 return Ok(());
@@ -79,6 +86,8 @@ impl Inner {
                 self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));
                 continue;
             };
+            // Until it settles or the pass lets go of it, an undo of it waits (undo.rs).
+            let _carrying = self.carrying(&change.id);
             // True once a step went through: from an earlier pass, or a call in this one.
             let mut known = matches!(&change.effect, Effect::Messages(effect) if effect.reached());
             let mut refused = None;
@@ -169,6 +178,15 @@ impl Inner {
         }
     }
 
+    /// Counts `id` as a change this pass is carrying until the returned guard drops.
+    fn carrying(self: &Rc<Self>, id: &ChangeId) -> Carrying {
+        self.state.borrow_mut().pushing.insert(id.clone());
+        Carrying {
+            core: Rc::clone(self),
+            id: id.clone(),
+        }
+    }
+
     /// Lays `part`, the part of a change one step carried for `message_ids`, over what the
     /// provider reported, with the refs it replaced (`moved`): the provider holds it now.
     fn lay_over(self: &Rc<Self>, message_ids: &[MessageId], part: &Op, moved: &[Moved]) {
@@ -224,6 +242,20 @@ impl Inner {
         };
         self.commit(|world, tx, _| put_change(world, tx, saved.clone()));
         saved
+    }
+}
+
+/// A change a pass is carrying to the provider. Dropping it, once the change settles or the
+/// pass lets go of it unsettled, answers each undo that waited for it (`release_undos`).
+struct Carrying {
+    core: Rc<Inner>,
+    id: ChangeId,
+}
+
+impl Drop for Carrying {
+    fn drop(&mut self) {
+        self.core.state.borrow_mut().pushing.remove(&self.id);
+        self.core.release_undos(&self.id);
     }
 }
 

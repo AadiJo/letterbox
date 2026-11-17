@@ -83,9 +83,12 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   /** Undoes the action on the toast, if there is one. Once the core accepts, its conversation is back and opens again. */
   const undoLast = async () => {
     const started = generation.current
-    const id = await undo((threadId) => {
-      const accountId = threadRecord(threadId)?.accountId
-      return mail.accounts.find((account) => account.id === accountId)?.providerLabel ?? 'the provider'
+    const id = await undo({
+      provider: (threadId) => {
+        const accountId = threadRecord(threadId)?.accountId
+        return mail.accounts.find((account) => account.id === accountId)?.providerLabel ?? 'the provider'
+      },
+      mailbox: (mailboxId) => mail.mailboxes.find((mailbox) => mailbox.id === mailboxId)?.name,
     })
     if (!id || !live.current) return
     release(id)

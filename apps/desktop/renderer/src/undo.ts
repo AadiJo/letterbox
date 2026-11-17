@@ -2,11 +2,10 @@
 // with Undo (or z). A new action replaces it.
 //
 // Undo is the core's: `undo` names the change the action made, and the core takes back exactly
-// what that change altered. The renderer never builds an opposite command. When the core will
-// not undo it yet, or ever, because the provider has not confirmed it or took only part of it,
-// the toast says so instead.
+// what that change altered. The renderer never builds an opposite command. While the core
+// waits to answer, the toast says "Undoing…". When it refuses, the toast says why.
 
-import type { ChangeId, ThreadId, UndoConflict } from '@letterbox/protocol'
+import type { ChangeId, MailboxId, ThreadId, UndoConflict, UndoField } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import type { Action } from './actions.ts'
 import { client } from './core.ts'
@@ -19,9 +18,13 @@ const NOTICE_MS = 5000
 
 /**
  * The toast's content: what was done, and the change Undo takes back, or null for a toast
- * that says why an undo was refused. `serial` rises with each one, so a new toast replays its entrance.
+ * that says why an undo was refused. `undoing` is true from z until the core answers the undo.
+ * `serial` rises with each one, so a new toast replays its entrance.
  */
-export type Notice = { serial: number; threadId: ThreadId; label: string; change: ChangeId | null }
+export type Notice = { serial: number; threadId: ThreadId; label: string; change: ChangeId | null; undoing: boolean }
+
+/** How a refusal names the provider of a conversation, and a mailbox. */
+export type Names = { provider: (threadId: ThreadId) => string; mailbox: (id: MailboxId) => string | undefined }
 
 let notice: Notice | null = null
 let serial = 0
@@ -31,7 +34,8 @@ const watchers = new Set<() => void>()
 const setNotice = (next: Notice | null) => {
   clearTimeout(expiry)
   notice = next
-  if (next) expiry = setTimeout(() => setNotice(null), NOTICE_MS)
+  // An undo on its way keeps the toast until the core answers it.
+  if (next && !next.undoing) expiry = setTimeout(() => setNotice(null), NOTICE_MS)
   watchers.forEach((watcher) => watcher())
 }
 
@@ -55,7 +59,7 @@ export function notify(action: Action, threadId: ThreadId, change: ChangeId) {
   const label = labelFor(action)
   if (!label) return
   serial += 1
-  setNotice({ serial, threadId, label, change })
+  setNotice({ serial, threadId, label, change, undoing: false })
 }
 
 /** Takes the toast down. */
@@ -66,34 +70,57 @@ export const withdrawFor = (threadId: ThreadId) => {
   if (notice?.threadId === threadId) withdraw()
 }
 
-/** Why the core refused an undo, in the user's words, for the reasons the user can do nothing about now. */
-function refusal(conflict: UndoConflict | undefined, provider: string) {
+/** The field a refusal names, in the user's words. */
+function fieldName(field: UndoField, names: Names) {
+  switch (field.kind) {
+    case 'mailbox':
+      return `Its place in ${names.mailbox(field.mailboxId) ?? 'a mailbox'}`
+    case 'unread':
+      return 'Its read state'
+    case 'flagged':
+      return 'Its flag'
+    case 'turn':
+      return 'Its turn'
+  }
+}
+
+/** Why the core refused an undo of a change to the conversation `threadId`, in the user's words. */
+function refusal(conflict: UndoConflict | undefined, names: Names, threadId: ThreadId) {
   switch (conflict?.kind) {
     case 'outcome-unknown':
-      return `Can't undo yet: waiting for ${provider} to confirm`
+      return `Can't undo yet: waiting for ${names.provider(threadId)} to confirm`
     case 'partly-applied':
       return "Only part of this went through, so it can't be undone"
-    default:
-      return null
+    case 'changed':
+      return `${fieldName(conflict.field, names)} changed since, so it can't be undone`
+    case 'mailbox-gone':
+      return `${names.mailbox(conflict.mailboxId) ?? 'That mailbox'} is gone, so it can't be undone`
+    case undefined:
+      return "This can't be undone"
   }
 }
 
 /**
- * Undoes the action on the toast. Resolves with its conversation once the core accepts, or
- * null. A refusal for a reason the user should know shows in the toast, naming the provider
- * `providerOf` gives for the conversation.
+ * Undoes the action on the toast. The core may wait for the change's call to the provider
+ * before it answers, so the toast says "Undoing…" until it does, with Undo still in place.
+ * Resolves with the conversation once the core accepts, or null. A refusal says why in the
+ * toast, unless a new action took the toast meanwhile.
  */
-export async function undo(providerOf: (threadId: ThreadId) => string) {
+export async function undo(names: Names) {
   const taken = notice
-  if (!taken?.change) return null
-  withdraw()
+  if (!taken?.change || taken.undoing) return null
+  const undoing: Notice = { ...taken, label: 'Undoing…', undoing: true }
+  setNotice(undoing)
   const answer = await client.command({ kind: 'undo', change: taken.change }).catch(() => null)
-  if (answer?.kind === 'accepted') return taken.threadId
-  const why = answer?.kind === 'rejected' ? refusal(answer.conflict, providerOf(taken.threadId)) : null
-  if (why) {
-    serial += 1
-    setNotice({ serial, threadId: taken.threadId, label: why, change: null })
+  const ours = notice === undoing
+  if (answer?.kind === 'accepted') {
+    if (ours) withdraw()
+    return taken.threadId
   }
+  if (!ours) return null
+  serial += 1
+  const label = refusal(answer?.kind === 'rejected' ? answer.conflict : undefined, names, taken.threadId)
+  setNotice({ serial, threadId: taken.threadId, label, change: null, undoing: false })
   return null
 }
 

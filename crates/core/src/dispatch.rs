@@ -39,7 +39,10 @@ impl Inner {
         self.send(CoreMessage::Response { id, response });
     }
 
-    fn on_command(self: &Rc<Self>, change: ChangeId, command: Command) {
+    pub(crate) fn on_command(self: &Rc<Self>, change: ChangeId, command: Command) {
+        if self.resent_while_held(&change) {
+            return;
+        }
         let earlier = self.state.borrow().world.changes.get(&change).cloned();
         if let Some(earlier) = earlier {
             self.send(CoreMessage::Accepted {

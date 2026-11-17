@@ -82,6 +82,10 @@ async function relayCore(page: Page) {
   let armed: (() => void) | undefined
   let held: string[] | undefined
   let toPage: ((message: string) => void) | undefined
+  // The answer the relay gives the page's next undo itself, instead of passing it to the core.
+  let refuseUndo: { conflict?: unknown } | undefined
+  // The page's last set-mailboxes command, as it sent it.
+  let lastMove: unknown
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -122,7 +126,24 @@ async function relayCore(page: Page) {
       void socket.close(closeOptions(code, reason))
       closed()
     })
-    socket.onMessage((message) => core.send(message))
+    socket.onMessage((message) => {
+      const text = message.toString()
+      const sent = JSON.parse(text) as { kind?: string; change?: string; command?: { kind?: string } }
+      if (sent.command?.kind === 'set-mailboxes') lastMove = sent.command
+      if (refuseUndo && sent.command?.kind === 'undo') {
+        const { conflict } = refuseUndo
+        refuseUndo = undefined
+        return void socket.send(
+          JSON.stringify({
+            kind: 'rejected',
+            change: sent.change,
+            reason: 'conflict',
+            ...(conflict ? { conflict } : {}),
+          }),
+        )
+      }
+      core.send(message)
+    })
     toPage = (message) => socket.send(message)
     core.onMessage((frame) => {
       const message = frame.toString()
@@ -139,6 +160,12 @@ async function relayCore(page: Page) {
   })
   return {
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
+    /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. */
+    refuseNextUndo: (conflict?: unknown) => {
+      refuseUndo = { conflict }
+    },
+    /** The page's last set-mailboxes command. */
+    lastMove: () => lastMove,
     sees,
     resume: () => {
       const queued = held ?? []

@@ -1,8 +1,9 @@
 // The UI check for the reader's layout and the done states, over a `people-first` dev host
 // of its own: the reader fills a 1920 px pane, Done slides the row out with an undo toast and
 // z brings it back, archive and Trash offer the same undo through the core, trash from Sent
-// keeps its row on a labels account, a late answer or a scroll moves no row it should not, an
-// empty Your turn says so, and reduced motion is instant.
+// keeps its row on a labels account, an undo says "Undoing…" until the core answers and why
+// when it is refused, a late answer or a scroll moves no row it should not, an empty Your
+// turn says so, and reduced motion is instant.
 
 import type { Browser, Page } from 'playwright'
 import { appErrors, capture, equal, openPage, type Relay, SIZES, WAIT_MS } from './record.ts'
@@ -248,8 +249,6 @@ async function checkUndoOf(page: Page, key: string, label: string) {
   equal(await toast(page).getByRole('button', { name: /^Undo/ }).count(), 1, `"${label}" offers Undo`)
   await page.locator(`[data-list="mail"] [data-row="${id}"]`).waitFor({ state: 'detached' })
   await waitForTotal(page, total - 1)
-  // Undo waits for the provider to confirm the change, so let it settle first.
-  await page.evaluate(() => window.letterboxDev?.sync())
   await page.keyboard.press('z')
   await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
   await waitForTotal(page, total)
@@ -303,13 +302,85 @@ async function checkTrashFromSent(page: Page) {
   await settle(page)
   equal(await looks(), { moving: 0, shown: true }, 'trash from Sent keeps the row, whole and still')
   equal(await conversations(page), total, 'trash from Sent keeps the Sent count')
-  // Lets any exit run to its end, so the undo below finds it ended, and the trash settle.
+  // Lets any exit run to its end, so the undo below finds it ended.
   await row.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
-  await page.evaluate(() => window.letterboxDev?.sync())
   await page.keyboard.press('z')
   await toast(page).waitFor({ state: 'detached' })
   await settle(page)
   equal(await looks(), { moving: 0, shown: true }, 'undo after trash shows the row as it was')
+}
+
+/** Archives Inbox's first row and waits for its toast. */
+async function archiveFirst(page: Page) {
+  await mailRows(page).first().click()
+  await page.keyboard.press('e')
+  await toast(page).filter({ hasText: 'Archived' }).waitFor()
+}
+
+/** z while the core has not answered the undo shows "Undoing…", with Undo in place, until it does. */
+async function checkUndoing(page: Page, relay: Relay) {
+  await openInbox(page)
+  const id = await mailRows(page).first().getAttribute('data-row')
+  await archiveFirst(page)
+  const paused = relay.pauseAtAccepted()
+  await page.keyboard.press('z')
+  await paused
+  equal(
+    await toast(page).locator('[data-field="toast"]').textContent(),
+    'Undoing…',
+    'z says "Undoing…" until the core answers',
+  )
+  equal(
+    await toast(page).getByRole('button', { name: /^Undo/ }).count(),
+    1,
+    'Undo stays in place while the core decides',
+  )
+  relay.resume()
+  await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
+  await toast(page).waitFor({ state: 'detached' })
+}
+
+/** Archives Inbox's first row, has the relay refuse its undo with `conflict`, and reads the toast. */
+async function refusalSays(page: Page, relay: Relay, conflict: unknown) {
+  await archiveFirst(page)
+  relay.refuseNextUndo(conflict)
+  await page.keyboard.press('z')
+  const said = toast(page).locator('[data-field="toast"]')
+  await page.waitForFunction(() => document.querySelector('[data-field="toast"]')?.textContent !== 'Undoing…')
+  return { text: await said.textContent(), undo: await toast(page).getByRole('button', { name: /^Undo/ }).count() }
+}
+
+/** Every refused undo says why in the toast, naming the mailbox the core names. */
+async function checkRefusals(page: Page, relay: Relay) {
+  await openInbox(page)
+  const plain = await refusalSays(page, relay, undefined)
+  equal(plain, { text: "This can't be undone", undo: 0 }, 'a refused undo with no reason says it cannot be undone')
+  const move = relay.lastMove() as { remove?: string[] } | undefined
+  const inbox = move?.remove?.[0]
+  if (!inbox) throw new Error('the archive named no mailbox to take the conversation out of')
+  const field = { kind: 'mailbox', messageId: 'message_1', mailboxId: inbox }
+  equal(
+    (await refusalSays(page, relay, { kind: 'changed', field })).text,
+    "Its place in Inbox changed since, so it can't be undone",
+    'a change since names the field and its mailbox',
+  )
+  equal(
+    (await refusalSays(page, relay, { kind: 'changed', field: { kind: 'flagged', messageId: 'message_1' } })).text,
+    "Its flag changed since, so it can't be undone",
+    'a change since names the field',
+  )
+  equal(
+    (await refusalSays(page, relay, { kind: 'mailbox-gone', mailboxId: inbox })).text,
+    "Inbox is gone, so it can't be undone",
+    'a mailbox that is gone is named',
+  )
+  equal(
+    (await refusalSays(page, relay, { kind: 'partly-applied', field })).text,
+    "Only part of this went through, so it can't be undone",
+    'a partly applied change says only part went through',
+  )
+  const unknown = await refusalSays(page, relay, { kind: 'outcome-unknown' })
+  equal(unknown.text?.startsWith("Can't undo yet: waiting for "), true, 'an unconfirmed change says undo must wait')
 }
 
 /**
@@ -369,6 +440,8 @@ export async function checkDone(browser: Browser, url: string) {
   await checkLeaveDuringExit(page)
   await checkArchiveAndTrashUndo(page)
   await checkTrashFromSent(page)
+  await checkUndoing(page, relay)
+  await checkRefusals(page, relay)
   await checkScrollDuringExit(page)
 
   // Clearing Your turn leaves the empty state.

@@ -27,7 +27,7 @@ export const UNDO_MUTATIONS: Mutation[] = [
     file: core('push.rs'),
     find: '                change = self.mark(change, true, true);',
     replace: '                change = self.mark(change, false, false);',
-    scenarios: 'on its way waits',
+    scenarios: 'restart during an archive',
   },
   {
     name: 'a change is not saved unconfirmed before its call, so one that never landed goes again after a restart',
@@ -285,5 +285,48 @@ export const UNDO_MUTATIONS: Mutation[] = [
     find: '        if self.unsure(&account_id) && !self.backfilling(&account_id) {',
     replace: '        if false {',
     scenarios: 'once a pull shows',
+  },
+  {
+    name: 'an undo while its change is on its way is answered at once, before the provider does',
+    file: core('undo.rs'),
+    find: '            if state.pushing.contains(target) {',
+    replace: '            if false {',
+    scenarios: 'on its way reverses',
+  },
+  {
+    name: 'a held undo is decided when one call answers, though its change has more steps to go',
+    file: core('push.rs'),
+    find: '            let _carrying = self.carrying(&change.id);\n',
+    replace: '',
+    scenarios: 'two steps is on its way',
+    also: [
+      {
+        file: core('push.rs'),
+        find: '                let outcome = adapter.apply(step.mutation).await;\n',
+        replace:
+          '                let carried = self.carrying(&change.id);\n                let outcome = adapter.apply(step.mutation).await;\n                drop(carried);\n',
+      },
+    ],
+  },
+  {
+    name: 'a held undo is never answered when the pass lets go of its change unsettled',
+    file: core('push.rs'),
+    find: '        self.core.release_undos(&self.id);\n',
+    replace: '',
+    scenarios: 'answer is lost is told',
+  },
+  {
+    name: 'the same undo sent again while it waits gets no answer',
+    file: core('undo.rs'),
+    find: '        held.map(|held| held.resent += 1).is_some()',
+    replace: '        held.map(|_| ()).is_some()',
+    scenarios: 'sent twice while it waits',
+  },
+  {
+    name: 'a change after one that failed with part of it through goes before the refresh shows that part',
+    file: core('push.rs'),
+    find: '        if !refreshed {\n            let state = self.state.borrow();',
+    replace: '        if false {\n            let state = self.state.borrow();',
+    scenarios: 'failed with part of it through waits',
   },
 ]
