@@ -4,9 +4,9 @@
 // under To as the user types, ↑ ↓ choose and ↵ adds. Cc shows once asked for, and Bcc stays a
 // link at its end. Esc puts the page away and keeps the draft, across screens and a reload.
 // Send, the toast, Undo and "Undoing…" work as for a reply, and Undo brings the page back.
-// forward.ts checks Forward on the same page. Screens are captured at 1440×900 and 1024×700,
-// at twice their pixels, as `compose-c-*.png` and `forward-b-*.png`, beside the mocks of the
-// same names (mocks/features/compose/shots).
+// compose-recovery.ts checks reloads, and forward.ts checks Forward on the same page. Screens
+// are captured at 1440×900 and 1024×700, at twice their pixels, as `compose-c-*.png` and
+// `forward-b-*.png`, beside the mocks of the same names (mocks/features/compose/shots).
 //
 // Cores started while `hold` is true keep a send's window open for as long as they run. A
 // reload starts the next core.
@@ -32,6 +32,7 @@ import {
   suggestions,
   text,
 } from './compose-page.ts'
+import { checkComposeRecovery } from './compose-recovery.ts'
 import { checkForward } from './forward.ts'
 import { appErrors, equal, openPage, root } from './record.ts'
 import { lastSend, ME, nav, open, seed, toast, undoOffered, yourTurn } from './reply-page.ts'
@@ -72,6 +73,15 @@ export async function checkCompose(browser: Browser) {
   const opened = await openPage(browser, server.url, 'trace-compose.zip')
   const { page, errors, relay } = opened
   try {
+    // A load after `window.name` is set to this finds session storage refusing (compose-recovery.ts).
+    await page.addInitScript(() => {
+      if (window.name !== 'no-session-storage') return
+      Object.defineProperty(window, 'sessionStorage', {
+        get: () => {
+          throw new DOMException('The UI check turned session storage off.', 'SecurityError')
+        },
+      })
+    })
     await page.waitForFunction(() => window.letterboxDev !== undefined)
     await page.evaluate(([address, password]) => window.letterboxDev?.signIn(address, password), [
       ME,
@@ -119,6 +129,24 @@ export async function checkCompose(browser: Browser) {
       [offered[1]?.marked, offered[0]?.active],
       [['Ma', 'ma'], true],
       'the typed text is marked where it starts a word of the name and the address, and the first is chosen',
+    )
+    // The age of the newest mail with each, flush right, 16 px in from the float's edge.
+    const ages = await suggestions(page).evaluate((float) =>
+      [...float.querySelectorAll('[data-field="last-mail"]')].map((age) => [
+        age.textContent,
+        Math.round(float.getBoundingClientRect().right - age.getBoundingClientRect().right),
+        getComputedStyle(age).fontVariantNumeric,
+      ]),
+    )
+    equal(
+      ages,
+      [
+        ['1h', 16, 'tabular-nums'],
+        ['7h', 16, 'tabular-nums'],
+        ['5d', 16, 'tabular-nums'],
+        ['Jan 26', 16, 'tabular-nums'],
+      ],
+      'each suggestion ends with how long ago the newest mail with them was, in tabular figures, 16 px from the edge',
     )
     await captureScene(page, 'compose-c-suggest', () => pen.hover())
     await page.keyboard.press('ArrowDown')
@@ -196,7 +224,7 @@ export async function checkCompose(browser: Browser) {
       [['maya@haldenstudio.test'], ['jules@moreaustudio.test'], [], SUBJECT, WRITTEN, null, false],
       'Send hands the core a new message: answering nothing, forwarding nothing',
     )
-    await toast(page).getByRole('button', { name: /^Undo/ }).waitFor()
+    await toast(page).getByRole('button', { name: /^Undo/, disabled: false }).waitFor()
     equal(
       [await toast(page).locator('[data-field="toast"]').textContent(), await undoOffered(page)],
       ['Sending', true],
@@ -228,6 +256,7 @@ export async function checkCompose(browser: Browser) {
     )
     await page.keyboard.press('Escape')
 
+    await checkComposeRecovery(page, relay, mailbox)
     await checkForward(page, relay, mailbox, hold)
     equal(appErrors(errors), [], 'the compose run logged no page errors')
   } finally {

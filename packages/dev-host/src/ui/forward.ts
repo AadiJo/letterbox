@@ -13,13 +13,15 @@ import {
   COVER_FILES,
   composePage,
   forwardFiles,
+  lineInput,
   pageChips,
   pageOf,
+  selectedRows,
   subjectField,
   suggestions,
   text,
 } from './compose-page.ts'
-import { equal, type Relay } from './record.ts'
+import { equal, type Relay, SIZES } from './record.ts'
 import { lastSend, nav, open, toast } from './reply-page.ts'
 
 const WRITTEN = [
@@ -50,7 +52,28 @@ export async function checkForward(page: Page, relay: Relay, mailbox: SimMailbox
     ],
     'the reply bar offers Reply, Reply all with Shift+R, and Forward with F',
   )
-  await captureScene(page, 'forward-b-entry', () => forward.hover())
+  // Scrolled to the conversation's end first, as the mock shows it, so the hover moves nothing.
+  const atEnd = () =>
+    page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>('article [data-scroll]')
+      if (scroller) scroller.scrollTop = scroller.scrollHeight
+    })
+  await captureScene(page, 'forward-b-entry', async () => {
+    await atEnd()
+    await forward.hover()
+  })
+
+  // At 1024 px, scrolled to its end, the conversation leaves 24 px under the reply bar.
+  await page.setViewportSize(SIZES.narrow)
+  const under = await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>('article [data-scroll]')
+    const replyBar = document.querySelector('[data-field="reply-bar"]')?.parentElement
+    if (!scroller || !replyBar) throw new Error('the reader shows no reply bar')
+    scroller.scrollTop = scroller.scrollHeight
+    return Math.round(scroller.getBoundingClientRect().bottom - replyBar.getBoundingClientRect().bottom)
+  })
+  equal(under, 24, 'scrolled to its end at 1024 px, the reader leaves 24 px under the reply bar')
+  await page.setViewportSize(SIZES.wide)
 
   // F takes the reader with the forward: the subject after a quiet "Fwd:", the files, the original quoted.
   await page.keyboard.press('f')
@@ -67,6 +90,23 @@ export async function checkForward(page: Page, relay: Relay, mailbox: SimMailbox
     ['Forward', 'Fwd:', 'Cover draft for issue 12', COVER_FILES.map((file) => file.name), COVER.text.split('\n\n')],
     'F opens the forward: "Fwd:" before the subject, the original’s files, and its text quoted',
   )
+  equal(
+    await selectedRows(page).allTextContents(),
+    [await page.locator('[role="option"][data-row]', { hasText: 'Cover draft for issue 12' }).first().textContent()],
+    'while forwarding, the row it comes from stays selected',
+  )
+  // A forward whose subject alone was changed is the user's work: C brings it back, not a new message.
+  await subjectField(page).fill('Cover draft for issue 12, print check')
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('c')
+  await pageOf(page, 'Forward').waitFor()
+  equal(
+    await subjectField(page).inputValue(),
+    'Cover draft for issue 12, print check',
+    'C brings back a forward whose subject was changed, and starts no new message over it',
+  )
+  await subjectField(page).fill('Cover draft for issue 12')
+  await lineInput(page, 'to').click()
   await page.keyboard.type('nad')
   await suggestions(page).getByRole('option').first().waitFor()
   await page.keyboard.press('Enter')
@@ -98,7 +138,7 @@ export async function checkForward(page: Page, relay: Relay, mailbox: SimMailbox
     ['Fwd: Cover draft for issue 12', WRITTEN, null, 'string', 1],
     'Send hands the core the forward: the original, the one file left out, and only what the user wrote',
   )
-  await toast(page).getByRole('button', { name: /^Undo/ }).click()
+  await toast(page).getByRole('button', { name: /^Undo/, disabled: false }).click()
   await pageOf(page, 'Forward').waitFor()
   await composePage(page).locator('[data-field="forward-file"]').first().waitFor()
   equal(

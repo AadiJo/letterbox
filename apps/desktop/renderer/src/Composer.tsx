@@ -17,6 +17,7 @@ import {
   composeForward,
   confirmBcc,
   type Composer,
+  type DraftKey,
   discard,
   newReply,
   type Recipient,
@@ -163,18 +164,7 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
       notice={
         <>
           {undone && <UndoneNotice undone={undone} over busy={busy} />}
-          {reply.bccLost && (
-            <button
-              type="button"
-              data-field="bcc-notice"
-              title="Confirm the recipients"
-              onClick={() => confirmBcc(id)}
-              className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
-            >
-              <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
-              Bcc wasn't kept after the reload. Check recipients before sending.
-            </button>
-          )}
+          {reply.bccLost && <BccNotice id={id} />}
         </>
       }
       footer={
@@ -331,6 +321,22 @@ export function PendingReply({ pending }: { pending: Located }) {
       ))}
       <DraftText id={pending.threadId} text={reply?.text ?? ''} readOnly placeholder="" />
     </DockFrame>
+  )
+}
+
+/** A draft rebuilt without its Bcc. Pressing it confirms the recipients, and Send can go. */
+export function BccNotice({ id }: { id: DraftKey }) {
+  return (
+    <button
+      type="button"
+      data-field="bcc-notice"
+      title="Confirm the recipients"
+      onClick={() => confirmBcc(id)}
+      className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
+    >
+      <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
+      Bcc wasn't kept after the reload. Check recipients before sending.
+    </button>
   )
 }
 

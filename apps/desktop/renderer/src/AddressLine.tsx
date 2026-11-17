@@ -17,7 +17,7 @@ import {
   type Recipient,
   type Reply,
 } from './drafts.ts'
-import { Suggestions } from './Suggestions.tsx'
+import { type Suggested, Suggestions } from './Suggestions.tsx'
 
 type LineProps = {
   id: DraftKey
@@ -29,7 +29,7 @@ type LineProps = {
    * On the compose page: the people to suggest for what the line holds, and the line sits
    * flush with the reading column. In the dock, undefined.
    */
-  suggested?: readonly Recipient[]
+  suggested?: readonly Suggested[]
   children?: ReactNode
 }
 
@@ -46,7 +46,7 @@ export function AddressLine({ id, field, label, reply, problem, suggested, child
   const active = choice.typed === typing ? Math.min(choice.index, offered.length - 1) : 0
   const choose = (step: number) =>
     setChoice({ typed: typing, index: (active + step + offered.length) % offered.length })
-  const add = (person: Recipient) =>
+  const add = (person: Suggested) =>
     edit(id, (current) => ({
       ...current,
       [field]: [...current[field], { address: person.address, name: person.name }],

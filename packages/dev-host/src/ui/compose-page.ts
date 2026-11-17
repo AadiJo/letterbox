@@ -87,6 +87,7 @@ export const suggested = (page: Page) =>
       options.map((option) => ({
         name: option.querySelector('[data-field="name"]')?.textContent ?? '',
         marked: [...option.querySelectorAll('b')].map((mark) => mark.textContent),
+        age: option.querySelector('[data-field="last-mail"]')?.textContent ?? null,
         active: option.getAttribute('aria-selected') === 'true',
       })),
     )

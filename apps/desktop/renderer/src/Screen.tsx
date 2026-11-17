@@ -1,6 +1,7 @@
 // What every list screen shares: the list pane's head and sync strip, the reader pane, and
 // the selection with its keyboard. PeopleScreen and MailScreen fill in the list. The compose
-// page (ComposePage.tsx) takes the reader pane while it is up, and no row shows selected meanwhile.
+// page (ComposePage.tsx) takes the reader pane while it is up. Meanwhile the list shows the
+// conversation a forward comes from selected, and for a new message, none.
 
 import type { Account, Command, MailboxId, ThreadId } from '@letterbox/protocol'
 import { PanelLeft, SquarePen } from 'lucide-react'
@@ -46,13 +47,16 @@ const typing = (target: EventTarget | null) =>
  * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
  * actions.ts's keys act on the open conversation, r opens a reply (Shift+R, Reply all), f
  * forwards, c starts a new message, and z undoes what the toast shows. While the compose page
- * is up, no row shows selected and only moving, which puts the page away, and z act.
+ * is up, the row a forward comes from shows selected, or none for a new message, and only
+ * moving, which puts the page away, and z act.
  * `leaves` says whether a command takes a conversation out of this list. When it does, the
  * row slides out and the next one opens in its place.
  */
 export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
   const page = usePageUp()
+  // The conversation the page's forward comes from. A new message comes from none.
+  const source = useComposer(COMPOSE)?.reply.forward?.threadId ?? null
   // Rises on every selection and when the screen goes, so an action that resumes after a
   // wait can tell whether anything moved on meanwhile.
   const generation = useRef(0)
@@ -183,7 +187,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     return () => window.removeEventListener('keydown', listener)
   }, [])
 
-  return { selected: page ? null : selected, select, act, reply, compose, undo: undoLast }
+  return { selected: page ? source : selected, select, act, reply, compose, undo: undoLast }
 }
 
 /** A list's subtitle. People has a shorter one for a narrow window. */

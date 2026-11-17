@@ -33,6 +33,7 @@ const isForwarding = (value: unknown) =>
   isObject(value) &&
   typeof value.of === 'string' &&
   typeof value.threadId === 'string' &&
+  typeof value.subject === 'string' &&
   Array.isArray(value.without) &&
   value.without.every((blob) => typeof blob === 'string')
 
@@ -67,8 +68,8 @@ function isStored(value: unknown): value is Stored {
     phase === 'followed' ||
     phase === 'undone' ||
     (phase === 'undoing' && typeof value.undo === 'string')
-  // A row without a conversation is a new one's, which never answers a message.
-  return known && isReply(value.reply) && (value.threadId !== null || value.reply.inReplyTo !== null)
+  // A row may name no conversation only for a new message or a forward, which answers nothing.
+  return known && isReply(value.reply) && (value.threadId !== null || value.reply.inReplyTo === null)
 }
 
 /** The rows the last load saved, at boot. Empty when storage is missing, refuses, or holds nothing of ours. */

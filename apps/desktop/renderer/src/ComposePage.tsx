@@ -9,7 +9,7 @@
 import { type KeyboardEvent, type ReactNode, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { AddressLine } from './AddressLine.tsx'
-import { UndoneNotice } from './Composer.tsx'
+import { BccNotice, UndoneNotice } from './Composer.tsx'
 import {
   COMPOSE,
   type Composer,
@@ -100,14 +100,15 @@ export function ComposePage({ composer, search }: Props) {
               <ForwardedOriginal forward={reply.forward} />
             </>
           )}
-          {undone && (
+          {(undone || reply.bccLost) && (
             <div className="-mx-4 mt-6 wide:-mx-6">
-              <UndoneNotice undone={undone} over busy={busy} />
+              {undone && <UndoneNotice undone={undone} over busy={busy} />}
+              {reply.bccLost && <BccNotice id={COMPOSE} />}
             </div>
           )}
           {/* Follows the content 24 px below it, and pins to the reader's foot once the content reaches it. */}
           <footer className="sticky bottom-0 mt-6 flex h-16 items-center gap-3 border-t border-line bg-reader">
-            <SendButton disabled={busy} onSend={() => void sendReply(COMPOSE)} />
+            <SendButton disabled={busy || reply.bccLost} onSend={() => void sendReply(COMPOSE)} />
             <SendStatus composer={composer} earlier={null} />
             <span className="flex-1" />
             <DiscardButton disabled={busy} onDiscard={() => discard(COMPOSE)} />

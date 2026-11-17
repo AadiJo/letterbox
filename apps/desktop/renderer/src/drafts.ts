@@ -29,9 +29,10 @@ export const COMPOSE = 'compose'
 
 /**
  * A forward's original, `of` in conversation `threadId`, and the files the user took off it.
- * The core writes the original into the message and carries the rest of its files.
+ * The core writes the original into the message and carries the rest of its files. `subject`
+ * is the one the forward started with, so a draft whose subject the user changed is kept.
  */
-export type Forwarding = { of: MessageId; threadId: ThreadId; without: readonly BlobId[] }
+export type Forwarding = { of: MessageId; threadId: ThreadId; without: readonly BlobId[]; subject: string }
 
 /**
  * The mail as the user has it so far: a reply (`inReplyTo`), a forward (`forward`), or with
@@ -229,7 +230,9 @@ const untouched = (reply: Reply) =>
   [reply.to, reply.cc, reply.bcc].every((line) => line.length === 0) &&
   Object.values(reply.typing).every((typed) => typed.trim() === '') &&
   reply.text.trim() === '' &&
-  (reply.forward ? reply.forward.without.length === 0 : reply.subject.trim() === '')
+  (reply.forward
+    ? reply.forward.without.length === 0 && reply.subject === reply.forward.subject
+    : reply.subject.trim() === '')
 
 /**
  * Puts the compose page up with `fresh` as its draft. A draft already there that the user has
@@ -246,12 +249,14 @@ function startPage(fresh: Reply) {
 export const composeNew = (accountId: AccountId) => startPage(blank(accountId))
 
 /** Forward: `message` of `thread`, with every file, to nobody yet, on the compose page. */
-export const composeForward = (thread: ThreadDetail, message: Message) =>
+export function composeForward(thread: ThreadDetail, message: Message) {
+  const subject = prefixed('Fwd', thread.subject)
   startPage({
     ...blank(thread.accountId),
-    forward: { of: message.id, threadId: thread.id, without: [] },
-    subject: prefixed('Fwd', thread.subject),
+    forward: { of: message.id, threadId: thread.id, without: [], subject },
+    subject,
   })
+}
 
 /**
  * Opens the editor on `thread`'s draft, starting one if there is none. Reply all on a draft
@@ -347,12 +352,17 @@ export function settle(id: DraftKey, problem: Problem | null) {
 
 /**
  * A reply saying again what `message`, one of the user's that was not sent, said: to the same
- * people, answering the message before it. Bcc is not kept on a message, so it starts empty
- * and marked `bccLost` until the user confirms the recipients.
+ * people, answering the message before it. A message that answers nothing in its conversation
+ * started it, so it comes back as a new message, for the compose page (`homeOf`). A forward
+ * comes back that way too, with the original in its text and without its files, since the
+ * message does not say what it forwarded. Bcc is not kept on a message, so it starts empty and
+ * marked `bccLost` until the user confirms the recipients.
  */
-export function replyFrom(thread: ThreadDetail, message: Message): Reply | null {
-  const base = newReply(thread, false, message)
-  if (!base) return null
+export function replyFrom(thread: ThreadDetail, message: Message): Reply {
+  const base = newReply(thread, false, message) ?? {
+    ...blank(thread.accountId),
+    subject: thread.subject.replace(/[\r\n]+/g, ' ').trim(),
+  }
   const text = message.body.state === 'ready' ? message.body.text : ''
   return { ...base, to: message.to.map(recipient), cc: message.cc.map(recipient), text, bccLost: true }
 }

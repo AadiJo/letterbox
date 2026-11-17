@@ -6,7 +6,7 @@
 //     anything reaches the core. The core checks again, and its refusal shows beside Send.
 //   - Once the core accepts, the draft goes and the reply is the core's: the conversation
 //     shows it at once, marked by its `delivery`. A new message or a forward starts a
-//     conversation of its own, which is found as a merged one is (`relocate`).
+//     conversation of its own, which is found by its change id, as a merged one is (`relocate`).
 //   - The core stores a send before it answers, so a lost answer does not mean it was not
 //     sent. The draft then waits as Checking under its change id, which is kept across a
 //     reload, and the next connection sends the same change again. The core answers a
@@ -46,7 +46,7 @@ import {
 } from './drafts.ts'
 import { refusal } from './refusals.ts'
 import { readStored, saveStored, type Stored } from './stored-sends.ts'
-import { threadsMatching, watchThreadDetail } from './threads.ts'
+import { threadHolding, watchThreadDetail } from './threads.ts'
 import { sayTooLate } from './undo.ts'
 
 /**
@@ -64,8 +64,14 @@ export type Pending = {
   located: boolean
 }
 
-/** A pending reply in its undo window, which the toast offers to take back. */
-export type Offer = Pending & { until: string; threadId: ThreadId }
+/** A pending send in its undo window, where the core shows it held. The toast offers to take it back. */
+export type Offer = Pending & { until: string; threadId: ThreadId; located: true }
+
+/**
+ * A pending send whose conversation the renderer is finding: the one a new message started, or
+ * the one a merge moved it to. The toast says so, and Undo waits.
+ */
+export type Finding = Pending & { located: false }
 
 /**
  * What each send said, by change, so an undo or a retry gets back exactly what was written, and
@@ -118,11 +124,19 @@ export type Located = Pending & { threadId: ThreadId }
 const pendingIn = (threadId: ThreadId) =>
   [...pending.values()].findLast((entry): entry is Located => entry.threadId === threadId)
 
-const isOffer = (entry: Pending): entry is Offer => entry.until !== null && entry.threadId !== null
+const isOffer = (entry: Pending): entry is Offer => entry.located && entry.until !== null && entry.threadId !== null
 
-/** The newest reply in its undo window whose undo has not been sent, or undefined. */
+/**
+ * True for a send the toast shows: one in its undo window, or one being found again. A new
+ * conversation shows from the start, until the core shows it held where it was found.
+ */
+const isShown = (entry: Pending): entry is Offer | Finding =>
+  isOffer(entry) ||
+  (!entry.located && (entry.until !== null || entry.threadId === null || entry.reply?.inReplyTo === null))
+
+/** The newest send the toast shows whose undo has not been sent, or undefined. */
 const offered = () =>
-  [...pending.values()].findLast((entry): entry is Offer => isOffer(entry) && !undoing.has(entry.change))
+  [...pending.values()].findLast((entry): entry is Offer | Finding => isShown(entry) && !undoing.has(entry.change))
 
 // Session storage keeps the sends being followed, and the sends and undos with no known
 // answer, across a reload. It may be missing or refuse. A held reply the reader shows is
@@ -220,20 +234,15 @@ function watch(change: ChangeId, threadId: ThreadId, rev: number) {
 }
 
 /**
- * Finds the conversation that holds send `change`: after the core merged its own into another,
- * or the one a new message started. A merge joins only conversations with the same subject, so
- * the search is by the reply's. With no subject left, the newest conversations are searched.
- * Until it is found the send stays pending, and Undo stays offered, since the core still holds it.
+ * Finds the conversation that holds send `change`: the one a new message started, or the one
+ * the core merged its own into (threads.ts `threadHolding`). Until it is found the send stays
+ * pending, the toast says it is finding it, and Undo waits. Once no conversation holds it, the
+ * core holds it no more, and it is released. A query that fails leaves it pending, to be found
+ * on the next connection.
  */
 async function relocate(change: ChangeId, rev: number) {
-  // Every leading prefix, as the core strips them when it compares subjects. Only the change id proves a match.
-  const subject = replies.get(change)?.reply.subject.replace(/^(\s*(re|fwd?|aw|sv|antw)\s*:)+\s*/i, '') ?? ''
-  const candidates = await threadsMatching(subject).catch(() => [])
-  const details = await Promise.all(
-    candidates.map((threadId) => client.query({ view: 'thread', threadId }).catch(() => null)),
-  )
-  if (!pending.has(change)) return
-  const holder = details.find((detail) => detail?.messages.some((message) => message.delivery?.change === change))
+  const holder = await threadHolding(change)
+  if (!pending.has(change) || holder === undefined) return
   if (holder) move(change, holder.id, rev)
   else release(change)
 }
@@ -290,7 +299,7 @@ export function adopt(thread: ThreadDetail) {
     if (!change) continue
     // The reply belongs to this conversation now, whatever was cached, as after a merge.
     const reply = replies.get(change)?.reply ?? replyFrom(thread, message)
-    if (reply) replies.set(change, { threadId: thread.id, reply })
+    replies.set(change, { threadId: thread.id, reply })
     const current = pending.get(change)
     if (!current) follow(thread.id, change, -1)
     else if (current.threadId !== thread.id) move(change, thread.id, -1)
@@ -323,7 +332,7 @@ const subscribe = (onChange: () => void) => {
   return () => void watchers.delete(onChange)
 }
 
-/** The newest reply in its undo window whose undo has not been sent, for the toast, or null. */
+/** For the toast: the newest send in its undo window, or being found, whose undo has not been sent, or null. */
 export function useSendOffer() {
   return useSyncExternalStore(subscribe, () => offered() ?? null)
 }
@@ -352,7 +361,7 @@ export function useShownPending(threadId: ThreadId) {
  */
 export async function undoSend(change?: ChangeId) {
   const offer = change ? pending.get(change) : offered()
-  if (!offer || !isOffer(offer) || !offer.located) return null
+  if (!offer || !isOffer(offer)) return null
   if (undoing.has(offer.change) || preparing.has(offer.change)) return null
   preparing.add(offer.change)
   try {
@@ -415,6 +424,9 @@ async function takeBack(change: ChangeId, held: ThreadDetail | null, again: Chan
     return null
   }
   replies.delete(change)
+  // The core took it back, so nothing of it is on its way, though the update saying so may come
+  // later. A new conversation goes with it, and there would be nothing to find.
+  release(change)
   // A new message or a forward goes back on the compose page, and no conversation opens.
   const home = sent && homeOf(sent.reply, threadId)
   if (sent && home) {
@@ -472,10 +484,9 @@ export async function sendReply(id: DraftKey) {
  */
 export function editAndSendAgain(thread: ThreadDetail, message: Message) {
   const change = message.delivery?.change
-  const kept = change && replies.get(change)?.reply
+  const reply = (change && replies.get(change)?.reply) || replyFrom(thread, message)
   // A new message or a forward is written again on the compose page.
-  if (kept && kept.inReplyTo === null) return void restore(COMPOSE, kept)
-  const reply = kept || replyFrom(thread, message)
+  if (reply.inReplyTo === null) return void restore(COMPOSE, reply)
   if (pendingIn(thread.id) || composerFor(thread.id)) return startReply(thread, false)
-  if (reply) restore(thread.id, reply)
+  restore(thread.id, reply)
 }
