@@ -1,8 +1,8 @@
 // The open conversation, in the reading column: the subject, one line for whose turn it is
-// (in Let go?, how long it waited), its labels and how many messages, then the messages. Earlier messages fold to one line each
-// and the newest is open, as is any reply of the user's still on its way or not sent. Bodies
-// load through the core's thread view. The reply bar ends it; while the user writes, the editor
-// docks below and the subject stays pinned above.
+// (in Let go?, how long it waited), its labels and how many messages, then the messages.
+// Earlier messages fold to one line each and the newest is open, as is any reply of the user's
+// still on its way or not sent. Bodies load through the core's thread view. The reply bar ends
+// it; while the user writes, the editor docks below and the subject stays pinned above.
 
 import type { Message, MessageId, Person, ThreadDetail, ThreadId, TurnState } from '@letterbox/protocol'
 import { ChevronRight, Hourglass, Reply, Wind } from 'lucide-react'
