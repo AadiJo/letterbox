@@ -6,7 +6,8 @@
 //                  conversation shows one at a time: a newer one replaces it, on screen and in
 //                  the notification center. Choosing it calls `open` with the thread id, which
 //                  brings a window forward and has its page open the conversation (app.ts).
-//   badge          how many conversations are the user's turn and unread. The dock on macOS, the
+//   badge          how many conversations are the user's turn and unread, leaving out those
+//                  old enough to have moved to Let go. The dock on macOS, the
 //                  launcher on Linux desktops that show counts, an overlay dot on Windows.
 //
 // A notification stays in `shown` until a newer one for its conversation replaces it, not

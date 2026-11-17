@@ -4,7 +4,7 @@
 // `your-turn`, which still go to the page, and the updates of main's own subscription.
 //
 // Main keeps the dock or taskbar badge itself: at start it subscribes to the conversations
-// that are the user's turn and unread, under a random id the page cannot guess, and those
+// that are the user's turn and unread, and not yet moved to Let go, under a random id the page cannot guess, and those
 // updates go to main only.
 //
 // Main logs one line per start, stop and exit, with the core's PID (log.ts), so a check can
@@ -88,11 +88,12 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
     const yourTurn = line.startsWith('{"kind":"your-turn"') ? yourTurnIn(line) : undefined
     if (yourTurn !== undefined) hooks.yourTurn(yourTurn)
   })
-  // One row is enough: the badge reads only the total.
+  // One row is enough: the badge reads only the total. Conversations old enough to have
+  // moved to Let go are left out, as People leaves them out.
   const subscribe: ClientMessage = {
     kind: 'subscribe',
     sub: badge,
-    query: { view: 'threads', filter: { turn: 'mine', unread: true }, offset: 0, limit: 1 },
+    query: { view: 'threads', filter: { turn: 'mine', unread: true, retired: false }, offset: 0, limit: 1 },
   }
   child.stdin.write(`${JSON.stringify(subscribe)}\n`)
   createInterface({ input: child.stderr }).on('line', (line) => {
