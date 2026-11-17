@@ -195,15 +195,19 @@ impl LiveView {
     }
 
     /// When the next thread crosses this list's cut, for a list that filters `retired`: when
-    /// the oldest thread on the newer side turns RETIRED_AFTER old. None for any other view.
+    /// the oldest thread on the newer side turns RETIRED_AFTER old. With nothing on that side,
+    /// RETIRED_AFTER from the time the list goes by, so a wake is still booked and notices the
+    /// clock set back (see `book_wake` in subscriptions.rs). None for any other view.
     pub fn wakes_at(&self, live: &dyn Live) -> Option<Time> {
         let LiveView::Threads { filter, listed, .. } = self else {
             return None;
         };
         filter.retired?;
-        let (Reverse(oldest), _) = window(listed, Some(false), live).next_back()?;
-        let at = parse(oldest);
-        Some(iso(at.checked_add_signed(RETIRED_AFTER).unwrap_or(at)))
+        let from = match window(listed, Some(false), live).next_back() {
+            Some((Reverse(oldest), _)) => parse(oldest),
+            None => parse(&live.now()),
+        };
+        Some(iso(from.checked_add_signed(RETIRED_AFTER).unwrap_or(from)))
     }
 
     /// The view's answer from the world and the rows as they are now.
