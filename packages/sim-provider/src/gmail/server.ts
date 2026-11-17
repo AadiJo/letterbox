@@ -315,6 +315,11 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   }
 
   const server = createServer((request, response) => {
+    // Every answer closes its connection, so a client never sends a call on one the fake
+    // dropped as it went offline, which could not tell whether the call arrived. Going offline
+    // then always fails a new call at connect. The fake closes first, so the client keeps no
+    // port waiting after each call.
+    response.setHeader('Connection', 'close')
     busy.add(request.socket)
     response.on('close', () => busy.delete(request.socket))
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')

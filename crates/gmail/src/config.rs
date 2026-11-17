@@ -43,11 +43,6 @@ pub struct GmailConfig {
     /// Tests give the fake's name an IPv6 and an IPv4 address, the way Google's names
     /// resolve, so the client's dual-stack connect runs in every scenario.
     pub hosts: Vec<(String, Vec<SocketAddr>)>,
-    /// True to keep connections open between calls, as Google's servers expect. Tests turn
-    /// it off: a fake going offline drops its open connections, and a call sent on one just
-    /// as it drops cannot tell whether it arrived (adapter rule 11), so it would read as
-    /// lost in some runs and as offline in others.
-    pub reuse_connections: bool,
 }
 
 /// Where the browser lands after consent. The guide says to listen on 127.0.0.1 at a
@@ -78,7 +73,6 @@ impl GmailConfig {
             random: Rc::new(os_random),
             pause: Rc::new(timer),
             hosts: Vec::new(),
-            reuse_connections: true,
         }
     }
 

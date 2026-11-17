@@ -133,8 +133,6 @@ fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
         auth_url: "https://consent.fake.test/o/oauth2/v2/auth".to_owned(),
         token_url: format!("{base}/token"),
         hosts: vec![(FAKE_GMAIL_HOST.to_owned(), addresses)],
-        // Each call on a new connection, so a call made while the fake is offline surely fails at connect.
-        reuse_connections: false,
         client_id: "letterbox-scenarios.apps.fake.test".to_owned(),
         client_secret: Some("not-a-secret".to_owned()),
         loopback: Loopback::Unix {
