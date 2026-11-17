@@ -4,12 +4,13 @@
 //
 // Undo is the core's: `undo` names the change the action made, and the core takes back exactly
 // what that change altered. The renderer never builds an opposite command. While the core
-// waits to answer, the toast says "Undoing…". When it refuses, the toast says why.
+// waits to answer, the toast says "Undoing…". When it refuses, the toast says why. When the
+// connection ends before it answers, the toast says so: the change may still be undoable.
 
 import type { ChangeId, MailboxId, ThreadId, UndoConflict, UndoField } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
 import type { Action } from './actions.ts'
-import { client } from './core.ts'
+import { client, lostReason } from './core.ts'
 
 /** The key that undoes the last action. */
 export const UNDO_KEY = 'z'
@@ -122,22 +123,32 @@ function refusal(conflict: UndoConflict | undefined, names: Names, threadId: Thr
  * Undoes the action on the toast. The core may wait for the change's call to the provider
  * before it answers, so the toast says "Undoing…" until it does, with Undo still in place.
  * Resolves with the conversation once the core accepts, or null. A refusal says why in the
- * toast, unless a new action took the toast meanwhile.
+ * toast, and a lost connection says the core never answered, unless a new action took the
+ * toast meanwhile. Any other failure rejects, and the toast keeps saying "Undoing…".
  */
 export async function undo(names: Names) {
   const taken = notice
   if (!taken?.change || taken.undoing) return null
   const undoing: Notice = { ...taken, label: 'Undoing…', undoing: true, icon: 'clock' }
   setNotice(undoing)
-  const answer = await client.command({ kind: 'undo', change: taken.change }).catch(() => null)
+  const answer = await client.command({ kind: 'undo', change: taken.change }).catch((error: unknown) => {
+    if (lostReason() === null) throw error
+    return 'lost' as const
+  })
   const ours = notice === undoing
-  if (answer?.kind === 'accepted') {
+  if (answer !== 'lost' && answer.kind === 'accepted') {
     if (ours) withdraw()
     return taken.threadId
   }
   if (!ours) return null
   serial += 1
-  const conflict = answer?.kind === 'rejected' ? answer.conflict : undefined
+  if (answer === 'lost') {
+    // The core never answered. The change may still be undoable once the connection is back.
+    const label = "Lost the connection. This may still be undoable once it's back"
+    setNotice({ serial, threadId: taken.threadId, label, change: null, undoing: false, icon: 'clock' })
+    return null
+  }
+  const { conflict } = answer
   const label = refusal(conflict, names, taken.threadId)
   const icon = conflict?.kind === 'outcome-unknown' ? 'clock' : 'info'
   setNotice({ serial, threadId: taken.threadId, label, change: null, undoing: false, icon })

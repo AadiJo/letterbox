@@ -1,10 +1,11 @@
 // The UI checks for undo of Archive and Trash through the core, over done.ts's dev host: z
 // brings the row back where it was, trash from Sent keeps its row on a labels account, the
-// toast says "Undoing…" until the core answers, and every refused undo says why.
+// toast says "Undoing…" until the core answers, every refused undo says why, and an undo the
+// lost connection kept from the core does not say it can't be undone.
 
 import type { Page } from 'playwright'
 import { conversations, mailRows, nav, openInbox, settle, toast, waitForTotal } from './mail-list.ts'
-import { equal, type Relay } from './record.ts'
+import { capture, equal, type Relay } from './record.ts'
 
 /** Runs every undo check, from Inbox. */
 export async function checkUndo(page: Page, relay: Relay) {
@@ -12,6 +13,7 @@ export async function checkUndo(page: Page, relay: Relay) {
   await checkTrashFromSent(page)
   await checkUndoing(page, relay)
   await checkRefusals(page, relay)
+  await checkLostConnection(page, relay)
 }
 
 /**
@@ -162,4 +164,34 @@ async function checkRefusals(page: Page, relay: Relay) {
   )
   const unknown = await refusalSays(page, relay, { kind: 'outcome-unknown' })
   equal(unknown.text?.startsWith("Can't undo yet: waiting for "), true, 'an unconfirmed change says undo must wait')
+}
+
+/**
+ * The connection ends as z sends the undo, so the core never answers. The toast says the
+ * connection was lost and the change may still be undoable, not that it can't be undone. A
+ * reload connects again, to a new core.
+ */
+async function checkLostConnection(page: Page, relay: Relay) {
+  await openInbox(page)
+  // The next conversation opens as the archived row folds away, and that needs the connection.
+  // A row the last check archived may still be folding at the top, so the open row is the one archived.
+  await mailRows(page).first().click()
+  const archived = await page.locator('[data-list="mail"] [aria-selected="true"]').getAttribute('data-row')
+  await page.keyboard.press('e')
+  await toast(page).filter({ hasText: 'Archived' }).waitFor()
+  await page.locator(`[data-list="mail"] [data-row="${archived}"]`).waitFor({ state: 'detached' })
+  await settle(page)
+  relay.failNextUndo()
+  await page.keyboard.press('z')
+  await page.waitForFunction(() => document.querySelector('[data-field="toast"]')?.textContent !== 'Undoing…')
+  equal(
+    {
+      text: await toast(page).locator('[data-field="toast"]').textContent(),
+      undo: await toast(page).getByRole('button', { name: /^Undo/ }).count(),
+    },
+    { text: "Lost the connection. This may still be undoable once it's back", undo: 0 },
+    'an undo the lost connection kept from the core says so, not that it cannot be undone',
+  )
+  await capture(page, 'undo-lost-connection')
+  await page.reload()
 }

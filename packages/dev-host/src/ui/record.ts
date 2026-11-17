@@ -77,7 +77,8 @@ const closeOptions = (code: number | undefined, reason: string | undefined) => (
 /**
  * Relays the page's `/core` socket, so a check can make the core slow on cue. After
  * `pauseAtAccepted`, the core's next `accepted` and everything after it wait until `resume`,
- * in order, or until `drop` ends the connection with them still unsent. The returned promise resolves once the relay holds that `accepted`. `sees`
+ * in order, or until `drop` ends the connection with them still unsent. The returned promise resolves once the relay holds that `accepted`.
+ * After `failNextUndo`, the page's next undo ends the connection instead of reaching the core. `sees`
  * resolves once the core sends a message, held or not, that contains `text`. It rejects
  * after WAIT_MS, or when the connection closes first, naming what never came.
  */
@@ -90,6 +91,8 @@ async function relayCore(page: Page) {
   let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
+  // True once `failNextUndo` is called: the page's next undo ends the connection, and the core never sees it.
+  let failUndo = false
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
@@ -140,6 +143,10 @@ async function relayCore(page: Page) {
         const rejected = { kind: 'rejected', change, reason: 'conflict', ...(conflict ? { conflict } : {}) }
         return void socket.send(JSON.stringify(rejected))
       }
+      if (failUndo && text.includes('"kind":"undo"')) {
+        failUndo = false
+        return void close?.()
+      }
       core.send(message)
       if (watched && text.includes(watched.text)) {
         held ??= []
@@ -172,6 +179,10 @@ async function relayCore(page: Page) {
     /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. It never reaches the core. */
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }
+    },
+    /** Ends the connection both ways when the page sends its next undo, which never reaches the core. */
+    failNextUndo: () => {
+      failUndo = true
     },
     sees,
     /** Every message the page sent its cores, in order, as sent. */
