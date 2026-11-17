@@ -212,4 +212,11 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     replace: '            for who in everyone.filter(|who| named.insert(who.address.clone()) || true) {',
     scenarios: 'put people I wrote to first',
   },
+  {
+    name: 'a forward that waits for its original keeps waiting after the original fails',
+    file: core('push.rs'),
+    find: '        self.waiting_on(&id);\n',
+    replace: '',
+    scenarios: 'never found fails with it',
+  },
 ]
