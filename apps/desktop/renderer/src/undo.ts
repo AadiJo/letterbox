@@ -17,7 +17,9 @@ const NOTICE_MS = 5000
 type SetTurn = Extract<Command, { kind: 'set-turn' }>
 
 /** What the toast says, and the command that undoes it if there is one. */
-type Said = { label: 'Marked done'; undo: SetTurn } | { label: 'Archived' | 'Moved to Trash'; undo: null }
+type Said =
+  | { label: 'Marked done'; undo: SetTurn }
+  | { label: 'Archived' | 'Moved to Trash' | "Too late to undo. It's sending."; undo: null }
 
 /** The toast's content. `serial` rises with each one, so a new toast replays its entrance. */
 export type Notice = { serial: number; threadId: ThreadId } & Said
@@ -60,6 +62,12 @@ export function notify(action: Action, before: ThreadSummary) {
   if (!body) return
   serial += 1
   setNotice({ serial, threadId: before.id, ...body })
+}
+
+/** Says, for a while, that a reply's undo window ended before its undo reached the core (sending.ts). */
+export function sayTooLate(threadId: ThreadId) {
+  serial += 1
+  setNotice({ serial, threadId, label: "Too late to undo. It's sending.", undo: null })
 }
 
 /** Whether the toast shows a notice. While it does, z and Undo act on it, not on a reply in its undo window (sending.ts). */

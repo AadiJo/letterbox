@@ -128,7 +128,7 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
       onKeyDown={onKeyDown}
       notice={
         <>
-          {undone && <UndoneNotice undone={undone} over />}
+          {undone && <UndoneNotice undone={undone} over busy={busy} />}
           {reply.bccLost && (
             <button
               type="button"
@@ -338,9 +338,10 @@ export function PendingReply({ pending }: { pending: Pending }) {
 
 /**
  * A reply the core took back while the conversation's draft had text: Restore it over the
- * draft, or discard it. `over` says a draft is there to be replaced.
+ * draft, or discard it. `over` says a draft is there to be replaced, and `busy` that it waits
+ * on the core, so nothing can replace it yet.
  */
-export function UndoneNotice({ undone, over }: { undone: Undone; over: boolean }) {
+export function UndoneNotice({ undone, over, busy }: { undone: Undone; over: boolean; busy: boolean }) {
   return (
     <div
       data-field="undone-notice"
@@ -349,8 +350,10 @@ export function UndoneNotice({ undone, over }: { undone: Undone; over: boolean }
       <p className="min-w-0 flex-1 truncate text-row text-fg2">Undid your earlier reply.</p>
       <button
         type="button"
+        // While the draft waits on the core, nothing can replace it.
+        disabled={busy}
         onClick={() => restoreUndone(undone.change)}
-        className="inline-flex h-7 flex-none items-center rounded-lg px-2.5 text-row font-medium text-fg shadow-outline hover:bg-hover"
+        className="inline-flex h-7 flex-none items-center rounded-lg px-2.5 text-row font-medium text-fg shadow-outline enabled:hover:bg-hover disabled:opacity-50"
       >
         {over ? 'Restore it (replaces this draft)' : 'Restore it'}
       </button>

@@ -360,6 +360,25 @@ export async function checkReply(browser: Browser) {
     await checkBccAfterReload(page)
     await checkMergedConversation(page, relay)
 
+    // The core's fixed clock moves a second each time it reads it, as each sync does, so syncs
+    // carry it past Maya's window while --hold-waits keeps its timer from firing. The reply
+    // still shows held, and an undo now comes back refused: the toast says it is too late.
+    await nav(page, 'People').click()
+    await open(page, 'Notes from Thursday')
+    await held.waitFor()
+    await Array.from({ length: 40 }).reduce<Promise<void>>(
+      (done) => done.then(() => page.evaluate(() => window.letterboxDev?.deliver(1))),
+      Promise.resolve(),
+    )
+    await page.keyboard.press('z')
+    await page.evaluate(() => window.letterboxDev?.settle())
+    await page.evaluate(() => window.letterboxDev?.settle())
+    equal(
+      [await toast(page).locator('[data-field="toast"]').textContent(), await held.count()],
+      ["Too late to undo. It's sending.", 1],
+      'an undo the core refuses after the window says it is too late, and the reply stays',
+    )
+
     // A core that lets the window pass. The provider's send call waits, so the reply shows
     // going, and the core's update that says so is what takes Undo away.
     hold = false

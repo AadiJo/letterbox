@@ -105,7 +105,7 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
             {/* With no draft, a reply the core took back waits here to be restored or dropped. */}
             {!docked && composer === undefined && undone && (
               <div className="-mx-4 mt-4 wide:-mx-6">
-                <UndoneNotice undone={undone} over={false} />
+                <UndoneNotice undone={undone} over={false} busy={false} />
               </div>
             )}
             {!docked && (composer || canReply(thread, mail)) && <ReplyBar thread={thread} composer={composer} />}

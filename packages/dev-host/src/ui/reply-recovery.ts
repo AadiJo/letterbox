@@ -68,6 +68,8 @@ export async function checkBccAfterReload(page: Page) {
   )
   await dock(page).getByRole('button', { name: 'Discard' }).click()
   await page.evaluate(() => void (window.name = ''))
+  // Session storage works again from the next load on.
+  await page.reload()
 }
 
 /** A held reply's conversation merges into another that has a draft. */
@@ -139,7 +141,8 @@ export async function checkMergedConversation(page: Page, relay: Relay) {
   // Undo goes at once, even over a draft with text. The draft stays, and the undone reply waits beside it.
   await body(page).press('Escape')
   await page.keyboard.press('z')
-  const notice = dock(page).locator('[data-field="undone-notice"]')
+  // Beside the draft, or alone in the dock once no draft is left.
+  const notice = page.locator('[data-field="undone-notice"]')
   await page.locator('[data-field="undone-notice"], [data-field="send-problem"]').first().waitFor()
   // The undone reply leaves the thread with the core's update after the undo.
   if ((await notice.count()) === 1) await heldTrip.waitFor({ state: 'detached' })
@@ -153,12 +156,41 @@ export async function checkMergedConversation(page: Page, relay: Relay) {
     'Undo over a draft cancels the send at once, keeps the draft, and keeps the undone reply beside it',
   )
 
-  // Restoring it puts it here, in the conversation that holds it now, over the draft.
-  await notice.getByRole('button', { name: 'Restore it (replaces this draft)' }).click()
+  // The draft goes, and while the core has not answered it cannot be replaced: Restore is off
+  // and the undone reply stays.
+  const answering = relay.pauseAtAccepted()
+  await body(page).press('Control+Enter')
+  await answering
+  const restoreButton = notice.getByRole('button', { name: /^Restore it/ })
   equal(
-    [await body(page).inputValue(), await chips(page, 'to'), await sendButton(page).isDisabled(), await notice.count()],
-    [TRIP, ['Kit Ashworth <kit@ashworth.example>'], false, 0],
-    'Restore puts the undone reply in the conversation that holds it, and Send works again',
+    [await notice.count(), await restoreButton.isDisabled()],
+    [1, true],
+    'while the draft waits on the core, Restore is off and the undone reply stays',
   )
+  relay.resume()
+  const heldRoute = page.locator('[data-message="open"][data-delivery="held"]', { hasText: ROUTE })
+  await heldRoute.waitFor()
+
+  // Two reloads with the undone reply and a held send both in storage. Neither is lost.
+  await page.reload()
+  await page.reload()
+  await page.getByRole('textbox', { name: 'Search mail' }).fill('trip in May')
+  await page.keyboard.press('Enter')
+  await openWith(page, 'trip in May', 'Owen Hale', ROUTE)
+  await heldRoute.waitFor()
+  equal(await notice.count(), 1, 'after two reloads the undone reply is still kept beside the held send')
+
+  // Restoring it puts it here, in the conversation that holds it now.
+  await restoreButton.click()
+  equal(
+    [await body(page).inputValue(), await chips(page, 'to'), await notice.count()],
+    [TRIP, ['Kit Ashworth <kit@ashworth.example>'], 0],
+    'Restore puts the undone reply in the conversation that holds it',
+  )
+  // Both taken back and thrown away, so the provider never gets either.
+  await body(page).press('Escape')
+  await page.keyboard.press('z')
+  await heldRoute.waitFor({ state: 'detached' })
+  await notice.getByRole('button', { name: 'Discard it' }).click()
   await dock(page).getByRole('button', { name: 'Discard' }).click()
 }
