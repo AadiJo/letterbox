@@ -14,7 +14,7 @@ use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, Threa
 use crate::changes::Pending;
 use crate::clock::parse;
 use crate::maps::{HashMap, IndexMap, IndexSet};
-use crate::turns::{TurnMessage, decide_turn, is_automated};
+use crate::turns::{TurnMessage, decide_turn, held_override, is_automated};
 use crate::views::{person, same};
 use crate::work::Meter;
 use crate::world::{MessageRecord, MessageState, Touched, World, messages_of};
@@ -276,11 +276,16 @@ fn summarize(
             .or_insert_with(|| person(address, &account.address));
     }
     // Only mail the provider holds moves the turn. A send still in the outbox, or one that
-    // failed, may never reach anyone, so the turn stays where it was (see outbox.rs).
+    // failed, may never reach anyone, so the turn stays where it was (see outbox.rs). The
+    // same mail decides whether a turn the user set still holds.
+    let held: Vec<&&MessageRecord> = records
+        .iter()
+        .filter(|record| record.provider_ref().is_some())
+        .collect();
+    let newest = held.last().map(|record| &record.facts.sent_at);
     let turn = decide_turn(
-        &records
+        &held
             .iter()
-            .filter(|record| record.provider_ref().is_some())
             .map(|record| TurnMessage {
                 from_me: same(&record.facts.from.address, &account.address),
                 to_me: record.facts.to.iter().any(|to| same(&to.address, &account.address)),
@@ -288,7 +293,7 @@ fn summarize(
                 automated: is_automated(&record.facts),
             })
             .collect::<Vec<_>>(),
-        thread.turn_override,
+        held_override(thread, newest),
     );
     let mailbox_ids: IndexSet<&MailboxId> = states.iter().flat_map(|state| &state.mailboxes).collect();
     Some(ThreadSummary {

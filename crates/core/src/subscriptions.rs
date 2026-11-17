@@ -7,7 +7,8 @@
 //!
 //! Such a list reads the time from `State::views_now`, which the clock sets only when one
 //! opens and when a wake runs. No conversation crosses between two wakes, since one is booked
-//! for each crossing, so the commits in between need not read the clock. A fixed clock moves
+//! for each crossing, and the real clock's wait reads the wall clock every minute, so a suspend
+//! or a clock set forward or back ends it on time. The commits in between need not read the clock. A fixed clock moves
 //! on every read, so reading it per commit would move it too, under the scenarios' feet.
 
 use std::rc::Rc;
@@ -177,16 +178,19 @@ impl Inner {
 
     /// Flushes again at `at`, when a conversation crosses a list's cut (see live_view.rs), unless
     /// a wake at or before `at` is booked already. A later wake is booked when that one runs.
-    /// Like a send's undo window, the wait is not work the core finishes before it closes.
+    /// It also runs early if the clock is set back before `views_now`, which the lists' cut was
+    /// worked out from (see `until_or_back` in clock.rs). Like a send's undo window, the wait is
+    /// not work the core finishes before it closes.
     fn book_wake(self: &Rc<Self>, at: Time) {
-        {
+        let since = {
             let mut state = self.state.borrow_mut();
             if state.wake_at.as_ref().is_some_and(|booked| parse(booked) <= parse(&at)) {
                 return;
             }
             state.wake_at = Some(at.clone());
-        }
-        let wait = self.env.until(&at);
+            state.views_now.clone()
+        };
+        let wait = self.env.until_or_back(&at, &since);
         let core = Rc::clone(self);
         spawn_local(async move {
             wait.await;

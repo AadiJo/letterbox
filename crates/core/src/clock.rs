@@ -18,6 +18,10 @@ pub trait Environment {
     /// Resolves once the clock reads `at` or later, at once for a time already past.
     /// The outbox waits on it for each send's undo window (see outbox.rs).
     fn until(&self, at: &Time) -> LocalFuture<'static, ()>;
+    /// Like `until`, and resolves too once the clock reads earlier than `since`: it was set
+    /// back, so what was worked out at `since` is out of date. The lists that split on age wait
+    /// on it for their next crossing (`book_wake` in subscriptions.rs).
+    fn until_or_back(&self, at: &Time, since: &Time) -> LocalFuture<'static, ()>;
     /// A number another device is unlikely to draw. Each Message-ID the core writes holds one.
     fn random(&self) -> u64;
 }
@@ -32,6 +36,31 @@ pub fn parse(at: &Time) -> DateTime<Utc> {
 /// The real clock. Used when the core runs for a person.
 pub struct SystemEnvironment;
 
+/// How long the real clock's waits sleep before they read the wall clock again. A sleep runs on
+/// a clock that stops while the machine is suspended and does not follow the wall clock when it
+/// is set, so a wait that slept its whole length at once could end days late.
+const RECHECK: Duration = Duration::from_secs(60);
+
+/// Waits until the wall clock reads `at`, or reads earlier than `since` when given, reading
+/// it again at least every RECHECK.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this is the one place the core waits on the wall clock"
+)]
+fn wall_clock_wait(at: &Time, since: Option<&Time>) -> LocalFuture<'static, ()> {
+    let (at, since) = (parse(at), since.map(parse));
+    Box::pin(async move {
+        loop {
+            let now = Utc::now();
+            if now >= at || since.is_some_and(|since| now < since) {
+                return;
+            }
+            let left = (at - now).to_std().unwrap_or_default();
+            tokio::time::sleep(left.min(RECHECK)).await;
+        }
+    })
+}
+
 impl Environment for SystemEnvironment {
     #[expect(
         clippy::disallowed_methods,
@@ -41,13 +70,12 @@ impl Environment for SystemEnvironment {
         iso(Utc::now())
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "this is the one place the core waits on the wall clock"
-    )]
     fn until(&self, at: &Time) -> LocalFuture<'static, ()> {
-        let wait = (parse(at) - Utc::now()).to_std().unwrap_or_default();
-        Box::pin(tokio::time::sleep(wait))
+        wall_clock_wait(at, None)
+    }
+
+    fn until_or_back(&self, at: &Time, since: &Time) -> LocalFuture<'static, ()> {
+        wall_clock_wait(at, Some(since))
     }
 
     fn random(&self) -> u64 {
@@ -104,6 +132,11 @@ impl Environment for FixedEnvironment {
         }
         self.millis.set(self.millis.get().max(end));
         Box::pin(std::future::ready(()))
+    }
+
+    /// The fixed clock never goes back, so this waits as `until` does.
+    fn until_or_back(&self, at: &Time, _since: &Time) -> LocalFuture<'static, ()> {
+        self.until(at)
     }
 
     fn random(&self) -> u64 {
