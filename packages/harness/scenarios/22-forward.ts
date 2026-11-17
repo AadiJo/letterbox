@@ -272,8 +272,11 @@ scenario('a forward is refused until the original has loaded, and when it also a
     'a draft that both answers and forwards is invalid',
   )
   t.equal(box.sent(), [], 'nothing went out')
-  box.releaseBodies()
+  // The view closes, and a query after it is answered, before the body is let go, so the
+  // core has unsubscribed it by the time the body lands and no update for it races the end.
   watch.close()
+  await core.query({ view: 'accounts' })
+  box.releaseBodies()
 })
 
 scenario("a core killed while it fetches a forward's files sends the forward once after the restart", async (t) => {

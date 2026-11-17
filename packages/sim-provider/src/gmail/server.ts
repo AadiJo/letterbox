@@ -31,7 +31,7 @@
 //     the labels log keeps which messages changed, not which labels.
 
 import { createServer } from 'node:http'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import type { MessageRef, PageToken } from '../adapter.ts'
 import type { Seed, AnswerDamage, SimMailbox } from '../contract.ts'
@@ -141,7 +141,39 @@ const readBody = (request: IncomingMessage): Promise<string> =>
     request.on('end', () => resolve(text))
   })
 
-/** Starts the fake on 127.0.0.1 at a free port. `redirects` is the folder core-sim's loopback sockets go in. */
+/**
+ * Where a fake's port comes from. The fake closes its port while every account is offline and
+ * must get the same one back, since the core holds its URL. A port the OS hands out, for a
+ * listen on port 0 or an outgoing connection, comes from 32768 up on Linux and 49152 up on
+ * macOS and Windows, so nothing takes a port from this range while it is closed. Only another
+ * fake could, and `taken` keeps the fakes in one process apart.
+ */
+const PORTS = { first: 20000, count: 12768 }
+const taken = new Set<number>()
+
+/** Listens on a port from PORTS that no fake in this process holds, trying others while the one picked is in use. */
+const listenOnFreePort = (server: Server): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const attempt = (left: number) => {
+      const port = PORTS.first + Math.floor(Math.random() * PORTS.count)
+      if (taken.has(port)) return attempt(left)
+      const onError = (error: NodeJS.ErrnoException) => {
+        server.off('listening', onListening)
+        if (error.code === 'EADDRINUSE' && left > 0) return attempt(left - 1)
+        reject(error)
+      }
+      const onListening = () => {
+        server.off('error', onError)
+        taken.add(port)
+        resolve(port)
+      }
+      server.once('error', onError).once('listening', onListening)
+      server.listen(port, '127.0.0.1')
+    }
+    attempt(100)
+  })
+
+/** Starts the fake on 127.0.0.1 at a free port (see PORTS). `redirects` is the folder core-sim's loopback sockets go in. */
 export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   const mailboxes = new Map<string, MailboxEntry>()
   const handedOut = new Set<string>()
@@ -399,20 +431,17 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     close: () => {
       closing ??= new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy()
-        server.close(() => resolve())
+        server.close(() => {
+          if (port !== null) taken.delete(port)
+          resolve()
+        })
       })
       return closing
     },
   })
 
-  return new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', reject)
-      const address = server.address()
-      if (address === null || typeof address === 'string') return reject(new Error('fake gmail: no TCP address'))
-      port = address.port
-      resolve(fake(`http://127.0.0.1:${address.port}`))
-    })
+  return listenOnFreePort(server).then((listened) => {
+    port = listened
+    return fake(`http://127.0.0.1:${listened}`)
   })
 }
