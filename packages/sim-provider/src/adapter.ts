@@ -153,6 +153,12 @@ export type ChangesResult =
 
 export type BodyResult = { kind: 'body'; body: RemoteBody } | { kind: 'gone' }
 
+/** Which attachment an `attachment` call asks for: the one at `index` in the message's body. */
+export type AttachmentCall = { ref: MessageRef; index: number }
+
+/** An attachment's content in base64, or `gone` when the message or that attachment is. */
+export type AttachmentResult = { kind: 'bytes'; base64: string } | { kind: 'gone' }
+
 /** One change to push. Values are absolute: "set unread to false", never "toggle". */
 export type Mutation =
   | { kind: 'flags'; refs: MessageRef[]; unread?: boolean; flagged?: boolean }
@@ -205,6 +211,8 @@ export interface Adapter {
   changes(cursor: Cursor): Promise<Outcome<ChangesResult>>
   /** The body of one message, fetched when someone opens it. */
   body(ref: MessageRef): Promise<Outcome<BodyResult>>
+  /** The content of one attachment, the one at `index` in what `body` lists. The core asks it when it forwards the message. */
+  attachment(call: AttachmentCall): Promise<Outcome<AttachmentResult>>
   /** Pushes one change. The core calls this one at a time, in the order the user acted. */
   apply(mutation: Mutation): Promise<Outcome<ApplyResult>>
   /** Delivers one message (rule 10). The core calls it in the account's order, like `apply`. */

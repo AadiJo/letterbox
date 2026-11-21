@@ -42,6 +42,8 @@ export type Stored = {
   order: number
   facts: RemoteFacts
   body: RemoteBody
+  /** The content of each attachment `body` lists, in the same order. */
+  contents: Buffer[]
   unread: boolean
   flagged: boolean
   /** Mailbox keys. */
@@ -157,6 +159,12 @@ export const bodyOf = (seed: SeedMessage): RemoteBody => ({
   html: seed.html ?? null,
   attachments: attachmentsOf(seed).map(({ name, mime, size }) => ({ name, mime, size, inline: false })),
 })
+
+/** What a seed attachment holds: its name and a line end, over and over, to its size. */
+export const placeholderContent = ({ name, size }: SeedAttachment): Buffer => Buffer.alloc(size, `${name}\n`)
+
+/** The content of each of a seed message's attachments, as `bodyOf` lists them. */
+export const contentsOf = (seed: SeedMessage): Buffer[] => attachmentsOf(seed).map(placeholderContent)
 
 /** A seed message's attachments: as it names them, or that many placeholder files. */
 const attachmentsOf = ({ attachments = 0 }: SeedMessage): readonly SeedAttachment[] =>
