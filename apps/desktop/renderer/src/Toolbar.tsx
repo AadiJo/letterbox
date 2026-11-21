@@ -1,11 +1,15 @@
 // The reader's toolbar: Done, the actions the core has for the open conversation, and search,
 // in the reading column. A button is disabled when the core cannot do its action here
-// (actions.ts decides). Each one's tooltip names its key from SHORTCUTS.
+// (actions.ts decides), and it shows faint. With the core lost, Done and the actions are all
+// off at 40%, colors kept, as the strip at the reader's foot explains (LostCore.tsx). Search
+// stays on. Each one's tooltip names its key from SHORTCUTS.
 
 import type { ThreadSummary } from '@letterbox/protocol'
 import { Archive, Check, Flag, MailOpen, Trash2 } from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
 import { type Action, commandFor, type Mail, SHORTCUTS } from './actions.ts'
+import { useLost } from './core.ts'
+import { cx } from './cx.ts'
 import { MailDot } from './MailDot.tsx'
 import { Tooltip } from './Tooltip.tsx'
 
@@ -20,7 +24,10 @@ type Props = {
 type Icon = ComponentType<{ className?: string; strokeWidth?: number }>
 
 export function Toolbar({ thread, mail, onAct, search }: Props) {
-  const can = (action: Action) => thread !== undefined && commandFor(action, thread, mail) !== null
+  const lost = useLost() !== null
+  const can = (action: Action) => !lost && thread !== undefined && commandFor(action, thread, mail) !== null
+  /** How a button looks off: faint where the core cannot act, dimmed whole while it is gone. */
+  const off = lost ? 'opacity-40' : 'disabled:text-faint'
   const icon = (action: Action, label: string, Glyph: Icon) => (
     <Tooltip label={label} shortcut={SHORTCUTS[action]}>
       {(describedBy) => (
@@ -31,7 +38,10 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
           aria-keyshortcuts={SHORTCUTS[action]}
           disabled={!can(action)}
           onClick={() => void onAct(action)}
-          className="inline-flex size-8 items-center justify-center rounded-lg text-fg2 enabled:hover:bg-hover enabled:hover:text-fg disabled:text-faint"
+          className={cx(
+            'inline-flex size-8 items-center justify-center rounded-lg text-fg2 enabled:hover:bg-hover enabled:hover:text-fg',
+            off,
+          )}
         >
           <Glyph className="size-[17px]" strokeWidth={1.75} />
         </button>
@@ -50,7 +60,10 @@ export function Toolbar({ thread, mail, onAct, search }: Props) {
               aria-keyshortcuts={SHORTCUTS.done}
               disabled={!can('done')}
               onClick={() => void onAct('done')}
-              className="mr-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-row font-medium whitespace-nowrap text-fg shadow-outline enabled:hover:bg-hover disabled:text-faint"
+              className={cx(
+                'mr-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-row font-medium whitespace-nowrap text-fg shadow-outline enabled:hover:bg-hover',
+                off,
+              )}
             >
               <Check className="size-4" strokeWidth={1.75} aria-hidden />
               Done
