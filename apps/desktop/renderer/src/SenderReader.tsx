@@ -10,6 +10,8 @@ import { Fragment, type ReactNode, type RefObject, useEffect, useEffectEvent, us
 import { type Mail, markRead } from './actions.ts'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
+import { useLost } from './core.ts'
+import { cx } from './cx.ts'
 import { useNow } from './clock.ts'
 import { rangeFor } from './MailScreen.tsx'
 import type { Chrome } from './Screen.tsx'
@@ -35,8 +37,12 @@ type Props = {
 }
 
 export function SenderReader({ sender, inbox, most, chrome, onMarkRead, onArchive }: Props) {
-  const outlined =
-    'inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-row font-medium whitespace-nowrap text-fg shadow-outline enabled:hover:bg-hover disabled:text-faint'
+  // With the core lost, both are off at 40%, colors kept, as the toolbar's are (Toolbar.tsx).
+  const lost = useLost() !== null
+  const outlined = cx(
+    'inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-row font-medium whitespace-nowrap text-fg shadow-outline enabled:hover:bg-hover',
+    lost ? 'opacity-40' : 'disabled:text-faint',
+  )
   const unread = sender?.unread ?? 0
   return (
     <>
@@ -45,14 +51,19 @@ export function SenderReader({ sender, inbox, most, chrome, onMarkRead, onArchiv
         <div className="reading-column flex items-center gap-2">
           <button
             type="button"
-            disabled={unread === 0}
+            disabled={lost || unread === 0}
             onClick={() => sender && onMarkRead(sender)}
             className={`mr-2 ${outlined}`}
           >
             <MailOpen className="size-4" strokeWidth={1.75} aria-hidden />
             {unread > 0 ? `Mark ${unread} read` : 'All read'}
           </button>
-          <button type="button" disabled={!sender} onClick={() => sender && onArchive(sender)} className={outlined}>
+          <button
+            type="button"
+            disabled={lost || !sender}
+            onClick={() => sender && onArchive(sender)}
+            className={outlined}
+          >
             <Archive className="size-4" strokeWidth={1.75} aria-hidden />
             Archive all
             {sender && (

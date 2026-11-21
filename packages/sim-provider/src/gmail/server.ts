@@ -8,7 +8,8 @@
 // read or change mail go through the mailbox's own `respond`, so holding bodies and
 // applies, refusing the next apply, going offline and the call counts all work as
 // they do over the sim socket. The counts read in Gmail terms: one snapshot per
-// messages.list page, one changes per history.list, one body per format=full get,
+// messages.list page, one changes per history.list, one body per format=full get, one
+// attachment per messages.attachments.get (whose ids are "attachment-<n>", by place),
 // and one apply per modify or batchModify that changes labels. `setQuota` adds Gmail's
 // usage limits (quota.ts). The mailbox's `expirePageTokens` makes messages.list refuse
 // every page token it handed out. messages.send goes through the mailbox's `send` (send.ts),
@@ -255,6 +256,19 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
         ...(page.next === null ? {} : { nextPageToken: remember(page.next) }),
         resultSizeEstimate: messages.length,
       })
+    }
+    const attached = /^messages\/([^/]+)\/attachments\/attachment-(\d+)$/.exec(path)
+    if (method === 'GET' && attached !== null) {
+      const ref = refOfId(attached[1] ?? '')
+      if (ref === null) return fail(response, 404, 'Requested entity was not found.')
+      const arg = { ref, index: Number(attached[2]) - 1 }
+      const result = await ask(entry, { method: 'attachment', arg })
+      if (result.method !== 'attachment') return fail(response, 503, 'Backend error')
+      if (!result.outcome.ok && result.outcome.failure === 'offline') return void response.socket?.destroy()
+      if (!result.outcome.ok) return fail(response, 503, 'Backend error')
+      if (result.outcome.kind === 'gone') return fail(response, 404, 'Requested entity was not found.')
+      const content = Buffer.from(result.outcome.base64, 'base64')
+      return send(response, 200, { size: content.length, data: content.toString('base64url') })
     }
     if (method === 'GET' && message !== undefined) {
       const format = query.get('format') ?? 'full'

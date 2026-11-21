@@ -3,6 +3,7 @@
 
 import type {
   ApplyResult,
+  AttachmentResult,
   BodyResult,
   Cursor,
   MailboxRef,
@@ -27,7 +28,7 @@ import type {
 import { foldersEngine } from './folders.ts'
 import { labelsEngine } from './labels.ts'
 import { readSent } from './sent.ts'
-import { bodyOf, boxOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
+import { bodyOf, boxOf, contentsOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
 import type { Box, Draft, Store, Stored } from './store.ts'
 import { failedCall, isRecord } from './wire.ts'
 import type { Call, CallResult, Session } from './wire.ts'
@@ -47,7 +48,7 @@ export type MailboxEntry = {
   /** Goes into the session string, so `resume` can rebuild the adapter. */
   session: Session
   isOffline(): boolean
-  /** Answers one adapter call through `reply`. A body, apply, send or snapshot call waits while its method is held. */
+  /** Answers one adapter call through `reply`. A body, attachment, apply, send or snapshot call waits while its method is held. */
   respond(call: Call, reply: (result: CallResult, damage?: AnswerDamage) => void): void
 }
 
@@ -107,7 +108,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   const engine = dialect === 'labels' ? labelsEngine(store) : foldersEngine(store)
   // The Message-ID of every key ever delivered. It outlives an expunge, so replies can still name it.
   const messageIds = new Map<string, string>()
-  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, apply: 0, send: 0, find: 0 }
+  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, attachment: 0, apply: 0, send: 0, find: 0 }
   const sentCopies: SentCopy[] = []
   const pageSize = seed.pageSize ?? 50
   const canModify = seed.canModify ?? true
@@ -121,7 +122,13 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let searchLags = false
   // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
   let generation = 0
-  const holds = { body: createHold(), apply: createHold(), snapshot: createHold(), send: createHold() }
+  const holds = {
+    body: createHold(),
+    attachment: createHold(),
+    apply: createHold(),
+    snapshot: createHold(),
+    send: createHold(),
+  }
 
   if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`sim provider: pageSize ${pageSize} is not usable`)
 
@@ -164,6 +171,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       key: message.key,
       facts: factsOf(message, references, dialect === 'labels' ? (message.bulk ?? false) : null),
       body: bodyOf(message),
+      contents: contentsOf(message),
       unread: message.unread ?? true,
       flagged: message.flagged ?? false,
       mailboxes,
@@ -277,6 +285,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     holdSends: holds.send.hold,
     sendHeld: holds.send.held,
     releaseSends: holds.send.release,
+    holdAttachments: holds.attachment.hold,
+    attachmentHeld: holds.attachment.held,
+    releaseAttachments: holds.attachment.release,
     truth: () =>
       [...store.messages.values()].map((message) => ({
         key: message.key,
@@ -321,6 +332,12 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   const body = (ref: MessageRef): BodyResult => {
     const [message] = targetsOf([ref])
     return message ? { kind: 'body', body: message.body } : { kind: 'gone' }
+  }
+
+  /** The content of the attachment at `index` in a message's body, or gone. */
+  const attachment = ({ ref, index }: { ref: MessageRef; index: number }): AttachmentResult => {
+    const content = targetsOf([ref])[0]?.contents[index]
+    return content === undefined ? { kind: 'gone' } : { kind: 'bytes', base64: content.toString('base64') }
   }
 
   /** The mailboxes these refs name, or null if one of them names nothing. */
@@ -396,6 +413,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         return { method: 'changes', outcome: { ok: true, ...engine.changes(call.arg) } }
       case 'body':
         return { method: 'body', outcome: { ok: true, ...body(call.arg) } }
+      case 'attachment':
+        return { method: 'attachment', outcome: { ok: true, ...attachment(call.arg) } }
       case 'apply':
         return { method: 'apply', outcome: { ok: true, ...apply(call.arg) } }
       case 'send':

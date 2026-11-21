@@ -245,6 +245,15 @@ pub enum BodyResult {
     Gone,
 }
 
+/// What `attachment` found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttachmentResult {
+    /// The attachment's content, decoded from its transfer encoding.
+    Bytes(Vec<u8>),
+    /// The message is gone, or its body lists no attachment at that place.
+    Gone,
+}
+
 /// One change to push. Values are absolute: "set unread to false", never "toggle".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -363,6 +372,9 @@ pub trait Adapter {
     fn changes(&self, cursor: Cursor) -> LocalFuture<'_, Outcome<ChangesResult>>;
     /// The body of one message, fetched when someone opens it.
     fn body(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<BodyResult>>;
+    /// The content of one attachment: the one at `index` in the list `body` gives for the
+    /// message. The core asks it when it sends a forward of the message (see outbox.rs).
+    fn attachment(&self, r#ref: MessageRef, index: usize) -> LocalFuture<'_, Outcome<AttachmentResult>>;
     /// Pushes one change. The core calls this one at a time, in the order the user acted.
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>>;
     /// Delivers one message (rule 10). The core calls it in the account's order, like `apply`.

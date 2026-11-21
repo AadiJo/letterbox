@@ -212,37 +212,27 @@ pub fn remote_message(message: &Message) -> RemoteMessage {
     }
 }
 
-/// Decodes a part's base64url content, with or without padding, as UTF-8.
-fn decode(data: &str) -> String {
+/// Decodes base64url content, with or without padding.
+pub fn decode_bytes(data: &str) -> Vec<u8> {
     let engine = GeneralPurpose::new(
         &URL_SAFE,
         GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
     );
-    engine
-        .decode(data.trim())
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default()
+    engine.decode(data.trim()).unwrap_or_default()
 }
 
-/// Walks the MIME tree: the first text/plain and text/html parts are the body, and every
-/// part with a filename is an attachment.
-fn walk(part: &Part, body: &mut RemoteBody, html: &mut Option<String>, text: &mut Option<String>) {
-    let disposition = part
-        .headers
-        .iter()
-        .find(|header| header.name.eq_ignore_ascii_case("Content-Disposition"))
-        .map(|header| header.value.trim().to_ascii_lowercase())
-        .unwrap_or_default();
-    let mime = part.mime_type.to_ascii_lowercase();
+/// Decodes a part's base64url content as UTF-8.
+fn decode(data: &str) -> String {
+    String::from_utf8_lossy(&decode_bytes(data)).into_owned()
+}
+
+/// Walks the MIME tree for the body: the first text/plain and text/html parts. A part with
+/// a filename is an attachment (see `attachment_parts`), so the walk does not enter it.
+fn walk(part: &Part, html: &mut Option<String>, text: &mut Option<String>) {
     if !part.filename.is_empty() {
-        body.attachments.push(RemoteAttachment {
-            name: part.filename.clone(),
-            mime,
-            size: part.body.size,
-            inline: disposition.starts_with("inline"),
-        });
         return;
     }
+    let mime = part.mime_type.to_ascii_lowercase();
     let data = part.body.data.as_deref();
     match (mime.as_str(), data) {
         ("text/plain", Some(data)) if text.is_none() => *text = Some(decode(data)),
@@ -250,22 +240,55 @@ fn walk(part: &Part, body: &mut RemoteBody, html: &mut Option<String>, text: &mu
         _ => {}
     }
     for child in &part.parts {
-        walk(child, body, html, text);
+        walk(child, html, text);
     }
+}
+
+/// Every part with a filename, in tree order: the attachments, in the order the body lists
+/// them, so an attachment's place there finds its part here too.
+fn attachment_parts<'a>(part: &'a Part, found: &mut Vec<&'a Part>) {
+    if !part.filename.is_empty() {
+        return found.push(part);
+    }
+    for child in &part.parts {
+        attachment_parts(child, found);
+    }
+}
+
+/// The part of the attachment at `index` in a message fetched with `format=full`, if any.
+pub fn attachment_part(message: &Message, index: usize) -> Option<&Part> {
+    let mut found = Vec::new();
+    if let Some(payload) = &message.payload {
+        attachment_parts(payload, &mut found);
+    }
+    found.get(index).copied()
 }
 
 /// A message fetched with `format=full`, as the core opens it.
 pub fn remote_body(message: &Message) -> RemoteBody {
-    let mut body = RemoteBody {
-        text: String::new(),
-        html: None,
-        attachments: Vec::new(),
-    };
     let (mut html, mut text) = (None, None);
+    let mut parts = Vec::new();
     if let Some(payload) = &message.payload {
-        walk(payload, &mut body, &mut html, &mut text);
+        walk(payload, &mut html, &mut text);
+        attachment_parts(payload, &mut parts);
     }
-    body.text = text.unwrap_or_default();
-    body.html = html;
-    body
+    let attachments = parts.into_iter().map(|part| {
+        let disposition = part
+            .headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case("Content-Disposition"))
+            .map(|header| header.value.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        RemoteAttachment {
+            name: part.filename.clone(),
+            mime: part.mime_type.to_ascii_lowercase(),
+            size: part.body.size,
+            inline: disposition.starts_with("inline"),
+        }
+    });
+    RemoteBody {
+        text: text.unwrap_or_default(),
+        html,
+        attachments: attachments.collect(),
+    }
 }

@@ -20,6 +20,13 @@
 //!   - Delivered, the same record takes the provider's ref in the commit that settles the
 //!     change, so the conversation never shows it twice or drops it for a moment.
 //!   - Refused, it stays in its conversation, marked failed with the reason.
+//!   - A forward's attachments are fetched from the original's provider copy each time the
+//!     send is about to go, before it is saved `Sending`, so a fetch that fails, or a core that
+//!     stops during it, leaves it due. Only the text is saved: the files join it in memory
+//!     (`attach` in mime.rs) under the same headers, so every try sends the same message. A file
+//!     that is gone fails the send. A forward of a send of the user's that the provider does
+//!     not hold yet waits, due, until that send settles: then a pass is queued, which carries
+//!     it, or fails it with its original (`waiting_on`).
 
 use std::rc::Rc;
 
@@ -30,10 +37,13 @@ use letterbox_protocol::{
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
-use crate::adapter::{BodyResult, MessageRef, Outgoing, SendResult};
+use crate::adapter::{
+    AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, RemoteAttachment, SendResult,
+};
 use crate::clock::{iso, parse};
 use crate::draft::prepare;
 use crate::effect::Effect;
+use crate::mime::{File, attach};
 use crate::reconcile::{remove_with_thread, thread_for};
 use crate::sync::PassResult;
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Origin, World, put_change, put_message};
@@ -53,6 +63,31 @@ pub struct Outbound {
     pub header_id: String,
     /// The message it answers.
     pub reply_to: Option<MessageId>,
+    /// For a forward, what it carries of the original beyond its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<Forward>,
+}
+
+/// What a forward carries of its original beyond the text draft.rs wrote into it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    /// The message it forwards.
+    pub of: MessageId,
+    /// The original's attachments in the order its body lists them, so each one's place is
+    /// the index `Adapter::attachment` takes.
+    pub files: Vec<RemoteAttachment>,
+}
+
+/// What a forward's files come to when it is about to go.
+enum Contents {
+    /// Their content, in order. Empty for a send with no files.
+    Ready(Vec<Vec<u8>>),
+    /// The original is a send of the user's that the provider does not hold yet. The forward
+    /// stays due until it does.
+    Waiting,
+    /// The original, or one of its files, is gone, or the original's own send failed.
+    Gone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +169,7 @@ impl Inner {
                     bcc: prepared.bcc,
                     header_id: prepared.header_id,
                     reply_to: draft.in_reply_to.clone(),
+                    forward: prepared.forward,
                 };
                 put_change(
                     world,
@@ -174,17 +210,45 @@ impl Inner {
         self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));
     }
 
-    /// Sends `settled` for each send a sync's commit at `rev` found the copy of.
-    pub(crate) fn announce(&self, arrived: Arrived, rev: Rev) {
+    /// Sends `settled` for each send a sync's commit at `rev` found the copy of, and queues a
+    /// pass for any forward of one of them that waits.
+    pub(crate) fn announce(self: &Rc<Self>, arrived: Arrived, rev: Rev) {
         for change in arrived.0 {
+            self.waiting_on(&change);
             let result = ChangeResult::Done;
             self.send(CoreMessage::Settled { change, rev, result });
         }
     }
 
+    /// Queues a pass for the account of `change` when it is a send that just settled, so the
+    /// provider holds it or it failed, and a forward of its message waits for that (see
+    /// `Contents::Waiting`). The pass sends the forward, or fails it with its original. Every
+    /// way a send settles calls this: `delivered`, `announce` and `settle`. For a change that is
+    /// not a send it does nothing.
+    pub(crate) fn waiting_on(self: &Rc<Self>, change: &ChangeId) {
+        let waiting = {
+            let state = self.state.borrow();
+            let changes = &state.world.changes;
+            let delivered = changes.get(change).and_then(|record| match &record.effect {
+                Effect::Send(outbound) => Some((record.account_id.clone(), outbound.message_id.clone())),
+                _ => None,
+            });
+            delivered.filter(|(_, message_id)| {
+                changes.values().filter(|later| later.outcome.is_none()).any(|later| {
+                    matches!(&later.effect, Effect::Send(Outbound { stage: Stage::Due, forward: Some(forward), .. }) if forward.of == *message_id)
+                })
+            })
+        };
+        if let Some((account_id, _)) = waiting {
+            self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
+        }
+    }
+
     /// Picks up every send a restart found on its way. A held one restarts its undo window,
-    /// and one whose window ended while the core was stopped becomes due at once. One that may
-    /// have reached the provider (sending or unconfirmed) gets one check, at once (see confirm.rs).
+    /// and one whose window ended while the core was stopped becomes due at once. Each account
+    /// with a due send gets one pass, which carries it: a start runs no pass of its own, and a
+    /// forward stopped while its files were fetched is due. One that may have reached the
+    /// provider (sending or unconfirmed) gets one check, at once (see confirm.rs).
     pub(crate) fn resume_outbox(self: &Rc<Self>) {
         let waiting: Vec<(ChangeRecord, Stage)> = self
             .state
@@ -198,12 +262,17 @@ impl Inner {
                 _ => None,
             })
             .collect();
+        let mut due: Vec<AccountId> = Vec::new();
         for (change, stage) in waiting {
             match stage {
                 Stage::Held { until } => self.hold(change.id, &until),
                 Stage::Sending | Stage::Unconfirmed { .. } => self.book_check(&change.account_id, change.id, None),
+                Stage::Due if !due.contains(&change.account_id) => due.push(change.account_id),
                 Stage::Due => {}
             }
+        }
+        for account_id in due {
+            self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
         }
     }
 
@@ -245,6 +314,26 @@ impl Inner {
         staged
     }
 
+    /// Saves that a call to send has started, and the size of the message as it goes, files
+    /// and all, in one commit. The provider's copy reports that size, and a provider that gives
+    /// a moved message a new ref is matched to its copy by it (see `fingerprint` in reconcile.rs).
+    fn start_sending(self: &Rc<Self>, record: ChangeRecord, outbound: &Outbound, size: u64) -> ChangeRecord {
+        let effect = Effect::Send(Outbound {
+            stage: Stage::Sending,
+            ..outbound.clone()
+        });
+        let staged = ChangeRecord { effect, ..record };
+        self.commit(|world, tx, _| {
+            put_change(world, tx, staged.clone());
+            let message = world.messages.get(&outbound.message_id).cloned();
+            if let Some(mut message) = message.filter(|message| message.facts.size != size) {
+                message.facts.size = size;
+                put_message(world, tx, message);
+            }
+        });
+        staged
+    }
+
     /// Carries one send as far as its stage allows. Returns why the provider was not
     /// reached, if it was not. The send then stays where it was. A send that may have reached
     /// the provider is its checks' to settle (see confirm.rs): a pass only makes sure one is booked.
@@ -265,6 +354,36 @@ impl Inner {
         }
     }
 
+    /// The content of a forward's files, fetched from the provider's copy of the original.
+    /// Empty for any other send. A failure here means nothing was sent.
+    async fn contents(&self, linked: &Linked, outbound: &Outbound) -> Result<Contents, AdapterFailure> {
+        let Some(forward) = outbound.forward.as_ref().filter(|forward| !forward.files.is_empty()) else {
+            return Ok(Contents::Ready(Vec::new()));
+        };
+        let r#ref = {
+            let state = self.state.borrow();
+            let world = &state.world;
+            let original = world.messages.get(&forward.of);
+            match original.map(|record| (&record.origin, &record.body)) {
+                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),
+                Some((Origin::Provider { r#ref }, _)) => r#ref.clone(),
+                // Its send is on its way, so it gets a ref once the provider holds it (`waiting_on`).
+                Some((Origin::Outbox { outbox }, _)) => {
+                    let pending = world.changes.get(outbox).is_some_and(|send| send.outcome.is_none());
+                    return Ok(if pending { Contents::Waiting } else { Contents::Gone });
+                }
+            }
+        };
+        let mut contents = Vec::with_capacity(forward.files.len());
+        for index in 0..forward.files.len() {
+            match linked.adapter.attachment(r#ref.clone(), index).await? {
+                AttachmentResult::Bytes(bytes) => contents.push(bytes),
+                AttachmentResult::Gone => return Ok(Contents::Gone),
+            }
+        }
+        Ok(Contents::Ready(contents))
+    }
+
     /// Sends a due message, the one call to `send` it ever gets unless the provider surely did not get it.
     async fn post(
         self: &Rc<Self>,
@@ -273,14 +392,37 @@ impl Inner {
         record: ChangeRecord,
         outbound: Outbound,
     ) -> PassResult {
-        let record = self.restage(record, &outbound, Stage::Sending);
+        let contents = self.contents(linked, &outbound).await;
+        if !self.still_current(account_id, linked) {
+            return Ok(());
+        }
+        let contents = match contents? {
+            Contents::Ready(contents) => contents,
+            Contents::Waiting => return Ok(()),
+            Contents::Gone => {
+                self.settle(record, ChangeResult::Failed(Refusal::UnknownTarget));
+                return Ok(());
+            }
+        };
+        let files = outbound.forward.iter().flat_map(|forward| &forward.files);
+        let files: Vec<File<'_>> = files
+            .zip(&contents)
+            .map(|(file, bytes)| File {
+                name: &file.name,
+                mime: &file.mime,
+                inline: file.inline,
+                bytes,
+            })
+            .collect();
+        let raw = attach(&outbound.raw, &files);
+        let record = self.start_sending(record, &outbound, raw.len() as u64);
         let reply_to = {
             let state = self.state.borrow();
             let parent = outbound.reply_to.as_ref().and_then(|id| state.world.messages.get(id));
             parent.and_then(|parent| parent.provider_ref().cloned())
         };
         let outgoing = Outgoing {
-            raw: outbound.raw.clone(),
+            raw,
             bcc: outbound.bcc.clone(),
             message_id: outbound.header_id.clone(),
             reply_to,
@@ -342,6 +484,7 @@ impl Inner {
             });
             put_change(world, tx, ChangeRecord { outcome, ..record });
         });
+        self.waiting_on(&id);
         let result = ChangeResult::Done;
         self.send(CoreMessage::Settled {
             change: id,

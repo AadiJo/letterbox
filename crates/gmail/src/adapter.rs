@@ -4,17 +4,17 @@
 
 use indexmap::IndexMap;
 use letterbox_core::adapter::{
-    Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, BodyResult, ChangeSet, ChangesResult, Cursor, Found,
-    LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RemoteMailbox, RemoteMessage,
-    SendResult, SnapshotPage,
+    Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, AttachmentResult, BodyResult, ChangeSet, ChangesResult,
+    Cursor, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RemoteMailbox,
+    RemoteMessage, SendResult, SnapshotPage,
 };
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{Api, CallError};
 use crate::labels;
-use crate::message::{METADATA_HEADERS, remote_body, remote_message};
-use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, Profile};
+use crate::message::{METADATA_HEADERS, attachment_part, decode_bytes, remote_body, remote_message};
+use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, PartBody, Profile};
 
 /// messages.list allows up to 500. 100 is its default.
 const PAGE_SIZE: &str = "100";
@@ -214,6 +214,34 @@ impl GmailAdapter {
         }
     }
 
+    /// The content of the attachment at `index`. The attachment id comes from a fresh
+    /// format=full get, since Gmail may give a part another id on each get.
+    async fn attachment_of(&self, r#ref: MessageRef, index: usize) -> Outcome<AttachmentResult> {
+        let found = self.message(r#ref.as_str(), &[("format", "full")]).await;
+        let message = match found {
+            Ok(Some(message)) => message,
+            Ok(None) => return Ok(AttachmentResult::Gone),
+            Err(error) => return Err(error.failure()),
+        };
+        let Some(part) = attachment_part(&message, index) else {
+            return Ok(AttachmentResult::Gone);
+        };
+        if let Some(data) = &part.body.data {
+            return Ok(AttachmentResult::Bytes(decode_bytes(data)));
+        }
+        let Some(id) = &part.body.attachment_id else {
+            return Ok(AttachmentResult::Gone);
+        };
+        let path = format!("messages/{}/attachments/{id}", r#ref.as_str());
+        match self.api.get::<PartBody>(&path, &[]).await {
+            Ok(body) => Ok(AttachmentResult::Bytes(decode_bytes(
+                body.data.as_deref().unwrap_or_default(),
+            ))),
+            Err(error) if error.is_not_found() => Ok(AttachmentResult::Gone),
+            Err(error) => Err(error.failure()),
+        }
+    }
+
     /// Changes one message's labels. Gmail answers 404 when it no longer has the message.
     async fn modify_one(&self, id: &str, add: &[String], remove: &[String]) -> Result<(), CallError> {
         let body = Modify {
@@ -359,6 +387,10 @@ impl Adapter for GmailAdapter {
 
     fn body(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<BodyResult>> {
         Box::pin(self.body_of(r#ref))
+    }
+
+    fn attachment(&self, r#ref: MessageRef, index: usize) -> LocalFuture<'_, Outcome<AttachmentResult>> {
+        Box::pin(self.attachment_of(r#ref, index))
     }
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {

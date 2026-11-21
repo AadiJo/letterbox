@@ -13,11 +13,12 @@ use std::collections::BTreeSet;
 use std::collections::btree_set::Range;
 
 use chrono::TimeDelta;
-use letterbox_protocol::{AccountId, Body, Query, ThreadFilter, ThreadId, ThreadSummary, Time, Update};
+use letterbox_protocol::{AccountId, Body, Query, Recipient, ThreadFilter, ThreadId, ThreadSummary, Time, Update};
 
 use crate::clock::{iso, parse};
 use crate::rows::{Refresh, Rows};
 use crate::senders::{Senders, zone_of};
+use crate::suggestions::People;
 use crate::views::{Live, accounts, mailboxes, matches, missing_bodies, page, thread};
 use crate::work::Meter;
 use crate::world::World;
@@ -50,6 +51,13 @@ pub enum LiveView {
         missing: Vec<Body>,
     },
     Senders(Box<Senders>),
+    Recipients {
+        account_id: AccountId,
+        prefix: String,
+        limit: u64,
+        /// The answer, ranked when it could have changed, and each person's key in `People`.
+        shown: Vec<(String, Recipient)>,
+    },
 }
 
 pub fn place(summary: &ThreadSummary) -> Place {
@@ -96,7 +104,14 @@ fn listing(filter: &ThreadFilter, rows: &Rows, meter: &Meter) -> BTreeSet<Place>
 
 impl LiveView {
     /// The view for a new subscription. Call it with rows that are up to date.
-    pub fn open(query: &Query, world: &World, rows: &Rows, live: &dyn Live, meter: &Meter) -> LiveView {
+    pub fn open(
+        query: &Query,
+        world: &World,
+        rows: &Rows,
+        people: &People,
+        live: &dyn Live,
+        meter: &Meter,
+    ) -> LiveView {
         match query {
             Query::Accounts => LiveView::Accounts,
             Query::SignInOptions => LiveView::SignInOptions,
@@ -138,13 +153,32 @@ impl LiveView {
                     meter,
                 )))
             }
+            Query::Recipients {
+                account_id,
+                prefix,
+                limit,
+            } => LiveView::Recipients {
+                account_id: account_id.clone(),
+                prefix: prefix.clone(),
+                limit: limit.get(),
+                shown: people.suggest(account_id, prefix, limit.get(), meter),
+            },
         }
     }
 
     /// Brings the view up to date with a refresh. True when its answer could have changed.
     /// The accounts and mailboxes views read only small tables and what is in flight, so
-    /// they always answer again. The caller sends an answer only if it differs from the last.
-    pub fn catch_up(&mut self, refresh: &Refresh, world: &World, rows: &Rows, live: &dyn Live, meter: &Meter) -> bool {
+    /// they always answer again. A recipients view ranks again only when the refresh changed
+    /// someone it showed or its prefix matches. The caller sends an answer only if it differs from the last.
+    pub fn catch_up(
+        &mut self,
+        refresh: &Refresh,
+        world: &World,
+        rows: &Rows,
+        people: &People,
+        live: &dyn Live,
+        meter: &Meter,
+    ) -> bool {
         match self {
             LiveView::Accounts | LiveView::SignInOptions | LiveView::Mailboxes { .. } => true,
             LiveView::Threads {
@@ -194,6 +228,19 @@ impl LiveView {
                 touched || loading_changed
             }
             LiveView::Senders(senders) => senders.catch_up(refresh, rows, live, meter),
+            LiveView::Recipients {
+                account_id,
+                prefix,
+                limit,
+                shown,
+            } => {
+                let keys: Vec<String> = shown.iter().map(|(key, _)| key.clone()).collect();
+                let stale = matches!(refresh, Refresh::Everything) || people.touches(account_id, prefix, &keys);
+                if stale {
+                    *shown = people.suggest(account_id, prefix, *limit, meter);
+                }
+                stale
+            }
         }
     }
 
@@ -258,6 +305,9 @@ impl LiveView {
             },
             LiveView::Senders(senders) => Update::Senders {
                 data: senders.answer(rows),
+            },
+            LiveView::Recipients { shown, .. } => Update::Recipients {
+                data: shown.iter().map(|(_, recipient)| recipient.clone()).collect(),
             },
         }
     }

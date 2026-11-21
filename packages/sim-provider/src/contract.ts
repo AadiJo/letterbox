@@ -90,6 +90,7 @@ export type CallCounts = {
   snapshot: number
   changes: number
   body: number
+  attachment: number
   apply: number
   send: number
   find: number
@@ -111,6 +112,9 @@ export type SentCopy = {
   /** The message as the provider got it. */
   raw: string
 }
+
+/** One attachment of a sent copy, as the provider read it from the message. */
+export type SentFile = { name: string; mime: string; inline: boolean; content: Buffer }
 
 /** One mailbox at the sim provider, as a scenario drives it. Every method takes effect at once. */
 export interface SimMailbox {
@@ -173,6 +177,12 @@ export interface SimMailbox {
   sendHeld(count?: number): Promise<void>
   /** Delivers and answers every waiting send call, in the order they came, and stops holding. */
   releaseSends(): void
+  /** From now on, attachment calls wait. Lets a scenario stop a core while it fetches a forward's files. */
+  holdAttachments(): void
+  /** Resolves once `count` attachment calls (1 unless given) are waiting, at once if they already are. */
+  attachmentHeld(count?: number): Promise<void>
+  /** Answers every waiting attachment call, from the truth as it is now, and stops holding. */
+  releaseAttachments(): void
 
   // What a scenario checks.
   truth(): TruthMessage[]

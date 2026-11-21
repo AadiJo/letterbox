@@ -1,8 +1,9 @@
 // The main window: the sidebar, then the list pane and the reader pane of the place it shows.
-// Below 1100 px wide the sidebar folds away behind a toggle in the list's head.
+// Below 1100 px wide the sidebar folds away behind a toggle in the list's head. With the core
+// lost, the reader pane says so at its foot (LostCore.tsx).
 
 import { useState } from 'react'
-import { useLost, useView } from './core.ts'
+import { useView } from './core.ts'
 import { MailboxesProvider } from './Label.tsx'
 import { LetGoScreen } from './LetGoScreen.tsx'
 import { MailScreen } from './MailScreen.tsx'
@@ -16,7 +17,6 @@ export function App() {
   const accounts = useView({ view: 'accounts' }) ?? []
   const mailboxes = useView({ view: 'mailboxes' }) ?? []
   const people = usePeople()
-  const lost = useLost()
   const [place, setPlace] = useState<Place>({ kind: 'people' })
   const [query, setQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -96,14 +96,6 @@ export function App() {
           )}
           <div className="flex min-w-0 flex-1">{screen()}</div>
         </MailboxesProvider>
-        {lost && (
-          <p
-            role="alert"
-            className="absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-xl bg-float px-3.5 py-2.5 text-meta text-fg2 shadow-float"
-          >
-            Lost the core: {lost}. Reload to connect again.
-          </p>
-        )}
       </div>
     </div>
   )

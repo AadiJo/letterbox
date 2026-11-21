@@ -13,6 +13,7 @@
 //   first sync    the dev host's parts in this process, with snapshot pages held (ui/first-sync.ts)
 //   rollback      the same parts, with an archive the provider refuses (ui/rollback.ts)
 //   reply         the same parts: the docked reply editor, sending, undo, a refused send and a lost answer (ui/reply.ts)
+//   lost core     the same parts: the strip at the reader's foot once the connection drops, and Reload (ui/lost-core.ts)
 // Every process a run started must be gone at its end.
 //
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
@@ -25,6 +26,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { type Browser, chromium } from 'playwright'
 import { checkDone } from './ui/done.ts'
 import { checkFirstSync } from './ui/first-sync.ts'
+import { checkLostCore } from './ui/lost-core.ts'
 import { startDevHost } from './ui/host.ts'
 import { checkPeopleFirst } from './ui/people-first.ts'
 import { checkReply } from './ui/reply.ts'
@@ -71,6 +73,7 @@ try {
   await runCheck(() => checkFirstSync(browser))
   await runCheck(() => checkRollback(browser))
   await runCheck(() => checkReply(browser))
+  await runCheck(() => checkLostCore(browser))
 } finally {
   await browser.close()
 }

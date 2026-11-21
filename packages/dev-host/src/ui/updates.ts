@@ -307,7 +307,7 @@ async function checkKeyboardPastTheWindow(page: Page) {
 }
 
 export async function checkUpdatesScreens(browser: Browser, url: string) {
-  const { page, errors, close } = await openPage(browser, url, 'trace-updates.zip', ZONE)
+  const { page, relay, errors, close } = await openPage(browser, url, 'trace-updates.zip', ZONE)
   await page.locator('[data-field="people-count"]').waitFor()
   await checkList(page)
   await checkReader(page)
@@ -468,6 +468,32 @@ export async function checkUpdatesScreens(browser: Browser, url: string) {
   await captureC2(page, 'people-letgo-1440')
 
   await page.setViewportSize(SIZES.wide)
-  equal(appErrors(errors), [], 'the page logged no errors')
+  await checkLost(page, relay.drop)
+  equal(appErrors(errors, { lostCore: true }), [], 'the page logged no errors')
   await close()
+}
+
+/** How a control looks off while the core is lost: disabled, and dimmed whole to 40%. */
+const offWhileLost = (control: Locator) =>
+  control.evaluate((element) => ({
+    disabled: element instanceof HTMLButtonElement && element.disabled,
+    opacity: getComputedStyle(element).opacity,
+  }))
+
+/**
+ * With the core lost, Let go in Done's slot is off at 40%, as Done and the toolbar's actions
+ * are, and d lets nothing go. It stays on Let go?: a screen opened after the loss would open
+ * subscriptions on a closed connection.
+ */
+async function checkLost(page: Page, drop: () => Promise<void>) {
+  await nav(page, 'Let go').click()
+  await page.locator('[role="option"]').first().click()
+  await page.locator('[data-field="waited"]').waitFor()
+  const count = await text(page, '[data-field="let-go-count"]')
+  await drop()
+  await page.locator('[data-field="lost-core"]').waitFor()
+  const letGo = page.getByRole('button', { name: 'Let go', exact: true })
+  equal(await offWhileLost(letGo), { disabled: true, opacity: '0.4' }, 'while lost, Let go is off at 40%, like Done')
+  await page.keyboard.press('d')
+  equal(await text(page, '[data-field="let-go-count"]'), count, 'while lost, d lets nothing go')
 }

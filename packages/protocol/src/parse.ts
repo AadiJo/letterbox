@@ -131,6 +131,7 @@ const update = type({ view: "'accounts'", data: account.array() })
     view: "'senders'",
     data: { total: 'number', unreadSenders: 'number', unread: 'number', senders: sender.array() },
   })
+  .or({ view: "'recipients'", data: type({ name: 'string | null', address: 'string' }).array() })
 
 const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 'string' } })
   .or({

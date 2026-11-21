@@ -55,11 +55,15 @@ export function summarize() {
 
 /**
  * The page's errors, without those an HTML body's frame logs when its sandbox and policy
- * refuse its script, loads and links. Those are the protection working.
+ * refuse its script, loads and links. Those are the protection working. A check that ends the
+ * connection on purpose passes `lostCore`, and the page's report of each loss ("lost the core:",
+ * the renderer's core.ts) is expected there. Anywhere else a lost core is an error.
  */
-export const appErrors = (errors: readonly string[]) =>
+export const appErrors = (errors: readonly string[], { lostCore = false } = {}) =>
   errors.filter(
-    (error) => !/Content Security Policy|in a sandboxed frame|sandboxed and the 'allow-scripts'/.test(error),
+    (error) =>
+      !/Content Security Policy|in a sandboxed frame|sandboxed and the 'allow-scripts'/.test(error) &&
+      !(lostCore && error.startsWith('lost the core: ')),
   )
 
 /** True for a URL that leaves this machine. */

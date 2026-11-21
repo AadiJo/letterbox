@@ -7,7 +7,8 @@
 import type { Account, Mailbox, MailboxId, SenderId, SenderSummary } from '@letterbox/protocol'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { commandFor, send } from './actions.ts'
-import { useView } from './core.ts'
+import { lostReason, useView } from './core.ts'
+import { LostCore } from './LostCore.tsx'
 import { OVERSCAN, rangeFor } from './MailScreen.tsx'
 import { ROW_HEIGHT, SenderRow } from './Row.tsx'
 import { type Chrome, ListPane, namesIn, typing } from './Screen.tsx'
@@ -38,13 +39,23 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
   const [open, setOpen] = useState<SenderSummary | null>(null)
   const selected = senders.find((sender) => sender.id === open?.id) ?? open
   const most = busiest(senders.flatMap((sender) => sender.days))
-  const select = (id: SenderId) => setOpen(senders.find((sender) => sender.id === id) ?? null)
+  // Rises whenever the user moves on: opening a sender, or z. An Archive all that the core
+  // answers later opens the next sender only if nothing moved on meanwhile, as in Screen.tsx.
+  const generation = useRef(0)
+  const openSender = (sender: SenderSummary | null) => {
+    generation.current += 1
+    setOpen(sender)
+  }
+  const select = (id: SenderId) => openSender(senders.find((sender) => sender.id === id) ?? null)
 
   /**
    * Marks all of a sender's mail read, or archives all of it: one command naming every
    * conversation the core lists for it, built as the toolbar's would be for the first.
    */
   const act = async (sender: SenderSummary, kind: 'read' | 'archive') => {
+    // Off while the core is lost, as the toolbar's actions are (LostCore.tsx).
+    if (lostReason() !== null) return
+    const started = generation.current
     const filter = { mailboxId: inbox, sender: sender.id, ...(kind === 'read' && { unread: true }) }
     const threads = await threadsOf(filter, kind === 'read' ? sender.unread : sender.threads)
     const [first] = threads
@@ -55,14 +66,16 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
     if (!change) return
     notifySender(kind === 'read' ? 'Marked read' : 'Archived', sender.name ?? sender.address, first.id, change)
     // Archiving the open sender takes it out of the list, so the next one opens in its place.
-    if (kind === 'archive' && sender.id === open?.id) {
+    if (kind === 'archive' && sender.id === open?.id && generation.current === started) {
       const index = senders.findIndex((one) => one.id === sender.id)
-      setOpen(senders[index + 1] ?? senders[index - 1] ?? null)
+      openSender(senders[index + 1] ?? senders[index - 1] ?? null)
     }
   }
 
   /** Undoes what the toast shows: the last action's notice, or else a reply in its undo window (sending.ts). */
   const undoLast = async () => {
+    // z counts as moving on, so an action still waiting on the core opens nothing after it.
+    generation.current += 1
     await (hasNotice() ? undo(namesIn(chrome.mail)) : undoSend())
   }
 
@@ -77,7 +90,7 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
     if (step === undefined) return
     const index = senders.findIndex((sender) => sender.id === open?.id)
     const next = senders[index === -1 ? 0 : index + step]
-    if (next) setOpen(next)
+    if (next) openSender(next)
     event.preventDefault()
   })
   useEffect(() => {
@@ -106,6 +119,8 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
         />
       </ListPane>
       <section aria-label="Reader" className="relative flex min-w-0 flex-1 flex-col bg-reader">
+        {/* First in tree order and shown last, as in Screen.tsx: LostCore says why. */}
+        <LostCore />
         <SenderReader
           sender={selected ?? undefined}
           inbox={inbox}

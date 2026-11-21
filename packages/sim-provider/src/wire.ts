@@ -9,6 +9,8 @@
 import type {
   AdapterFailure,
   ApplyResult,
+  AttachmentCall,
+  AttachmentResult,
   BodyResult,
   ChangesResult,
   Cursor,
@@ -29,6 +31,7 @@ export type Call =
   | { method: 'snapshot'; arg: PageToken | null }
   | { method: 'changes'; arg: Cursor }
   | { method: 'body'; arg: MessageRef }
+  | { method: 'attachment'; arg: AttachmentCall }
   | { method: 'apply'; arg: Mutation }
   | { method: 'send'; arg: Outgoing }
   | { method: 'find'; arg: string }
@@ -38,6 +41,7 @@ export type CallResult =
   | { method: 'snapshot'; outcome: Outcome<SnapshotPage> }
   | { method: 'changes'; outcome: Outcome<ChangesResult> }
   | { method: 'body'; outcome: Outcome<BodyResult> }
+  | { method: 'attachment'; outcome: Outcome<AttachmentResult> }
   | { method: 'apply'; outcome: Outcome<ApplyResult> }
   | { method: 'send'; outcome: Outcome<SendResult> }
   | { method: 'find'; outcome: Outcome<Found> }

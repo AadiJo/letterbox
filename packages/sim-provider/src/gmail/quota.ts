@@ -57,6 +57,7 @@ export const unitsOf = (method: string, path: string, query: URLSearchParams): n
     if (path === 'history') return 2
     if (path === 'messages') return 5
     // messages.get's format defaults to full.
+    if (/^messages\/[^/]+\/attachments\/[^/]+$/.test(path)) return 5
     if (/^messages\/[^/]+$/.test(path)) return HEAVY_FORMATS.has(query.get('format') ?? 'full') ? 60 : 20
   }
   if (method === 'POST') {

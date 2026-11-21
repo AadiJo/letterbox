@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
 use letterbox_core::adapter::{
-    Adapter, AdapterCapabilities, AdapterFactory, AdapterFailure, ApplyResult, BodyResult, ChangesResult, Connection,
-    Cursor, FactoryOption, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult,
-    SignInFailure, SignInInput, SnapshotPage,
+    Adapter, AdapterCapabilities, AdapterFactory, AdapterFailure, ApplyResult, AttachmentResult, BodyResult,
+    ChangesResult, Connection, Cursor, FactoryOption, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing,
+    PageToken, SendResult, SignInFailure, SignInInput, SnapshotPage,
 };
 use letterbox_protocol::SignInMethod;
 use serde::de::DeserializeOwned;
@@ -33,8 +33,8 @@ use tokio_util::task::TaskTracker;
 
 pub use crate::keychain::FileKeychain;
 use crate::wire::{
-    Call, CallResult, Dialect, Reply, RequestBody, Session, apply_outcome, encode, outcome, send_outcome,
-    sign_in_result,
+    AttachmentCall, Call, CallResult, Dialect, Reply, RequestBody, Session, apply_outcome, attachment_outcome, encode,
+    outcome, send_outcome, sign_in_result,
 };
 
 /// One open socket to the server. Cloning shares the socket.
@@ -269,6 +269,16 @@ impl Adapter for SimAdapter {
 
     fn body(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<BodyResult>> {
         Box::pin(self.call(Call::Body(r#ref)))
+    }
+
+    fn attachment(&self, r#ref: MessageRef, index: usize) -> LocalFuture<'_, Outcome<AttachmentResult>> {
+        Box::pin(async move {
+            let _in_flight = self.calls.token();
+            match self.forward(Call::Attachment(AttachmentCall { r#ref, index })).await {
+                Some(result) if result.method == "attachment" => attachment_outcome(result.outcome),
+                _ => Err(AdapterFailure::Offline),
+            }
+        })
     }
 
     /// As `send`, read by `apply_outcome` (adapter rule 11).

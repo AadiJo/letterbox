@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    Account, AccountId, Mailbox, MailboxId, SenderPage, SignInOption, ThreadDetail, ThreadFilter, ThreadId,
+    Account, AccountId, Mailbox, MailboxId, Recipient, SenderPage, SignInOption, ThreadDetail, ThreadFilter, ThreadId,
     ThreadSummary, present,
 };
 
@@ -46,6 +46,12 @@ pub enum Query {
         offset: u64,
         limit: NonZeroU64,
     },
+    /// People to suggest in a recipient field, best first (see `Recipient`).
+    Recipients {
+        account_id: AccountId,
+        prefix: String,
+        limit: NonZeroU64,
+    },
 }
 
 /// The answer to a query. A threads update replaces the whole window.
@@ -58,6 +64,7 @@ pub enum Update {
     Threads { data: ThreadPage },
     Thread { data: Option<ThreadDetail> },
     Senders { data: SenderPage },
+    Recipients { data: Vec<Recipient> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

@@ -87,6 +87,10 @@ pub struct PartBody {
     pub size: u64,
     /// The content as base64url, when it is inline in the response.
     pub data: Option<String>,
+    /// Names an attachment whose content is not inline, for users.messages.attachments.get.
+    /// It can differ from one messages.get to the next, so it is used only fresh.
+    #[serde(default)]
+    pub attachment_id: Option<String>,
 }
 
 /// users.history.list.
