@@ -39,6 +39,7 @@ const transport: Transport = {
       end: (error) => {
         listener.end(error)
         lost = error.message
+        console.error('lost the core:', error)
         for (const watcher of lostWatchers) watcher()
       },
     }),

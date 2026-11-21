@@ -2,10 +2,12 @@
 // brings the row back where it was, trash from Sent keeps its row on a labels account, the
 // toast says "Undoing…" until the core answers, z during a row's exit brings that conversation
 // back open, every refused undo says why, and an undo whose answer a lost connection kept says
-// only that it may or may not have gone through.
+// only that it may or may not have gone through. With the connection lost, each toast sits
+// above the lost-core strip, readable (lost-core.ts).
 
 import type { Page } from 'playwright'
 import { conversations, mailRows, nav, openInbox, settle, toast, waitForTotal } from './mail-list.ts'
+import { toastBesideStrip } from './lost-core.ts'
 import { capture, equal, type Relay } from './record.ts'
 
 /** Runs every undo check, from Inbox. */
@@ -275,6 +277,11 @@ async function checkLostConnection(page: Page, relay: Relay) {
     { text: UNANSWERED, undo: 0 },
     'an undo the core accepted, whose answer the lost connection kept, says the outcome is not known',
   )
+  equal(
+    await toastBesideStrip(page),
+    { gap: 12, readable: true },
+    `"${UNANSWERED}" sits 12 px above the lost-core strip, readable`,
+  )
   await capture(page, 'undo-lost-connection')
   equal(await inInboxAfterReload(page, undone), true, 'after a reload, that undo shows as done: the row is back')
 
@@ -291,7 +298,7 @@ async function checkLostConnection(page: Page, relay: Relay) {
   // The connection is gone before z, while the toast still offers Undo. Nothing is sent.
   const archived = await archiveAndWait(page)
   await relay.drop()
-  await page.getByRole('alert').waitFor()
+  await page.locator('[data-field="lost-core"]').waitFor()
   const before = undos(relay)
   equal(
     await toast(page).getByRole('button', { name: /^Undo/ }).count(),
@@ -303,6 +310,11 @@ async function checkLostConnection(page: Page, relay: Relay) {
     [await toastAfterUndo(page), undos(relay) - before],
     [{ text: NOT_UNDONE, undo: 0 }, 0],
     'z with the connection already lost sends nothing, and says it was not undone',
+  )
+  equal(
+    await toastBesideStrip(page),
+    { gap: 12, readable: true },
+    `"${NOT_UNDONE}" sits 12 px above the lost-core strip, readable`,
   )
   equal(await inInboxAfterReload(page, archived), false, 'after a reload, that change stands too')
 }

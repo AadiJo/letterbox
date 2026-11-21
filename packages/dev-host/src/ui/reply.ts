@@ -470,7 +470,8 @@ export async function checkReply(browser: Browser) {
       [2, 1],
       'the reply whose answer was lost reached the provider once, and shows once',
     )
-    equal(appErrors(errors), [], 'the page logged no errors')
+    // The recovery checks end the connection on purpose (reply-recovery.ts).
+    equal(appErrors(errors, { lostCore: true }), [], 'the page logged no errors')
   } finally {
     await opened.close()
     await server.close()
