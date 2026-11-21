@@ -38,8 +38,8 @@ const typing = (target: EventTarget | null) =>
  */
 export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
-  // Rises on every selection and when the screen goes, so an action that resumes after a
-  // wait can tell whether anything moved on meanwhile.
+  // Rises on every selection, on every z and when the screen goes, so an action that resumes
+  // after a wait can tell whether anything moved on meanwhile.
   const generation = useRef(0)
   // False once the screen has gone. An action it started that the core accepts later shows
   // no toast and moves no row: those belong to whatever screen is up now.
@@ -65,9 +65,9 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
    * Runs `action` on the open conversation, unless the screen goes before the core answers.
    * Does nothing while the core is lost. A refused action shakes its row. Once the core
    * accepts a command that takes the conversation out of this list, its row slides out and,
-   * as the row folds, the next one opens, unless anything was selected or the screen left
-   * meanwhile. The list has not changed yet when the action starts, so the rows around the
-   * open one are where they were.
+   * as the row folds, the next one opens, unless anything was selected, z began an undo, or
+   * the screen left meanwhile. The list has not changed yet when the action starts, so the
+   * rows around the open one are where they were.
    */
   const act = async (action: Action) => {
     // The toolbar shows every action off while the core is lost, and the keys match it.
@@ -99,9 +99,11 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
 
   /**
    * Undoes what the toast shows: the last action's notice, or else the reply in its undo
-   * window. Once the core accepts, its conversation is back and opens again.
+   * window. Once the core accepts, its conversation is back and opens again. z counts as
+   * moving on, so a row whose exit ends while the core decides opens no next one.
    */
   const undoLast = async () => {
+    generation.current += 1
     const started = generation.current
     const names = {
       provider: (threadId: ThreadId) => {

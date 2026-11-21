@@ -1,8 +1,9 @@
 // The UI checks for undo of Archive and Trash through the core, over done.ts's dev host: z
 // brings the row back where it was, trash from Sent keeps its row on a labels account, the
-// toast says "Undoing…" until the core answers, every refused undo says why, and an undo whose
-// answer a lost connection kept says only that it may or may not have gone through. With the
-// connection lost, each toast sits above the lost-core strip, readable (lost-core.ts).
+// toast says "Undoing…" until the core answers, z during a row's exit brings that conversation
+// back open, every refused undo says why, and an undo whose answer a lost connection kept says
+// only that it may or may not have gone through. With the connection lost, each toast sits
+// above the lost-core strip, readable (lost-core.ts).
 
 import type { Page } from 'playwright'
 import { conversations, mailRows, nav, openInbox, settle, toast, waitForTotal } from './mail-list.ts'
@@ -14,6 +15,7 @@ export async function checkUndo(page: Page, relay: Relay) {
   await checkArchiveAndTrashUndo(page)
   await checkTrashFromSent(page)
   await checkUndoing(page, relay)
+  await checkUndoDuringExit(page, relay)
   await checkRefusals(page, relay)
   await checkLostConnection(page, relay)
 }
@@ -94,11 +96,16 @@ async function checkTrashFromSent(page: Page) {
   equal(await looks(), { moving: 0, shown: true }, 'undo after trash shows the row as it was')
 }
 
-/** Archives Inbox's first row and waits for its toast. */
+/**
+ * Archives Inbox's first row, and waits for its toast and for the row to leave the list. A row
+ * still on its way out is the first row, so the next click would open it again.
+ */
 async function archiveFirst(page: Page) {
+  const id = await mailRows(page).first().getAttribute('data-row')
   await mailRows(page).first().click()
   await page.keyboard.press('e')
   await toast(page).filter({ hasText: 'Archived' }).waitFor()
+  await page.locator(`[data-list="mail"] [data-row="${id}"]`).waitFor({ state: 'detached' })
 }
 
 /** z while the core has not answered the undo shows "Undoing…", with Undo in place, until it does. */
@@ -122,6 +129,51 @@ async function checkUndoing(page: Page, relay: Relay) {
   relay.resume()
   await page.locator(`[data-list="mail"] [data-row="${id}"][aria-selected="true"]`).waitFor()
   await toast(page).waitFor({ state: 'detached' })
+}
+
+/** The ids of the rows the mail list shows as open. */
+const openRows = (page: Page) =>
+  page.locator('[data-list="mail"] [aria-selected="true"]').evaluateAll((rows) => rows.map((row) => row.dataset['row']))
+
+/**
+ * z while the archived row is still on its way out, with the core's answer held until the exit
+ * has ended. The exit would open the next row as the row folds, but z counts as moving on: once
+ * the core accepts, the conversation is back and open. The check sets the order itself. It
+ * pauses the row's slide the frame it starts, presses z, and holds the core's answer. Then it
+ * lets the exit run to its end, and only then hands the page the answer.
+ */
+async function checkUndoDuringExit(page: Page, relay: Relay) {
+  await openInbox(page)
+  const id = await mailRows(page).first().getAttribute('data-row')
+  if (!id) throw new Error('Inbox shows no conversation')
+  await mailRows(page).first().click()
+  await page.keyboard.press('e')
+  // Pauses the slide in the frame it starts, so z lands while the row is still leaving.
+  await page.waitForFunction(
+    (row) => {
+      const slide = document.querySelector(`[data-list="mail"] [data-row="${row}"]`)?.getAnimations() ?? []
+      slide.forEach((animation) => animation.pause())
+      return slide.length > 0
+    },
+    id,
+    { polling: 'raf' },
+  )
+  const paused = relay.pauseAtAccepted()
+  await page.keyboard.press('z')
+  await paused
+  const leaving = page.locator(`[data-list="mail"] [data-row="${id}"]`)
+  await leaving.evaluate((row) => row.getAnimations().forEach((animation) => animation.play()))
+  // Gone from the list once its slide and fold have ended, so the exit has done all it does.
+  await leaving.waitFor({ state: 'detached' })
+  relay.resume()
+  await toast(page).waitFor({ state: 'detached' })
+  await leaving.waitFor()
+  await settle(page)
+  equal(
+    await openRows(page),
+    [id],
+    'z during an exit, answered once the exit has ended, brings the conversation back open, not the next one',
+  )
 }
 
 /** Archives Inbox's first row, has the relay refuse its undo with `conflict`, and reads the toast. */
@@ -177,7 +229,7 @@ const undos = (relay: Relay) => relay.fromPage().filter((text) => text.includes(
 
 /** Archives Inbox's open row and waits until it has left, and the next one has opened. Returns its id. */
 async function archiveAndWait(page: Page) {
-  // A row the last check archived may still be folding at the top, so the open row is the one archived.
+  // Every archive here waits for its row to leave, so the first row is one still in Inbox.
   await mailRows(page).first().click()
   const archived = await page.locator('[data-list="mail"] [aria-selected="true"]').getAttribute('data-row')
   if (!archived) throw new Error('Inbox opened no conversation')
