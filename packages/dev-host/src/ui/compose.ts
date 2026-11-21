@@ -258,7 +258,8 @@ export async function checkCompose(browser: Browser) {
 
     await checkComposeRecovery(page, relay, mailbox)
     await checkForward(page, relay, mailbox, hold)
-    equal(appErrors(errors), [], 'the compose run logged no page errors')
+    // compose-recovery.ts drops the connection on purpose, and the page reports each loss.
+    equal(appErrors(errors, { lostCore: true }), [], 'the compose run logged no page errors')
   } finally {
     await opened.close()
     await server.close()
