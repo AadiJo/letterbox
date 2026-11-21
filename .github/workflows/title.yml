@@ -1,0 +1,34 @@
+# Checks a pull request's title against the commit rules (lint/commit-title.ts), because a
+# squash merge makes the title the commit on main. It is its own workflow so that editing a
+# title or description reruns this alone, in seconds, and never the full check (check.yml).
+# The main branch's ruleset requires its `title` status next to `check`.
+
+name: title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+# A newer title replaces the one being checked.
+concurrency:
+  group: title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The lint is a plain TypeScript file with no dependencies, so it needs no install.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # The title goes through an environment variable, never straight into the script.
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: node lint/commit-title.ts --title "$TITLE"
