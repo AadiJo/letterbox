@@ -17,6 +17,7 @@ use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Op, Origin, put_c
 use crate::{Inner, Linked};
 
 impl Inner {
+    /// Gives a change its last word, `result`, in one commit, then sends `settled`.
     pub(crate) fn settle(self: &Rc<Self>, change: ChangeRecord, result: ChangeResult) {
         let id = change.id.clone();
         let rev = self.commit(|world, tx, at| {
@@ -29,6 +30,8 @@ impl Inner {
                 },
             );
         });
+        // A forward that waits for this send, now failed, fails with it (see outbox.rs).
+        self.waiting_on(&id);
         self.send(CoreMessage::Settled {
             change: id,
             rev,

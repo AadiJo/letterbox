@@ -198,10 +198,12 @@ const crashRun = (renderer: string) =>
     process.kill(pid, 'SIGKILL')
     const alert = run.page.getByRole('alert')
     await alert.waitFor({ timeout: WAIT_MS })
+    // The strip says it plainly. Main's own words, with the signal, stay in its tooltip.
+    const reason = alert.locator('[data-field="lost-reason"]')
     equal(
-      (await alert.textContent())?.includes('the core exited on SIGKILL'),
-      true,
-      'crash: the page shows that the core exited',
+      [await reason.textContent(), (await reason.getAttribute('title'))?.startsWith('the core exited on SIGKILL')],
+      ['Lost the core: the core exited.', true],
+      "crash: the page shows that the core exited, with main's reason in the tooltip",
     )
     await run.page.screenshot({ path: join(ARTIFACTS, 'electron-core-lost.png') })
     const code = await quit(run)

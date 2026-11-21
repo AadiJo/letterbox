@@ -6,8 +6,11 @@
 //! `signed-in` reply. An oauth sign-in gets `open-url`, then `signed-in` once the
 //! scenario approves or denies it. Closing the socket cancels a pending oauth attempt.
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use letterbox_core::adapter::{
-    AdapterFailure, ApplyResult, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken, SendResult, SignInFailure,
+    AdapterFailure, ApplyResult, AttachmentResult, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken,
+    SendResult, SignInFailure,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -20,6 +23,7 @@ pub enum Call {
     Snapshot(Option<PageToken>),
     Changes(Cursor),
     Body(MessageRef),
+    Attachment(AttachmentCall),
     Apply(Mutation),
     Send(Outgoing),
     /// A Message-ID, without angle brackets.
@@ -33,11 +37,19 @@ impl Call {
             Call::Snapshot(_) => "snapshot",
             Call::Changes(_) => "changes",
             Call::Body(_) => "body",
+            Call::Attachment(_) => "attachment",
             Call::Apply(_) => "apply",
             Call::Send(_) => "send",
             Call::Find(_) => "find",
         }
     }
+}
+
+/// Which attachment an `attachment` call asks for: the one at `index` in the message's body.
+#[derive(Clone, Debug, Serialize)]
+pub struct AttachmentCall {
+    pub r#ref: MessageRef,
+    pub index: usize,
 }
 
 /// The answer to one adapter call. `outcome` is read once the caller knows which type to expect.
@@ -152,6 +164,25 @@ pub fn apply_outcome(value: Value) -> Outcome<ApplyResult> {
             failure: AdapterFailure::Offline,
         },
     )
+}
+
+/// Reads the outcome of an attachment call: `{"kind": "bytes", "base64": ...}` or `{"kind": "gone"}`.
+pub fn attachment_outcome(value: Value) -> Outcome<AttachmentResult> {
+    #[derive(Deserialize)]
+    #[serde(tag = "kind", rename_all = "kebab-case")]
+    enum Found {
+        Bytes { base64: String },
+        Gone,
+    }
+    Ok(match outcome::<Found>(value)? {
+        Found::Bytes { base64 } => {
+            let bytes = STANDARD.decode(base64);
+            AttachmentResult::Bytes(
+                bytes.unwrap_or_else(|error| panic!("sim provider: attachment is not base64: {error}")),
+            )
+        }
+        Found::Gone => AttachmentResult::Gone,
+    })
 }
 
 /// Reads the result of a sign-in: `{"ok": true, "session": ...}` or a failure.

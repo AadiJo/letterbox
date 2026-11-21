@@ -10,6 +10,7 @@ name = "core-sim"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 letterbox-protocol.workspace = true
 letterbox-core.workspace = true
 letterbox-gmail.workspace = true

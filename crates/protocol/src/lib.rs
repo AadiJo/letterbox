@@ -25,8 +25,10 @@
 
 mod answer;
 mod command;
+mod ids;
 mod lists;
 mod outcome;
+mod recipients;
 mod send;
 mod sign_in;
 mod your_turn;
@@ -35,8 +37,12 @@ use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
+pub use ids::{
+    AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SenderId, SignInOptionId, SubscriptionId, ThreadId,
+};
 pub use lists::{SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
+pub use recipients::Recipient;
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
 pub use sign_in::{PasswordInput, SignInError, SignInMethod, SignInOption, SignedIn};
@@ -44,83 +50,6 @@ use ts_rs::TS;
 pub use your_turn::YourTurn;
 
 pub const PROTOCOL: u32 = 0;
-
-// ---------------------------------------------------------------- ids
-
-/// Declares opaque string ids. In TypeScript each one is a branded string, so a plain
-/// string cannot be passed where an id belongs.
-macro_rules! ids {
-    ($($(#[$doc:meta])* $name:ident = $brand:literal),* $(,)?) => {$(
-        $(#[$doc])*
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
-        #[serde(transparent)]
-        #[ts(type = $brand)]
-        pub struct $name(String);
-
-        impl $name {
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-    )*};
-}
-
-ids!(
-    AccountId = "Id<'Account'>",
-    MailboxId = "Id<'Mailbox'>",
-    ThreadId = "Id<'Thread'>",
-    MessageId = "Id<'Message'>",
-    BlobId = "Id<'Blob'>",
-    SignInOptionId = "Id<'SignInOption'>",
-    /// One per sender in Updates, in one account.
-    SenderId = "Id<'Sender'>",
-    /// One per subscription.
-    SubscriptionId = "Id<'Subscription'>",
-    /// One per command.
-    ChangeId = "Id<'Change'>",
-    /// One per request.
-    RequestId = "Id<'Request'>",
-);
-
-/// Ids only the core makes. A client uses the ids it was sent and never makes one.
-/// clippy.toml bans `minted` outside crates/core, so a UI crate cannot call it.
-macro_rules! minted_by_core {
-    ($($name:ident),* $(,)?) => {$(
-        impl $name {
-            pub fn minted(value: impl Into<String>) -> Self {
-                Self(value.into())
-            }
-        }
-    )*};
-}
-
-minted_by_core!(AccountId, MailboxId, ThreadId, MessageId, BlobId, SignInOptionId);
-minted_by_core!(SenderId);
-
-/// Ids a client makes, one per subscription, command or request, so it can match the answers.
-macro_rules! minted_by_client {
-    ($($name:ident),* $(,)?) => {$(
-        impl $name {
-            pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
-            }
-        }
-    )*};
-}
-
-minted_by_client!(SubscriptionId, ChangeId, RequestId);
 
 /// Store revision. It rises on every change to the store and never repeats.
 pub type Rev = u64;
@@ -357,6 +286,12 @@ pub enum Query {
         offset: u64,
         limit: NonZeroU64,
     },
+    /// People to suggest in a recipient field, best first (see `Recipient`).
+    Recipients {
+        account_id: AccountId,
+        prefix: String,
+        limit: NonZeroU64,
+    },
 }
 
 /// The answer to a query. A threads update replaces the whole window.
@@ -369,6 +304,7 @@ pub enum Update {
     Threads { data: ThreadPage },
     Thread { data: Option<ThreadDetail> },
     Senders { data: SenderPage },
+    Recipients { data: Vec<Recipient> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

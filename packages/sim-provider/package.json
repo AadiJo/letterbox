@@ -6,7 +6,9 @@
     "./contract": "./src/contract.ts",
     "./server": "./src/server.ts",
     "./gmail": "./src/gmail/server.ts",
-    "./seeds": "./src/seeds.ts"
+    "./seeds": "./src/seeds.ts",
+    "./sent": "./src/sent.ts",
+    "./store": "./src/store.ts"
   },
   "dependencies": {
     "@letterbox/protocol": "workspace:*"

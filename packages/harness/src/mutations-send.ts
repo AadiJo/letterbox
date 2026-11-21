@@ -30,8 +30,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'a send waits for the next sync instead of going out when its window ends',
     file: core('outbox.rs'),
-    find: '        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));\n',
-    replace: '        drop(account_id);\n',
+    find: '        self.restage(record, &outbound, Stage::Due);\n        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));\n',
+    replace: '        self.restage(record, &outbound, Stage::Due);\n        drop(account_id);\n',
     scenarios: 'a reply shows at once',
   },
   {
@@ -72,7 +72,7 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'the core does not save that a send started, so after a crash it sends again blind',
     file: core('outbox.rs'),
-    find: '        let record = self.restage(record, &outbound, Stage::Sending);\n',
+    find: '        let record = self.start_sending(record, &outbound, raw.len() as u64);\n',
     replace: '',
     scenarios: 'cut off by a crash',
   },

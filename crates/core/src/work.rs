@@ -12,6 +12,8 @@ pub struct Work {
     pub summarized: u64,
     /// Threads checked against a thread list's filter.
     pub matched: u64,
+    /// People a recipients view folded and ranked (see suggestions.rs).
+    pub ranked: u64,
 }
 
 impl Sub for Work {
@@ -20,6 +22,7 @@ impl Sub for Work {
         Work {
             summarized: self.summarized - earlier.summarized,
             matched: self.matched - earlier.matched,
+            ranked: self.ranked - earlier.ranked,
         }
     }
 }
@@ -43,6 +46,14 @@ impl Meter {
         let work = self.work.get();
         self.work.set(Work {
             matched: work.matched + 1,
+            ..work
+        });
+    }
+
+    pub fn ranked(&self) {
+        let work = self.work.get();
+        self.work.set(Work {
+            ranked: work.ranked + 1,
             ..work
         });
     }

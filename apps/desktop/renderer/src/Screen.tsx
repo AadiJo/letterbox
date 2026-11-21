@@ -5,6 +5,8 @@ import type { Account, Command, MailboxId, ThreadId } from '@letterbox/protocol'
 import { PanelLeft } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Action, actionForKey, canReply, type Mail, markRead, REPLY_KEY, run } from './actions.ts'
+import { lostReason } from './core.ts'
+import { LostCore } from './LostCore.tsx'
 import { leave, release, shake } from './motion.ts'
 import { Reader } from './Reader.tsx'
 import { threadDetail, threadRecord, useThread } from './threads.ts'
@@ -36,8 +38,8 @@ const typing = (target: EventTarget | null) =>
  */
 export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
-  // Rises on every selection and when the screen goes, so an action that resumes after a
-  // wait can tell whether anything moved on meanwhile.
+  // Rises on every selection, on every z and when the screen goes, so an action that resumes
+  // after a wait can tell whether anything moved on meanwhile.
   const generation = useRef(0)
   // False once the screen has gone. An action it started that the core accepts later shows
   // no toast and moves no row: those belong to whatever screen is up now.
@@ -61,13 +63,15 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
 
   /**
    * Runs `action` on the open conversation, unless the screen goes before the core answers.
-   * A refused action shakes its row. Once the core
+   * Does nothing while the core is lost. A refused action shakes its row. Once the core
    * accepts a command that takes the conversation out of this list, its row slides out and,
-   * as the row folds, the next one opens, unless anything was selected or the screen left
-   * meanwhile. The list has not changed yet when the action starts, so the rows around the
-   * open one are where they were.
+   * as the row folds, the next one opens, unless anything was selected, z began an undo, or
+   * the screen left meanwhile. The list has not changed yet when the action starts, so the
+   * rows around the open one are where they were.
    */
   const act = async (action: Action) => {
+    // The toolbar shows every action off while the core is lost, and the keys match it.
+    if (lostReason() !== null) return
     const thread = selected ? threadRecord(selected) : undefined
     if (!thread) return
     const index = order.indexOf(thread.id)
@@ -82,8 +86,12 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     if (generation.current === started) select(next)
   }
 
-  /** Opens the reply editor on the open conversation, once its messages are here and its account can send. */
+  /**
+   * Opens the reply editor on the open conversation, once its messages are here and its account
+   * can send. Not while the core is lost: the reply bar shows off then, and r matches it.
+   */
   const reply = (all: boolean) => {
+    if (lostReason() !== null) return
     const thread = selected ? threadRecord(selected) : undefined
     const detail = selected ? threadDetail(selected) : undefined
     if (thread && detail && canReply(thread, mail)) startReply(detail, all)
@@ -91,9 +99,11 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
 
   /**
    * Undoes what the toast shows: the last action's notice, or else the reply in its undo
-   * window. Once the core accepts, its conversation is back and opens again.
+   * window. Once the core accepts, its conversation is back and opens again. z counts as
+   * moving on, so a row whose exit ends while the core decides opens no next one.
    */
   const undoLast = async () => {
+    generation.current += 1
     const started = generation.current
     const names = {
       provider: (threadId: ThreadId) => {
@@ -155,7 +165,10 @@ type ScreenProps = {
   children: ReactNode
 }
 
-/** The list pane beside the reader pane. The toast floats over the reader, never over the rows. */
+/**
+ * The list pane beside the reader pane. The toast floats over the reader, never over the rows.
+ * With the core lost, a strip across the reader's foot says so (LostCore), and the list runs on past it.
+ */
 export function Screen({ title, subtitle, chrome, accounts, selection, children }: ScreenProps) {
   const thread = useThread(selection.selected)
   return (
@@ -194,6 +207,8 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
         {children}
       </section>
       <section aria-label="Reader" className="relative flex min-w-0 flex-1 flex-col bg-reader">
+        {/* First in tree order and shown last: LostCore says why. */}
+        <LostCore />
         <Toolbar thread={thread} mail={chrome.mail} onAct={selection.act} search={chrome.search} />
         <Reader id={selection.selected} mail={chrome.mail} />
         <Toast onUndo={selection.undo} />

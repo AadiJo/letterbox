@@ -1,0 +1,222 @@
+// Breaks in composing: new conversations, forwards (the core's writing of them, the outbox's
+// fetching of their files, the Gmail adapter's and the sim's reading of files) and recipient
+// suggestions. mutations.ts runs them with the core's other breaks.
+
+import type { Mutation } from './breaks.ts'
+
+const core = (file: string) => `crates/core/src/${file}`
+
+export const FORWARD_MUTATIONS: Mutation[] = [
+  {
+    name: 'an undone new conversation stays where it was',
+    file: core('outbox.rs'),
+    find: 'self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));',
+    replace: 'self.cancel(change, record, |_, _| drop(message_id));',
+    scenarios: 'a new conversation waits in its undo window',
+  },
+  {
+    name: 'a forward goes out without its files',
+    file: core('outbox.rs'),
+    find: '        let raw = attach(&outbound.raw, &files);',
+    replace: '        let raw = attach(&outbound.raw, &files[..0]);',
+    scenarios: 'the right MIME',
+  },
+  {
+    name: 'every file of a forward is fetched from the place of the first',
+    file: core('outbox.rs'),
+    find: 'linked.adapter.attachment(r#ref.clone(), index).await?',
+    replace: 'linked.adapter.attachment(r#ref.clone(), 0).await?',
+    scenarios: 'the right MIME',
+  },
+  {
+    name: 'a forward leaves out the text of the message it forwards',
+    file: core('draft.rs'),
+    find: '        format!("{written}\\n\\n{block}\\n\\n{original}")',
+    replace: '        format!("{written}\\n\\n{block}")',
+    scenarios: 'the right MIME',
+  },
+  {
+    name: 'a forward names the original in References, so it threads into that conversation elsewhere',
+    file: core('mime.rs'),
+    find: '        push(&mut out, "X-Forwarded-Message-Id", &format!("<{original}>"));',
+    replace: '        push(&mut out, "References", &format!("<{original}>"));',
+    scenarios: 'the right MIME',
+  },
+  {
+    name: 'a long or accented file name is written as it is in a quoted string',
+    file: core('mime.rs'),
+    find: '    if quotable && value.len() <= PARAMETER {',
+    replace: '    if quotable || value.len() <= PARAMETER || !quotable {',
+    scenarios: 'the right MIME',
+  },
+  {
+    name: 'a forward is marked sending before its files are fetched, so a failed fetch strands it unconfirmed',
+    file: core('outbox.rs'),
+    find: '        let contents = self.contents(linked, &outbound).await;',
+    replace:
+      '        let record = self.start_sending(record, &outbound, 0);\n        let contents = self.contents(linked, &outbound).await;',
+    also: [
+      {
+        file: core('outbox.rs'),
+        find: '        let record = self.start_sending(record, &outbound, raw.len() as u64);\n',
+        replace: '',
+      },
+    ],
+    scenarios: 'a forward made offline goes out once',
+  },
+  {
+    name: 'a forward whose files are gone goes out without them',
+    file: core('outbox.rs'),
+    find: '                AttachmentResult::Gone => return Ok(Contents::Gone),',
+    replace: '                AttachmentResult::Gone => continue,',
+    also: [
+      {
+        file: core('outbox.rs'),
+        find: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),',
+        replace: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Ready(Vec::new())),',
+      },
+    ],
+    scenarios: 'original is gone before it goes out',
+  },
+  {
+    name: 'a forward of a message still loading is refused as if the message were gone',
+    file: core('draft.rs'),
+    find: '        None => Err(Refusal::Conflict),',
+    replace: '        None => Err(Refusal::UnknownTarget),',
+    scenarios: 'refused until the original has loaded',
+  },
+  {
+    name: 'a draft that both answers and forwards is sent as both',
+    file: core('draft.rs'),
+    find: '    if draft.in_reply_to.is_some() && draft.forward_of.is_some() {',
+    replace: '    if draft.in_reply_to.is_some() && draft.forward_of.is_some() && false {',
+    scenarios: 'refused until the original has loaded',
+  },
+  {
+    name: 'the Gmail adapter fetches the file after the one asked for',
+    file: 'crates/gmail/src/message.rs',
+    find: '    found.get(index).copied()',
+    replace: '    found.get(index + 1).copied()',
+    scenarios: 'the right MIME',
+  },
+  {
+    name: 'the sim keeps a sent copy without its files',
+    file: 'packages/sim-provider/src/sent.ts',
+    find: '    found.files.push(...inner.files)\n',
+    replace: '',
+    scenarios: 'a forward of a forward',
+  },
+  {
+    name: 'people who only wrote to me rank with the people I wrote to',
+    file: core('suggestions.rs'),
+    find: '                .cmp(&(a.wrote_to > 0))',
+    replace: '                .cmp(&(b.wrote_to > 0))',
+    scenarios: 'put people I wrote to first',
+  },
+  {
+    name: 'every message counts the same in suggestions, however old',
+    file: core('suggestions.rs'),
+    find: '        parse(at).timestamp().div_euclid(PERIOD_SECONDS)',
+    replace: '        parse(at).timestamp().div_euclid(i64::MAX)',
+    scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: 'the sender of a newsletter is suggested',
+    file: core('suggestions.rs'),
+    find: '        } else if !is_automated(&record.facts) && !in_spam(world, record) {',
+    replace: '        } else if !in_spam(world, record) {',
+    scenarios: 'recipient suggestions match',
+  },
+  {
+    name: 'the sender of mail in spam is suggested',
+    file: core('suggestions.rs'),
+    find: '        } else if !is_automated(&record.facts) && !in_spam(world, record) {',
+    replace: '        } else if !is_automated(&record.facts) {',
+    scenarios: 'recipient suggestions match',
+  },
+  {
+    name: 'a no-reply address the user wrote to is suggested',
+    file: core('suggestions.rs'),
+    find: '        if is_machine_address(&who.address) {',
+    replace: '        if is_machine_address(&who.address) && false {',
+    scenarios: 'recipient suggestions match',
+  },
+  {
+    name: 'the user is suggested, when they copied themselves',
+    file: core('suggestions.rs'),
+    find: '.chain(&record.facts.cc).filter(|who| !me(who))',
+    replace: '.chain(&record.facts.cc)',
+    scenarios: 'recipient suggestions match',
+  },
+  {
+    name: 'suggestions match the address alone, not the words of a name',
+    file: core('suggestions.rs'),
+    find: '    for name in person.names.keys() {',
+    replace: '    for name in person.names.keys().filter(|_| false) {',
+    scenarios: 'recipient suggestions match',
+  },
+  {
+    name: 'suggestions miss new mail until the core starts again',
+    file: core('suggestions.rs'),
+    find: '                for id in touched {\n                    self.rebuild(world, id);',
+    replace:
+      '                for id in touched.iter().filter(|_| false) {\n                    self.rebuild(world, id);',
+    scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: 'a recipients view keeps showing someone whose mail is gone',
+    file: core('suggestions.rs'),
+    find: '            shown.contains(key) || (',
+    replace: '            false || (',
+    scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: 'a restart leaves a due send for the next sync, so a forward stopped while fetching its files sits there',
+    file: core('outbox.rs'),
+    find: '        for account_id in due {\n',
+    replace: '        for account_id in due.into_iter().filter(|_| false) {\n',
+    scenarios: "killed while it fetches a forward's files",
+  },
+  {
+    name: 'a forward of a send the provider may not hold yet fails as if its original were gone',
+    file: core('outbox.rs'),
+    find: '                    return Ok(if pending { Contents::Waiting } else { Contents::Gone });',
+    replace: '                    return Ok(if pending { Contents::Gone } else { Contents::Gone });',
+    scenarios: 'may not hold yet',
+  },
+  {
+    name: 'a forward that waits for its original is not carried when a sync finds the original',
+    file: core('outbox.rs'),
+    find: '        for change in arrived.0 {\n            self.waiting_on(&change);\n',
+    replace: '        for change in arrived.0 {\n',
+    scenarios: 'may not hold yet',
+  },
+  {
+    name: 'a forward that waits for its original is not carried when a lookup finds the original',
+    file: core('outbox.rs'),
+    find: '        self.waiting_on(&id);\n',
+    replace: '',
+    scenarios: 'as soon as a lookup finds the first',
+  },
+  {
+    name: 'a forwarded Message-ID of 973 to 983 characters makes a line longer than 998',
+    file: core('mime.rs'),
+    find: 'letter.forwards.filter(|id| id.len() <= MAX_FORWARDED)',
+    replace: 'letter.forwards.filter(|id| id.len() <= MAX_FORWARDED + 11)',
+    scenarios: 'too long for its line',
+  },
+  {
+    name: 'an address in both To and Cc counts as two messages to them',
+    file: core('suggestions.rs'),
+    find: '            for who in everyone.filter(|who| named.insert(who.address.to_lowercase())) {',
+    replace: '            for who in everyone.filter(|who| named.insert(who.address.clone()) || true) {',
+    scenarios: 'put people I wrote to first',
+  },
+  {
+    name: 'a forward that waits for its original keeps waiting after the original fails',
+    file: core('push.rs'),
+    find: '        self.waiting_on(&id);\n',
+    replace: '',
+    scenarios: 'never found fails with it',
+  },
+]
