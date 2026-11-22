@@ -6,6 +6,11 @@
 // edits anything it writes the originals to JOURNAL, and the next run puts them back first.
 // The journal is on disk before the first edit and goes only once the originals are, so even
 // a machine that stops leaves either no journal and clean files, or a whole journal.
+//
+// One break run at a time per checkout: a run holds LOCK from start to exit, since a second run
+// would put back files under the first one's break, or build over its core. A break whose core
+// build broke for a reason that is not its own source, such as the compiler being killed by the
+// out-of-memory killer, is an ERROR: the machine failed, not the break's entry.
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import {
@@ -23,7 +28,7 @@ import {
 import { constants, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
-import { CORE_DID_NOT_BUILD } from './client.ts'
+import { BUILD_BROKE, CORE_DID_NOT_BUILD } from './client.ts'
 
 export type Edit = {
   file: string
@@ -54,6 +59,15 @@ const JOURNAL = join(ROOT, 'target', 'break-journal.json')
 /** One file a break edited: its text before the break and with it. */
 type Journaled = { path: string; original: string; broken: string }
 type Journal = { pid: number; break: string; files: Journaled[] }
+
+/** Held from the start of a run to its exit, so only one break run at a time works in this checkout. */
+const LOCK = join(ROOT, 'target', 'break.lock')
+
+/** What LOCK holds: the run's pid, this boot's id, and when the run began. */
+type Lock = { pid: number; boot: string | null; startedAt: string }
+
+/** True once this process holds LOCK. The `exit` handler removes it then, and only then. */
+let locked = false
 
 /** The break applied now, or null. The `exit` handler puts its files back. */
 let applied: Journal | null = null
@@ -110,6 +124,7 @@ function putBack() {
 process.on('exit', () => {
   stopChild()
   putBack()
+  if (locked) rmSync(LOCK, { force: true })
 })
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
@@ -127,6 +142,64 @@ function alive(pid: number) {
     // EPERM: it runs, as another user.
     return error instanceof Error && 'code' in error && error.code === 'EPERM'
   }
+}
+
+/** This boot's id on Linux, or null elsewhere. A lock from before a restart never counts as held, even by a reused pid. */
+function bootId() {
+  try {
+    return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+  } catch {
+    return null
+  }
+}
+
+/** The lock another run left, or null when it cannot be read. */
+function readLock(): Lock | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(LOCK, 'utf8'))
+    if (typeof value !== 'object' || value === null) return null
+    const { pid, boot, startedAt } = value as Record<string, unknown>
+    if (typeof pid !== 'number' || typeof startedAt !== 'string') return null
+    return { pid, boot: typeof boot === 'string' ? boot : null, startedAt }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Called first in a run. Takes LOCK, created only if it is not there, so of two runs started at
+ * once exactly one gets it. While a live run holds it, this run says who and exits 1. A lock left
+ * by a run that is gone, from a kill or a restart, is taken over, loudly.
+ */
+function lock() {
+  mkdirSync(dirname(LOCK), { recursive: true })
+  const mine: Lock = { pid: process.pid, boot: bootId(), startedAt: new Date().toISOString() }
+  const path = relative(ROOT, LOCK)
+  for (let tries = 0; tries < 2; tries += 1) {
+    try {
+      writeFileSync(LOCK, JSON.stringify(mine), { flag: 'wx' })
+      locked = true
+      return
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+    }
+    const holder = readLock()
+    if (holder && holder.boot === mine.boot && alive(holder.pid)) {
+      console.log(`\n!!! Another break run (pid ${holder.pid}, started ${holder.startedAt}) holds ${path}.`)
+      console.log(
+        "!!! Only one break run at a time works in a checkout, since a second would undo the first one's breaks.",
+      )
+      console.log('!!! No break ran. Wait for that run to end, then start again.\n')
+      process.exit(1)
+    }
+    const left = holder
+      ? `a break run (pid ${holder.pid}, started ${holder.startedAt}) that is no longer running`
+      : 'a break run, and cannot be read'
+    console.log(`\n!!! ${path} was left by ${left}. Taking it over.\n`)
+    rmSync(LOCK, { force: true })
+  }
+  console.log(`\n!!! Another break run took ${path} over first. No break ran.\n`)
+  process.exit(1)
 }
 
 /** True when `value` has a journal's shape. */
@@ -234,7 +307,14 @@ function runScenarios(filter: string): Promise<{ status: number | null; stdout: 
 }
 
 /** Applies one mutation, runs its scenarios, restores the files. `ok` is true when the scenarios failed, as they should. */
-async function caught(mutation: Mutation): Promise<{ ok: boolean; why: string }> {
+/**
+ * How one break went: caught, missed (its scenarios still pass, or its entry no longer fits the
+ * code), or error (its core build broke for a reason that is not its source).
+ */
+type Outcome = { outcome: 'caught' | 'missed' | 'error'; why: string }
+
+/** Applies one mutation, runs its scenarios, restores the files, and says how it went. */
+async function caught(mutation: Mutation): Promise<Outcome> {
   // Every edit is made in memory first, so a break whose text is missing changes nothing.
   const files = new Map<string, Journaled>()
   for (const edit of [mutation, ...(mutation.also ?? [])]) {
@@ -243,7 +323,10 @@ async function caught(mutation: Mutation): Promise<{ ok: boolean; why: string }>
     const file = files.get(path) ?? { path, original, broken: original }
     const count = file.broken.split(edit.find).length - 1
     if (count !== 1)
-      return { ok: false, why: `its text appears ${count} times in ${edit.file}. Update the entry to match the code.` }
+      return {
+        outcome: 'missed',
+        why: `its text appears ${count} times in ${edit.file}. Update the entry to match the code.`,
+      }
     files.set(path, { ...file, broken: file.broken.replace(edit.find, edit.replace) })
   }
   applied = { pid: process.pid, break: mutation.name, files: [...files.values()] }
@@ -258,8 +341,13 @@ async function caught(mutation: Mutation): Promise<{ ok: boolean; why: string }>
     const run = await runScenarios(mutation.scenarios)
     const summary = run.stdout.trim().split('\n').at(-1) ?? ''
     if (run.status === CORE_DID_NOT_BUILD)
-      return { ok: false, why: `the broken code does not compile. Update the entry so it builds.\n${run.stderr}` }
-    return run.status === 0 ? { ok: false, why: `the scenarios still pass: ${summary}` } : { ok: true, why: summary }
+      return {
+        outcome: 'missed',
+        why: `the broken code does not compile. Update the entry so it builds.\n${run.stderr}`,
+      }
+    if (run.status === BUILD_BROKE) return { outcome: 'error', why: summary }
+    if (run.status === 0) return { outcome: 'missed', why: `the scenarios still pass: ${summary}` }
+    return { outcome: 'caught', why: summary }
   } finally {
     putBack()
   }
@@ -282,17 +370,29 @@ function shardOf<Item>(items: Item[]): Item[] {
   return chosen
 }
 
-/** Runs every break, or one shard of them (see `shardOf`), and exits non-zero if any went unnoticed. */
+/** What each outcome prints before the break's name. */
+const LABELS = { caught: 'caught', missed: 'MISSED', error: 'ERROR ' } satisfies Record<Outcome['outcome'], string>
+
+/**
+ * Runs every break, or one shard of them (see `shardOf`), and exits non-zero if any went
+ * unnoticed or could not be tried.
+ */
 export async function runBreaks(all: Mutation[]): Promise<never> {
+  lock()
   recover()
   const mutations = shardOf(all)
-  let missed = 0
+  const count = { caught: 0, missed: 0, error: 0 }
   for (const mutation of mutations) {
     const result = await caught(mutation)
-    if (!result.ok) missed += 1
-    console.log(`${result.ok ? 'caught' : 'MISSED'}  ${mutation.name}${result.ok ? '' : `\n        ${result.why}`}`)
+    count[result.outcome] += 1
+    const why = result.outcome === 'caught' ? '' : `\n        ${result.why}`
+    console.log(`${LABELS[result.outcome]}  ${mutation.name}${why}`)
   }
-  console.log(`\n${mutations.length - missed} of ${mutations.length} breaks were caught.`)
+  console.log(`\n${count.caught} of ${mutations.length} breaks were caught.`)
+  if (count.error > 0)
+    console.log(
+      `${count.error} could not be tried, because the core build broke on this machine, not in the break. Free memory or wait for other checks to end, then run them again.`,
+    )
   rmSync(SCRATCH, { recursive: true, force: true })
-  process.exit(missed === 0 ? 0 : 1)
+  process.exit(count.missed + count.error === 0 ? 0 : 1)
 }

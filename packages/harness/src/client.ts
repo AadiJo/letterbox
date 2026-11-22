@@ -57,11 +57,38 @@ const WAIT_BEGUN = /core-sim: gmail rate-limit wait of (\d+) ms\n/g
 
 /** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
 export const CORE_DID_NOT_BUILD = 2
+/**
+ * The exit code of a scenario run whose core build broke for a reason that is not the source:
+ * the compiler was killed, as the out-of-memory killer does, or cargo failed some other way. The
+ * break test reports it as the machine's failure, not the break's.
+ */
+export const BUILD_BROKE = 3
 
-/** Builds the core program from the current source. Returns false, after cargo has printed why, if it does not build. */
-export function buildCore(): boolean {
+/** How a build of the core ended. `why` says, in a few words, what broke a build that is not the source's fault. */
+export type Build = { kind: 'built' } | { kind: 'does-not-compile' } | { kind: 'broke'; why: string }
+
+/**
+ * Builds the core program from the current source. Cargo's own output goes to stderr as it
+ * would. The result says whether the source failed to compile, or the build broke for another
+ * reason, such as the compiler being killed by a signal.
+ */
+export function buildCore(): Build {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
-  return spawnSync('cargo', ['build', '--quiet', '--bin', 'core-sim'], { cwd: root, stdio: 'inherit' }).status === 0
+  const build = spawnSync('cargo', ['build', '--quiet', '--bin', 'core-sim'], {
+    cwd: root,
+    stdio: ['inherit', 'inherit', 'pipe'],
+    encoding: 'utf8',
+  })
+  process.stderr.write(build.stderr ?? '')
+  if (build.status === 0) return { kind: 'built' }
+  if (build.signal) return { kind: 'broke', why: `cargo was killed (${build.signal})` }
+  // Cargo names the signal that ended a compiler or linker: "(signal: 9, SIGKILL: kill)".
+  const killed = /\(signal: (\d+), (SIG[A-Z]+)/.exec(build.stderr) ?? /terminated with signal (\d+)/.exec(build.stderr)
+  if (killed) return { kind: 'broke', why: `the build was killed (signal ${killed.slice(1).join(', ')})` }
+  // Rustc's own errors end with this line. Anything else is not the source's fault.
+  if (/could not compile `[^`]+` .*due to \d+ previous errors?/.test(build.stderr)) return { kind: 'does-not-compile' }
+  const first = build.stderr.split('\n').find((line) => line.startsWith('error')) ?? `cargo exited with ${build.status}`
+  return { kind: 'broke', why: `the build failed for another reason: ${first}` }
 }
 
 /** Rejects with a timeout unless `promise` settles within WAIT_MS. `what` names what was awaited. */
