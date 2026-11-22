@@ -37,6 +37,29 @@ impl Inner {
         receiver
     }
 
+    /// Queues a pass that pulls, and counts it in `pulls` while it waits and runs, so the
+    /// schedule starts no pull beside it (schedule.rs).
+    pub(crate) fn enqueue_pull<T: 'static>(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        task: impl Future<Output = T> + 'static,
+    ) -> oneshot::Receiver<T> {
+        *self.state.borrow_mut().pulls.entry(account_id.clone()).or_default() += 1;
+        let core = Rc::clone(self);
+        let id = account_id.clone();
+        self.enqueue(account_id, async move {
+            let ended = task.await;
+            let mut state = core.state.borrow_mut();
+            if let Some(count) = state.pulls.get_mut(&id) {
+                *count -= 1;
+                if *count == 0 {
+                    state.pulls.remove(&id);
+                }
+            }
+            ended
+        })
+    }
+
     /// Queues a task nobody waits for.
     pub(crate) fn background<T: 'static>(
         self: &Rc<Self>,

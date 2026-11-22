@@ -44,6 +44,7 @@ mod push;
 mod queue;
 mod reconcile;
 mod rows;
+mod schedule;
 pub mod secrets;
 mod senders;
 mod sign_in;
@@ -69,7 +70,8 @@ use std::time::Duration;
 use letterbox_protocol::{
     AccountId, ChangeId, CoreMessage, MessageId, Query, SignInOption, SignInOptionId, SubscriptionId,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::adapter::{Adapter, AdapterFactory};
@@ -116,7 +118,8 @@ pub struct Core {
 impl Core {
     /// Opens the store and resumes every account that is still signed in. A signed-in
     /// account whose session the secret store cannot give back is marked as needing a
-    /// sign-in, which saves a session again.
+    /// sign-in, which saves a session again. Each resumed account's sync schedule starts,
+    /// and its first pull comes at once (see schedule.rs).
     /// Call this, and `receive`, inside a tokio LocalSet: the core spawns its work there.
     pub fn new(options: CoreOptions) -> Result<Core, StoreError> {
         if cfg!(panic = "unwind") {
@@ -150,7 +153,7 @@ impl Core {
                 Ok(Some(session)) => {
                     links += 1;
                     let adapter = factory.resume(&session);
-                    adapters.insert(account.id.clone(), Linked { adapter, link: links });
+                    adapters.insert(account.id.clone(), Linked::new(adapter, links));
                 }
                 // The keychain is locked or lost the entry. The account stays signed in, so
                 // the next start tries again, but shows it needs a sign-in until then.
@@ -199,6 +202,7 @@ impl Core {
                     adapters,
                     subscriptions: IndexMap::default(),
                     syncing: HashSet::default(),
+                    pulls: HashMap::default(),
                     loading_bodies: HashSet::default(),
                     unreachable_bodies: HashSet::default(),
                     attempts: Attempts::default(),
@@ -213,10 +217,22 @@ impl Core {
                 }),
                 queues: RefCell::new(HashMap::default()),
                 work: TaskTracker::new(),
+                closing: CancellationToken::new(),
                 meter: Meter::default(),
             }),
         };
         core.inner.resume_outbox();
+        // In the store's order, so a run that resumes several accounts pulls them in the same order.
+        let resumed: Vec<(AccountId, Linked)> = {
+            let state = core.inner.state.borrow();
+            let accounts = state.world.accounts.keys();
+            accounts
+                .filter_map(|id| Some((id.clone(), state.adapters.get(id)?.clone())))
+                .collect()
+        };
+        for (account_id, linked) in resumed {
+            core.inner.schedule(account_id, linked, Duration::ZERO);
+        }
         Ok(core)
     }
 
@@ -234,7 +250,9 @@ impl Core {
     /// cancelled first, so it is answered `cancelled` instead of holding up the close. Every adapter
     /// stops waiting too (see `Adapter::stop_waiting`), so a call waiting out a rate limit answers
     /// offline at once. The change or page it was for stays saved, and the next start does it.
+    /// Every sync schedule ends where it waits, and starts no more passes (see schedule.rs).
     pub async fn close(self) {
+        self.inner.closing.cancel();
         self.inner.state.borrow().attempts.cancel_all();
         self.inner.work.close();
         for linked in self.inner.state.borrow().adapters.values() {
@@ -250,7 +268,7 @@ impl Core {
 
 /// What the core holds while it runs. Its methods sit in one module per job: dispatch.rs
 /// takes client messages, subscriptions.rs commits and sends updates, queue.rs runs each
-/// account's jobs, sync.rs syncs, outbox.rs sends mail, undo.rs takes changes back,
+/// account's jobs, sync.rs syncs, schedule.rs syncs on its own while the core runs, outbox.rs sends mail, undo.rs takes changes back,
 /// accounts.rs signs accounts in and out, and attachments.rs fetches files.
 struct Inner {
     store: Store,
@@ -266,6 +284,8 @@ struct Inner {
     queues: RefCell<HashMap<AccountId, mpsc::UnboundedSender<Job>>>,
     /// Every queued job and request task that has not finished. `Core::close` waits for it to empty.
     work: TaskTracker,
+    /// Cancelled when `Core::close` begins. The sync schedules end on it (see schedule.rs).
+    closing: CancellationToken,
     /// The view work done so far, which budget.rs holds to a budget.
     meter: Meter,
 }
@@ -282,6 +302,8 @@ struct State {
     /// In the order they were made, which is the order updates go out.
     subscriptions: IndexMap<SubscriptionId, Subscription>,
     syncing: HashSet<AccountId>,
+    /// How many passes that pull are queued or running for each account (see `enqueue_pull`).
+    pulls: HashMap<AccountId, usize>,
     loading_bodies: HashSet<MessageId>,
     unreachable_bodies: HashSet<MessageId>,
     attempts: Attempts,
@@ -309,6 +331,18 @@ struct State {
 struct Linked {
     adapter: Rc<dyn Adapter>,
     link: u64,
+    /// Wakes the link's sync schedule when the account's health clears (see `record_outcome` in sync.rs).
+    wake: Rc<Notify>,
+}
+
+impl Linked {
+    fn new(adapter: Rc<dyn Adapter>, link: u64) -> Linked {
+        Linked {
+            adapter,
+            link,
+            wake: Rc::new(Notify::new()),
+        }
+    }
 }
 
 struct Subscription {

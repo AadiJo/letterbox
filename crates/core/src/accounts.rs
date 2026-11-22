@@ -1,5 +1,6 @@
 //! Linking and unlinking accounts. A sign-in request runs one attempt (see sign_in.rs),
-//! then installs the adapter it reached and starts the first sync. A sign-out unlinks
+//! then installs the adapter it reached, starts the first sync and the sync schedule after
+//! it (schedule.rs). A sign-out unlinks
 //! the adapter at once and keeps or deletes the account's mail.
 
 use std::rc::Rc;
@@ -65,7 +66,8 @@ impl Inner {
     }
 
     /// Links the account a sign-in reached, or relinks it if this address signed in before,
-    /// answers the sign-in and starts its first sync. The adapter it replaces closes after.
+    /// answers the sign-in and starts its first sync, and the schedule that pulls a period after
+    /// it. The adapter it replaces closes after, and its schedule ends at its next wake.
     ///
     /// The session goes to the secret store before the commit that marks the account signed
     /// in, so the store never names a signed-in account without a session to resume. A crash
@@ -93,14 +95,12 @@ impl Inner {
             return;
         }
         let capabilities = connection.adapter.capabilities();
-        let replaced = {
+        let (linked, replaced) = {
             let mut state = self.state.borrow_mut();
             state.links += 1;
-            let linked = Linked {
-                adapter: connection.adapter,
-                link: state.links,
-            };
-            state.adapters.insert(account_id.clone(), linked)
+            let linked = Linked::new(connection.adapter, state.links);
+            let replaced = state.adapters.insert(account_id.clone(), linked.clone());
+            (linked, replaced)
         };
         self.commit(|world, tx, _| {
             put_account(
@@ -126,7 +126,8 @@ impl Inner {
             account_id: account_id.clone(),
         };
         self.respond(id, Response::SignIn(Answer::from(Ok(signed_in))));
-        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), true));
+        drop(self.enqueue_pull(&account_id, Rc::clone(self).pass(account_id.clone(), true)));
+        self.schedule(account_id, linked, crate::schedule::PERIOD);
         if let Some(replaced) = replaced {
             self.work.spawn_local(async move { replaced.adapter.close().await });
         }

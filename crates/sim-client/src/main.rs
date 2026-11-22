@@ -2,7 +2,7 @@
 //! talks to: one JSON message per line on stdin, one per line on stdout.
 //!
 //!   core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]
-//!            [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits]
+//!            [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]
 //!
 //! `--sim` lists the two sim provider options. `--gmail` adds the Gmail option, pointed at
 //! the fake Gmail server at `<url>` (packages/sim-provider/src/gmail). Its consent URLs must
@@ -15,26 +15,34 @@
 //! long as this core runs, so a scenario can act inside it. `--hold-waits` holds every wait,
 //! so a scenario can act after the clock passes a deadline and before the timer for it runs.
 //!
+//! The core's idle waits, such as its sync schedule's, never end on the fixed clock by
+//! themselves. `--clock` names a unix socket core-sim listens on: each line written to it is a
+//! number of seconds to move the clock forward, which ends the idle waits that have seen the
+//! clock move by their length (see `FixedEnvironment::moved_by`). Zero ends those due at once.
+//! As each idle wait begins, core-sim writes IDLE_BEGUN and its length to stderr.
+//!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! The real app's program is `letterbox-core` in crates/host, which owns the stdio loop
 //! both run through. Nothing here is test logic inside the core: this file only chooses
 //! which factories, clock and secret store it gets.
 
 use std::cell::Cell;
+use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
 
 use letterbox_core::adapter::{AdapterFactory, LocalFuture};
-use letterbox_core::clock::FixedEnvironment;
+use letterbox_core::clock::{ClockHand, FixedEnvironment};
 use letterbox_gmail::{GmailConfig, Loopback, gmail_factory};
 use letterbox_host::{Parts, run_stdio};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 
 const USAGE: &str = "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] \
-                     [--now <time>] [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits]";
+                     [--now <time>] [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]";
 
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
@@ -52,6 +60,10 @@ const WAIT_HELD: &str = "core-sim: holding a gmail rate-limit wait until the ada
 /// can check the backoff the adapter asked for.
 const WAIT_BEGUN: &str = "core-sim: gmail rate-limit wait of";
 
+/// Written to stderr as each idle wait begins, before its length in milliseconds, so a scenario
+/// knows what the core waits for, and that it has finished what the last wait started.
+const IDLE_BEGUN: &str = "core-sim: idle wait of";
+
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
 
@@ -63,6 +75,7 @@ struct Args {
     undo_window: Duration,
     confirm_window: Duration,
     hold_waits: bool,
+    clock: Option<PathBuf>,
 }
 
 fn parse_args() -> Option<Args> {
@@ -74,6 +87,7 @@ fn parse_args() -> Option<Args> {
     let mut undo_window = Duration::from_secs(10);
     let mut confirm_window = Duration::from_secs(60);
     let mut hold_waits = false;
+    let mut clock = None;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         if flag == "--hold-waits" {
@@ -89,6 +103,7 @@ fn parse_args() -> Option<Args> {
             "--now" => now = value,
             "--undo-window" => undo_window = Duration::from_secs(value.parse().ok()?),
             "--confirm-window" => confirm_window = Duration::from_secs(value.parse().ok()?),
+            "--clock" => clock = Some(PathBuf::from(value)),
             _ => return None,
         }
     }
@@ -105,7 +120,33 @@ fn parse_args() -> Option<Args> {
         undo_window,
         confirm_window,
         hold_waits,
+        clock,
     })
+}
+
+/// Listens on `socket` and moves `hand` by each line's seconds, on a thread of its own, for as
+/// long as the process runs. It binds before it returns, so the socket takes connections once
+/// the core answers. A line that is not a number of seconds ends the program: the scenario is wrong.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "core-sim says on stderr why the scenario's clock line is wrong"
+)]
+fn follow_clock(socket: &PathBuf, hand: ClockHand) -> std::io::Result<()> {
+    let listener = UnixListener::bind(socket)?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                let Ok(seconds) = line.trim().parse() else {
+                    eprintln!("core-sim: --clock takes a number of seconds per line, not {line:?}");
+                    std::process::exit(2);
+                };
+                hand.advance(Duration::from_secs(seconds));
+            }
+        }
+    });
+    Ok(())
 }
 
 /// The Gmail option, pointed at the fake server. Nothing here is a real client: the fake
@@ -170,13 +211,21 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let env = match FixedEnvironment::new(&args.now) {
+    let mut env = match FixedEnvironment::new(&args.now) {
         Ok(env) => env.holding_from(if args.hold_waits { Duration::ZERO } else { HELD_WAIT }),
         Err(error) => {
             eprintln!("--now: {error}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
+    if let Some(socket) = &args.clock {
+        let hand = ClockHand::default();
+        env = env.moved_by(&hand, |wait| eprintln!("{IDLE_BEGUN} {} ms", wait.as_millis()));
+        if let Err(error) = follow_clock(socket, hand) {
+            eprintln!("--clock: {error}\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    }
     let mut factories = args.sim.as_deref().map(sim_adapter_factories).unwrap_or_default();
     factories.extend(args.gmail.map(|(url, redirects)| fake_gmail(url, redirects)));
     // run_stdio turns time on for the Gmail adapter's HTTP client (see GmailFactory::new).

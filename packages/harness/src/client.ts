@@ -6,6 +6,7 @@
 // language the same way.
 
 import { spawn, spawnSync } from 'node:child_process'
+import { createConnection, type Socket } from 'node:net'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { createClient, type KeepingClient, type Listener, type Options, type Subscription } from '@letterbox/client'
@@ -29,6 +30,18 @@ export type CoreClient = KeepingClient & {
   waitHeld(): Promise<void>
   /** Resolves with the first `count` gmail rate-limit waits this core began, in seconds, in order. */
   waits(count: number): Promise<number[]>
+  /**
+   * Moves the core's fixed clock forward by `seconds`. Only the core's idle waits, such as its
+   * sync schedule's, see it: each ends once the clock has moved by its length since it began, so
+   * zero ends those due at once (see crates/sim-client/src/main.rs). Wait on `idleWaits` or on
+   * what the core sends, never on time, for what it starts.
+   */
+  advanceClock(seconds: number): void
+  /**
+   * Resolves with the first `count` idle waits this core began, in seconds, in order. The
+   * schedule begins its next wait once its pull has ended, so this is how a scenario knows it has.
+   */
+  idleWaits(count: number): Promise<number[]>
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
@@ -54,6 +67,8 @@ const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
 const WAIT_HELD = 'core-sim: holding a gmail rate-limit wait until the adapter closes'
 /** The line core-sim writes to stderr as each gmail rate-limit wait begins, with its length. */
 const WAIT_BEGUN = /core-sim: gmail rate-limit wait of (\d+) ms\n/g
+/** The line core-sim writes to stderr as each idle wait begins, with its length. */
+const IDLE_BEGUN = /core-sim: idle wait of (\d+) ms\n/g
 
 /** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
 export const CORE_DID_NOT_BUILD = 2
@@ -110,6 +125,7 @@ const within = <T>(what: string, promise: Promise<T>): Promise<T> =>
 /** Starts a core process over `dataDir`. `providerArgs` say which provider it reaches: `--sim` or `--gmail`. */
 /**
  * Starts a core process over `dataDir`. `providerArgs` say which provider it reaches: `--sim` or `--gmail`.
+ * `clockSocket` is a path where nothing is yet, for core-sim's `--clock` (see `advanceClock`).
  * `reachable`, when given, resolves once the provider can take connections. Each line to the core
  * waits for it, so the core never reaches for a provider a scenario has just brought back online
  * before it listens again (see `listenWhileReachable` in the fake Gmail).
@@ -117,11 +133,12 @@ const within = <T>(what: string, promise: Promise<T>): Promise<T> =>
 export function startCore(
   dataDir: string,
   providerArgs: string[],
+  clockSocket: string,
   record: (entry: TranscriptEntry) => void,
   newId: Options['newId'],
   reachable?: () => Promise<void>,
 ): CoreClient {
-  const child = spawn(CORE_PROGRAM, ['--data', dataDir, ...providerArgs], {
+  const child = spawn(CORE_PROGRAM, ['--data', dataDir, '--clock', clockSocket, ...providerArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   let stderr = ''
@@ -143,6 +160,10 @@ export function startCore(
       check()
     })
   const waitsBegun = () => [...stderr.matchAll(WAIT_BEGUN)].map((match) => Number(match[1]) / 1000)
+  const idleBegun = () => [...stderr.matchAll(IDLE_BEGUN)].map((match) => Number(match[1]) / 1000)
+  // Connected on the first move. core-sim binds the socket before it reads its input, so it
+  // is there by the time the core has answered anything.
+  let clock: Socket | undefined
 
   // Lines to the core, in order. Each waits for `reachable` before it is written.
   let written: Promise<void> = Promise.resolve()
@@ -204,6 +225,7 @@ export function startCore(
   })
   const exited = new Promise<void>((resolve) => {
     child.on('exit', (code) => {
+      clock?.destroy()
       const finish = () => {
         if (draining) return void setImmediate(finish)
         listener?.end(new Error(`the core exited with code ${code}. stderr:\n${stderr}`))
@@ -225,7 +247,11 @@ export function startCore(
     request: (request) => within(`the response to ${request.method}`, client.request(request)),
     begin: (request) => {
       const started = client.begin(request)
-      return { id: started.id, done: within(`the response to ${request.method}`, started.done) }
+      const done = within(`the response to ${request.method}`, started.done)
+      // A scenario that fails before it awaits `done` must fail as itself, not end the whole run
+      // with an unhandled rejection when the wait times out later. Awaiting `done` still throws.
+      done.catch(() => undefined)
+      return { id: started.id, done }
     },
     take: (kind) => within(`a ${kind} message`, client.take(kind)),
     sendRaw,
@@ -235,6 +261,18 @@ export function startCore(
     waits: async (count) => {
       await untilStderr(() => waitsBegun().length >= count, `${count} gmail rate-limit waits`)
       return waitsBegun().slice(0, count)
+    },
+    advanceClock: (seconds) => {
+      record({ from: 'scenario', note: `the clock moves forward ${seconds} s` })
+      write(() => {
+        // An error means the core has gone, which the scenario learns from what it waits on.
+        clock ??= createConnection(clockSocket).on('error', () => undefined)
+        clock.write(`${seconds}\n`)
+      })
+    },
+    idleWaits: async (count) => {
+      await untilStderr(() => idleBegun().length >= count, `${count} idle waits`)
+      return idleBegun().slice(0, count)
     },
     kill: async () => {
       record({ from: 'scenario', note: 'the core is killed' })

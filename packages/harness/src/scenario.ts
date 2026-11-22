@@ -225,7 +225,8 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
         ...(options.confirmWindow === undefined ? [] : ['--confirm-window', String(options.confirmWindow)]),
         ...(options.holdWaits ? ['--hold-waits'] : []),
       ]
-      const core = startCore(data, [...backend.args, ...flags], record, newId, backend.reachable)
+      const clock = join(folder, `clock-${cores.length}.sock`)
+      const core = startCore(data, [...backend.args, ...flags], clock, record, newId, backend.reachable)
       cores.push(core)
       return core
     },

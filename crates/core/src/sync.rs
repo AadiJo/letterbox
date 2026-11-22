@@ -199,6 +199,7 @@ impl Inner {
     /// Records how a pass or an outbox check (confirm.rs) that still serves the account ended:
     /// its health from `result`, and the time it synced when `synced`. Writes only when the
     /// health changed, unless `pulled` says a sync ran and the status must show it ended.
+    /// Health that clears wakes the account's sync schedule, which pulls at once (schedule.rs).
     pub(crate) fn record_outcome(
         self: &Rc<Self>,
         account_id: &AccountId,
@@ -225,6 +226,12 @@ impl Inner {
             });
         }
         let health = Health::from(result);
+        if health == Health::Ok
+            && account.health != Health::Ok
+            && let Some(linked) = self.state.borrow().adapters.get(account_id)
+        {
+            linked.wake.notify_waiters();
+        }
         if pulled || health != account.health {
             self.commit(|world, tx, _| {
                 let last_synced_at = if synced {
@@ -270,7 +277,7 @@ impl Inner {
         };
         let mut accounts = accounts.into_iter();
         let start = |core: &Rc<Self>, account_id: AccountId| {
-            let pass = core.enqueue(&account_id, Rc::clone(core).sync_pass(account_id.clone()));
+            let pass = core.enqueue_pull(&account_id, Rc::clone(core).sync_pass(account_id.clone()));
             (account_id, pass)
         };
         let mut next = accounts.next().map(|account_id| start(self, account_id));
