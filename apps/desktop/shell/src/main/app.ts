@@ -93,6 +93,8 @@ if (!read.ok) {
   /** Page connects and the quit, one at a time, in order. */
   let queue = Promise.resolve()
   let quitting = false
+  /** Stops main telling the core the network may be back (network.ts). Set once the app is ready. */
+  let stopWatchingNetwork: (() => void) | undefined
   const origin = pageOrigin(config.renderer)
 
   /**
@@ -171,8 +173,9 @@ if (!read.ok) {
       applyBadge(opened)
     }
     open()
-    // The core between pages, if any, hears nothing. Its successor pulls at start anyway.
-    watchNetwork(() => core?.session.networkBack())
+    // One watcher for the app, across cores. The core between pages, if any, hears nothing:
+    // its successor pulls at start anyway.
+    stopWatchingNetwork = watchNetwork(() => core?.session.networkBack())
     // macOS keeps an app running with no window. Opening one gives its page a new core.
     app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && open?.())
   })
@@ -185,6 +188,7 @@ if (!read.ok) {
     event.preventDefault()
     if (quitting) return
     quitting = true
+    stopWatchingNetwork?.()
     log(`quitting: stopping the core, for up to ${STOP_MS} ms`)
     void queue
       .then(() => core?.session.stop())

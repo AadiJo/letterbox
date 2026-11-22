@@ -16,8 +16,12 @@ const POLL_MS = 5000
 /** How long main waits after the last event before it sends the hint. */
 const DEBOUNCE_MS = 1000
 
-/** Calls `hint` each time the network may be back, at most once per DEBOUNCE_MS. Call it once the app is ready. */
-export function watchNetwork(hint: () => void) {
+/**
+ * Calls `hint` each time the network may be back, at most once per DEBOUNCE_MS. Call it once
+ * the app is ready, once for the app: it outlives each core, and `hint` reaches the core of the
+ * moment. Returns the stop, which removes the listeners, the poll and a hint still pending.
+ */
+export function watchNetwork(hint: () => void): () => void {
   let timer: NodeJS.Timeout | undefined
   const soon = (why: string) => {
     log(`the network may be back: ${why}`)
@@ -27,13 +31,21 @@ export function watchNetwork(hint: () => void) {
       hint()
     }, DEBOUNCE_MS)
   }
-  powerMonitor.on('resume', () => soon('the machine woke'))
-  powerMonitor.on('unlock-screen', () => soon('the screen unlocked'))
+  const woke = () => soon('the machine woke')
+  const unlocked = () => soon('the screen unlocked')
+  powerMonitor.on('resume', woke)
+  powerMonitor.on('unlock-screen', unlocked)
   let online = net.isOnline()
   // Unref'd, so the poll alone never keeps main running.
-  setInterval(() => {
+  const poll = setInterval(() => {
     const now = net.isOnline()
     if (now && !online) soon('the machine came online')
     online = now
   }, POLL_MS).unref()
+  return () => {
+    powerMonitor.off('resume', woke)
+    powerMonitor.off('unlock-screen', unlocked)
+    clearInterval(poll)
+    clearTimeout(timer)
+  }
 }

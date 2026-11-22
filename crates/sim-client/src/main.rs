@@ -26,7 +26,7 @@
 //! number of seconds to move the clock forward, which ends the idle waits that have seen the
 //! clock move by their length (see `FixedEnvironment::moved_by`). Zero ends those due at once.
 //! As each idle wait begins, core-sim writes IDLE_BEGUN, its length, and how far the clock had
-//! been moved by then, to stderr, and PULL_QUEUED as the schedule queues each pull. Only unix
+//! been moved by then, to stderr, and SCHEDULE_NOTED with each decision the schedule makes. Only unix
 //! has `--clock`. The harness runs scenarios there.
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
@@ -85,10 +85,10 @@ const WAIT_BEGUN: &str = "core-sim: gmail rate-limit wait of";
 #[cfg(unix)]
 const IDLE_BEGUN: &str = "core-sim: idle wait of";
 
-/// Written to stderr each time the sync schedule queues a pull, so a scenario knows it is in
-/// the account's queue before it lets the work ahead of it go.
+/// Written to stderr before the name of each decision the sync schedule makes (`Noted`), so a
+/// scenario knows it was made, as a pull being in the queue, before it takes the next step.
 #[cfg(unix)]
-const PULL_QUEUED: &str = "core-sim: scheduled pull queued";
+const SCHEDULE_NOTED: &str = "core-sim: schedule noted";
 
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 #[cfg(unix)]
@@ -272,7 +272,7 @@ fn main() -> ExitCode {
         None => env,
         Some(socket) => {
             let hand = ClockHand::default();
-            let env = env.on_pull_queued(|| eprintln!("{PULL_QUEUED}"));
+            let env = env.on_noted(|what| eprintln!("{SCHEDULE_NOTED} {}", what.name()));
             let env = env.moved_by(&hand, |wait, moved| {
                 eprintln!(
                     "{IDLE_BEGUN} {} ms, after {} ms of moves",

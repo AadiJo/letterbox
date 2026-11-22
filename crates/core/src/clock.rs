@@ -29,12 +29,35 @@ pub trait Environment {
     /// when the test moves the clock (see `FixedEnvironment::moved_by`), so a run that never
     /// moves it never sees the core act on its own.
     fn idle(&self, wait: Duration) -> LocalFuture<'static, ()>;
-    /// Told each time the sync schedule queues a pull (schedule.rs). Nothing in the core waits
-    /// on it, and the real clock ignores it. The test clock passes it on, so a scenario knows
-    /// the pull is in the account's queue before it lets the work ahead of it go.
-    fn pull_queued(&self) {}
+    /// Told what the sync schedule decided (schedule.rs). Nothing in the core waits on it, and
+    /// the real clock ignores it. The test clock passes it on, so a scenario knows a decision
+    /// was made, such as a pull being in the account's queue, before it takes the next step.
+    fn noted(&self, _what: Noted) {}
     /// A number another device is unlikely to draw. Each Message-ID the core writes holds one.
     fn random(&self) -> u64;
+}
+
+/// A decision of the sync schedule's, for `Environment::noted`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Noted {
+    /// It queued a pull.
+    PullQueued,
+    /// It heard the network may be back, and the hint did not hold, so its wait went on.
+    HintIgnored,
+    /// A hint it took no longer held once its settle ended, or at the head of the queue, so
+    /// it went back to the wait the hint had cut.
+    HintDropped,
+}
+
+impl Noted {
+    /// The decision's name, as core-sim writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Noted::PullQueued => "pull-queued",
+            Noted::HintIgnored => "hint-ignored",
+            Noted::HintDropped => "hint-dropped",
+        }
+    }
 }
 
 /// Reads a time the core wrote. A time it cannot read counts as the start of the epoch.
@@ -123,8 +146,8 @@ pub struct FixedEnvironment {
     hold: Option<Duration>,
     /// The hand that moves the clock, when a test holds one (see `moved_by`).
     moves: Option<Moves>,
-    /// Told when the sync schedule queues a pull (see `on_pull_queued`).
-    queued: Option<Box<dyn Fn()>>,
+    /// Told what the sync schedule decided (see `on_noted`).
+    noted: Option<Box<dyn Fn(Noted)>>,
 }
 
 /// How far a `ClockHand` has moved the clock, and how many times.
@@ -169,7 +192,7 @@ impl FixedEnvironment {
             draws: Cell::new(0),
             hold: None,
             moves: None,
-            queued: None,
+            noted: None,
         })
     }
 
@@ -189,11 +212,11 @@ impl FixedEnvironment {
         }
     }
 
-    /// Calls `queued` each time the sync schedule queues a pull (`Environment::pull_queued`).
+    /// Calls `noted` with each decision the sync schedule makes (`Environment::noted`).
     #[must_use]
-    pub fn on_pull_queued(self, queued: impl Fn() + 'static) -> Self {
+    pub fn on_noted(self, noted: impl Fn(Noted) + 'static) -> Self {
         Self {
-            queued: Some(Box::new(queued)),
+            noted: Some(Box::new(noted)),
             ..self
         }
     }
@@ -271,9 +294,9 @@ impl Environment for FixedEnvironment {
         })
     }
 
-    fn pull_queued(&self) {
-        if let Some(queued) = &self.queued {
-            queued();
+    fn noted(&self, what: Noted) {
+        if let Some(noted) = &self.noted {
+            noted(what);
         }
     }
 

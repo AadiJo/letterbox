@@ -94,6 +94,8 @@ scenario('the schedule backs off while offline, and pulls at once when the provi
   const { core, box } = await start(t)
   await core.idleWaits(1)
   const offline = core.subscribe({ view: 'accounts' })
+  // Its first answer before the clock moves, so the view shows the same updates every run.
+  await offline.next()
   box.setOffline(true)
   core.advanceClock(60)
   await untilAccounts(offline, (list) => list[0]?.status.state === 'offline')
@@ -232,7 +234,7 @@ scenario('a scheduled pull skips when a push queued ahead of it pulled to settle
   await core.settled(undo.change)
   // The tick finds no pull queued or running, so it queues one behind that push.
   core.advanceClock(60)
-  await core.pullsQueued(1)
+  await core.noted('pull-queued', 1)
   const pulls = box.calls().changes
   box.releaseApplies()
   await core.settled(lost.change)
@@ -258,7 +260,7 @@ scenario("a push's pull that leaves a backfill stands for the scheduled pull, an
   box.expireCursors()
   box.holdSnapshots()
   core.advanceClock(60)
-  await core.pullsQueued(1)
+  await core.noted('pull-queued', 1)
   box.releaseApplies()
   await box.snapshotHeld()
   box.releaseSnapshots()
@@ -287,7 +289,7 @@ scenario(
     await box.applyHeld()
     const second = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
     core.advanceClock(60)
-    await core.pullsQueued(1)
+    await core.noted('pull-queued', 1)
     const pulls = box.calls().changes
     // The first answer is lost. The second change's push pulls first, which settles the first,
     // then carries the second, whose answer is lost too.
@@ -317,7 +319,7 @@ scenario("a pull the schedule queued before a sign-out does not run on the next 
   await box.applyHeld()
   // The scheduled pull queues behind the held push.
   core.advanceClock(60)
-  await core.pullsQueued(1)
+  await core.noted('pull-queued', 1)
   t.check((await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })).ok, 'the account signs out')
   await signIn(t, core, ME, PASSWORD)
   const pulls = box.calls().changes

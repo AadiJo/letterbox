@@ -30,8 +30,8 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: 'the scheduled pass only pushes, so a reply is never told',
     file: core('schedule.rs'),
-    find: 'Some(core.sync_pass(id, Pull::Quiet).await)',
-    replace: 'Some(core.sync_pass(id, Pull::No).await)',
+    find: 'AtHead::Pulled(core.sync_pass(id, Pull::Quiet).await)',
+    replace: 'AtHead::Pulled(core.sync_pass(id, Pull::No).await)',
     scenarios: 'told once, with no sync-now',
   },
   {
@@ -148,7 +148,7 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: 'a scheduled pull runs though a push queued ahead of it already pulled',
     file: core('schedule.rs'),
-    find: 'if core.pulls_ended_well(&id) != ticked {',
+    find: 'if core.pulls_ended(&id).well != ticked {',
     replace: 'if false {',
     scenarios: 'push queued ahead of it',
   },
@@ -169,8 +169,8 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: "a scheduled pull skipped for a push's pull reports success before the backfill that pull left ends",
     file: core('schedule.rs'),
-    find: '                    return Some((Some(Ok(())), Some(backfill), false));',
-    replace: '                    drop(backfill);\n                    return None;',
+    find: '                    return AtHead::Pulled((Some(Ok(())), Some(backfill), false));',
+    replace: '                    drop(backfill);\n                    return AtHead::Skipped;',
     scenarios: 'leaves a backfill stands',
   },
   {

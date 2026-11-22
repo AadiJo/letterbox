@@ -45,10 +45,12 @@ export type CoreClient = KeepingClient & {
   /** Resolves with how far, in seconds, the scenario had moved the clock as each of the first `count` idle waits began. */
   idleWaitStarts(count: number): Promise<number[]>
   /**
-   * Resolves once the sync schedule has queued `count` pulls. A clock move travels on its own
-   * socket, so this, not a round trip on the protocol, says a tick's pull is in the queue.
+   * Resolves once the sync schedule has noted `count` decisions of kind `what` (`Noted` in
+   * crates/core/src/clock.rs): a pull queued, or a network-back hint ignored or dropped. A clock
+   * move and a hint each reach the schedule apart from the protocol's order, so this, not a
+   * round trip, says the schedule has acted on one.
    */
-  pullsQueued(count: number): Promise<void>
+  noted(what: 'pull-queued' | 'hint-ignored' | 'hint-dropped', count: number): Promise<void>
   /** The process's exit code once it has exited on its own, else null. */
   exitCode(): number | null
   /** Sends anything at all, for scenarios about bad input. */
@@ -76,8 +78,8 @@ const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
 const WAIT_HELD = 'core-sim: holding a gmail rate-limit wait until the adapter closes'
 /** The line core-sim writes to stderr as each gmail rate-limit wait begins, with its length. */
 const WAIT_BEGUN = /core-sim: gmail rate-limit wait of (\d+) ms\n/g
-/** The line core-sim writes to stderr as the sync schedule queues each pull. */
-const PULL_QUEUED = 'core-sim: scheduled pull queued\n'
+/** The line core-sim writes to stderr before the name of each decision the sync schedule makes. */
+const SCHEDULE_NOTED = 'core-sim: schedule noted'
 /** The line core-sim writes to stderr as each idle wait begins, with its length and the clock's moves by then. */
 const IDLE_BEGUN = /core-sim: idle wait of (\d+) ms, after (\d+) ms of moves\n/g
 
@@ -290,8 +292,10 @@ export function startCore(
       await untilStderr(() => idleStarts().length >= count, `${count} idle waits`)
       return idleStarts().slice(0, count)
     },
-    pullsQueued: (count) =>
-      untilStderr(() => stderr.split(PULL_QUEUED).length - 1 >= count, `${count} scheduled pulls queued`),
+    noted: (what, count) => {
+      const line = `${SCHEDULE_NOTED} ${what}\n`
+      return untilStderr(() => stderr.split(line).length - 1 >= count, `the schedule to note ${what} ${count} times`)
+    },
     exitCode: () => child.exitCode,
     kill: async () => {
       record({ from: 'scenario', note: 'the core is killed' })
