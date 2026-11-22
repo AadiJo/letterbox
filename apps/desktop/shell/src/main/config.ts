@@ -3,15 +3,16 @@
 //   LETTERBOX_RENDERER      required. A dev server's http URL (Vite, with HMR), or a folder
 //                           that holds a built renderer, served as app://renderer/.
 //   LETTERBOX_CORE          'gmail' (the default) or 'sim'.
-//   LETTERBOX_CORE_PROGRAM  required. letterbox-core for gmail, core-sim for sim.
+//   LETTERBOX_CORE_PROGRAM  required. letterbox-core for gmail, core-sim for sim (.exe on Windows).
 //   LETTERBOX_GMAIL_CLIENT  gmail: the JSON file Google Cloud Console downloads for an OAuth
 //                           client of type Desktop app. Never bundled, never in the repo.
-//   LETTERBOX_SIM_SOCKET    sim: the sim provider's socket.
+//   LETTERBOX_SIM_SOCKET    sim: the sim provider's socket, a named pipe on Windows.
 //   LETTERBOX_SIM_NOW       sim: the fixed time the core runs at.
 //   LETTERBOX_USER_DATA     optional. Electron's own state. Defaults to Electron's folder.
 //   LETTERBOX_DATA          optional. The core's store. Defaults to <user data>/core.
 //
-// packages/dev-host sets these for `pnpm dev:desktop` and the Electron check.
+// packages/dev-host sets these for `pnpm dev:desktop` and the Electron check, on Linux, macOS
+// and Windows alike.
 
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'

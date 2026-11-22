@@ -5,9 +5,23 @@
 //! call fails there and each sign-in answers `keychain`.
 //!
 //! Each session is one entry under the service "letterbox", named by its account id.
-//! A locked keyring, or a Linux desktop with no Secret Service running, shows up as
-//! an error from a call, never at build time. accounts.rs in the core says what a
-//! failed call does to a sign-in or a sign-out.
+//! Where a person finds it:
+//!   - macOS: Keychain Access, login keychain, a password named "letterbox" whose
+//!     account is the account id. The first access asks whether letterbox-core may use
+//!     it. macOS ties "Always Allow" to the program's signature, and a debug build is
+//!     not signed, so it may ask again after each rebuild. Each prompt holds the core
+//!     until it is answered, since the core calls the keychain on its one thread.
+//!   - Windows: Credential Manager, Windows Credentials, a generic credential named
+//!     `<account id>.letterbox`. It never asks. An entry holds at most 1280 characters,
+//!     and a Gmail session is a tenth of that.
+//!   - Linux: the Secret Service, under the attributes service=letterbox and
+//!     username=<account id>.
+//!
+//! A locked or denied keychain (Cancel at the macOS prompt), or a Linux desktop with no
+//! Secret Service running, shows up as an error from a call, never a panic or a build
+//! failure. accounts.rs in the core says what a failed call does to a sign-in or a
+//! sign-out. CI runs a real round trip on Windows and macOS, and a locked keychain on
+//! macOS (examples/keychain-round-trip.rs).
 
 use keyring::{Entry, Error};
 use letterbox_core::secrets::{Secrets, SecretsError};

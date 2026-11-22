@@ -6,7 +6,7 @@ import { createWriteStream } from 'node:fs'
 import { join } from 'node:path'
 import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/build'
 import { type Child, startChild } from './children.ts'
-import type { Paths } from './core.ts'
+import { coreProgram, type Paths } from './core.ts'
 
 /** Which core the shell runs: core-sim against the dev host's provider, or the app's own over Gmail. */
 export type DesktopCore = { kind: 'sim'; now: string } | { kind: 'gmail'; client: string | undefined }
@@ -32,20 +32,20 @@ export function shellEnv(paths: Paths, renderer: string, core: DesktopCore): Rec
     return {
       ...shared,
       LETTERBOX_CORE: 'gmail',
-      LETTERBOX_CORE_PROGRAM: join(paths.root, 'target/debug/letterbox-core'),
+      LETTERBOX_CORE_PROGRAM: coreProgram(paths, 'letterbox-core'),
       ...(core.client !== undefined && { LETTERBOX_GMAIL_CLIENT: core.client }),
     }
   }
   return {
     ...shared,
     LETTERBOX_CORE: 'sim',
-    LETTERBOX_CORE_PROGRAM: join(paths.root, 'target/debug/core-sim'),
+    LETTERBOX_CORE_PROGRAM: coreProgram(paths, 'core-sim'),
     LETTERBOX_SIM_SOCKET: paths.socket,
     LETTERBOX_SIM_NOW: core.now,
   }
 }
 
-/** Says why Electron cannot open a window here, or undefined if it can. */
+/** Says why Electron cannot open a window here, or undefined if it can. Only Linux can lack a display. */
 export function missingDisplay(): string | undefined {
   if (process.platform !== 'linux' || process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return undefined
   return 'Electron needs a display, and neither DISPLAY nor WAYLAND_DISPLAY is set. Run under xvfb-run -a, or on WSLg set DISPLAY=:0.'

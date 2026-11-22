@@ -201,7 +201,7 @@ export interface SimMailbox {
 
 /** A pending sim oauth attempt, named by the url the core was told to open. */
 export interface SimProvider {
-  /** The socket the core connects to. Passed to `simAdapterFactories`. */
+  /** The socket the core connects to: a path, or a named pipe on Windows. Passed to `simAdapterFactories`. */
   readonly socketPath: string
   createMailbox(dialect: Dialect, seed: Seed): SimMailbox
   /** Finishes the oauth attempt behind `url` as the owner of `address`. */
@@ -215,7 +215,7 @@ export interface SimProvider {
   close(): Promise<void>
 }
 
-/** Starts the provider on a new socket at `socketPath`. Exported from server.ts. */
+/** Starts the provider on a new socket at `socketPath`, which `localSocket` (socket.ts) makes. Exported from server.ts. */
 export type StartSimProvider = (socketPath: string) => Promise<SimProvider>
 
 /**

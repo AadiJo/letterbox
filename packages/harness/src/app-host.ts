@@ -7,6 +7,7 @@
 //   - closing stdin ends the program with exit code 0
 // Nothing signs in, so nothing reaches Google or the keychain. Writes the transcript to
 // artifacts/app-host/letterbox-core.jsonl. It holds no paths or times, so every run writes the same file.
+// CI runs it on Linux, macOS and Windows. Only the OS's words for a missing file differ.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -21,7 +22,12 @@ import { coreMessageProblem } from '@letterbox/protocol/parse'
 import type { TranscriptEntry } from './client.ts'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
-const PROGRAM = join(ROOT, 'target/debug/letterbox-core')
+const PROGRAM = join(ROOT, 'target/debug', process.platform === 'win32' ? 'letterbox-core.exe' : 'letterbox-core')
+/** How the OS words a missing file, which the program passes on. */
+const NO_SUCH_FILE =
+  process.platform === 'win32'
+    ? 'The system cannot find the file specified. (os error 2)'
+    : 'No such file or directory (os error 2)'
 const ARTIFACTS = join(ROOT, 'artifacts', 'app-host')
 /** How long the program gets to answer or to exit. */
 const WAIT_MS = 5000
@@ -46,7 +52,7 @@ const BAD_ARGUMENTS: [string[], string][] = [
   [['--data', 'data', '--sim', 'socket'], 'letterbox-core: unknown argument "--sim"'],
   [
     ['--data', 'data', '--gmail-client', 'missing.json'],
-    'letterbox-core: --gmail-client missing.json: cannot read it: No such file or directory (os error 2)',
+    `letterbox-core: --gmail-client missing.json: cannot read it: ${NO_SUCH_FILE}`,
   ],
   [
     ['--data', 'data', '--gmail-client', 'web-client.json'],

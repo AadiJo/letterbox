@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { electronBinary, SHELL } from '@letterbox/desktop-shell/build'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
+import { localSocket } from '@letterbox/sim-provider/socket'
 import { _electron, type ElectronApplication, type Page } from 'playwright'
 import type { Paths } from './core.ts'
 import { shellEnv } from './desktop.ts'
@@ -40,7 +41,7 @@ export const yourTurn = seed.conversations
 export const paths: Paths = {
   root,
   data: join(STATE, 'data'),
-  socket: join(STATE, 'provider.sock'),
+  socket: localSocket(join(STATE, 'provider.sock')),
   coreLog: join(STATE, 'core.log'),
 }
 export const checks: { ok: boolean; what: string }[] = []
@@ -223,13 +224,16 @@ const seccompFilters = (pid: number | undefined) =>
   Number(/^Seccomp_filters:\s*(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1] ?? Number.NaN)
 
 /**
- * Why the window's page is not in the OS sandbox, or an empty list when it is. On Linux three
- * things must hold for the renderer process:
+ * Why the window's page is not in the OS sandbox, or an empty list when it is. On Linux the
+ * kernel is asked, through /proc, and three things must hold for the renderer process:
  *   - its command line has no switch that turns the sandbox off;
  *   - it has a PID namespace of its own, apart from main's;
  *   - Chromium's own seccomp-bpf filter is on it: it carries more filters than main, so the
  *     count is not just what both inherited from whatever started them.
- * Elsewhere Electron reports it.
+ * On macOS and Windows there is no /proc, so this takes Electron's word for it: the renderer's
+ * entry in app.getAppMetrics() says `sandboxed`. That is Chromium reporting that it started the
+ * process under its sandbox (Seatbelt on macOS, a restricted token and job on Windows), not an
+ * outside look at the process.
  */
 export async function sandboxGaps(run: Launched): Promise<string[]> {
   const pid = await run.app.evaluate(({ BrowserWindow }) =>

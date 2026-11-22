@@ -1,5 +1,6 @@
 //! The core's side of the sim provider: two sign-in options whose adapters
-//! forward every call over the unix socket to packages/sim-provider/src/server.ts.
+//! forward every call over the local socket to packages/sim-provider/src/server.ts:
+//! a unix socket, or a named pipe on Windows (packages/sim-provider/src/socket.ts).
 //! The Rust mirror of packages/sim-provider/src/client.ts.
 //!
 //! Each sign-in attempt and each adapter has its own socket. An adapter that
@@ -25,7 +26,6 @@ use letterbox_protocol::SignInMethod;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
@@ -84,8 +84,7 @@ impl LinkState {
 impl Link {
     /// Connects to the server. None if nothing is listening at `socket_path`.
     async fn open(socket_path: &Path) -> Option<Link> {
-        let stream = UnixStream::connect(socket_path).await.ok()?;
-        let (read, mut write) = stream.into_split();
+        let (read, mut write) = tokio::io::split(connect(socket_path).await?);
         let (lines, mut outgoing) = mpsc::unbounded_channel::<String>();
         let state = Rc::new(LinkState {
             open: Cell::new(true),
@@ -172,6 +171,20 @@ impl Link {
             let _ = task.await;
         }
     }
+}
+
+/// Opens the server's unix socket at `path`.
+#[cfg(unix)]
+async fn connect(path: &Path) -> Option<tokio::net::UnixStream> {
+    tokio::net::UnixStream::connect(path).await.ok()
+}
+
+/// Opens the server's named pipe, whose name `path` is, such as `\\.\pipe\letterbox-...`.
+/// A pipe whose free instances are all taken (ERROR_PIPE_BUSY) counts as unreachable, like a
+/// pipe that is not there: the adapter answers `offline` and connects again on its next call.
+#[cfg(windows)]
+async fn connect(path: &Path) -> Option<tokio::net::windows::named_pipe::NamedPipeClient> {
+    tokio::net::windows::named_pipe::ClientOptions::new().open(path).ok()
 }
 
 /// The adapter for one signed-in mailbox.
