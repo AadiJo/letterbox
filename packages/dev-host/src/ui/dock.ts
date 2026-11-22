@@ -2,11 +2,11 @@
 // handles, typing a draft as a user would, and the checks that the dock matches the design.
 // The draft reads like the body it answers, the conversation's end stays in view above it,
 // Send stays in view in a small window, the dock's edges line up, and a draft comes back
-// exactly as written after it is folded, left, or sent and taken back.
+// exactly as written after it is folded, left, sent and taken back, or the page reloads.
 
 import type { Page } from 'playwright'
 import { equal } from './record.ts'
-import { body, dock, open, toast } from './reply-page.ts'
+import { bar, body, dock, open, toast } from './reply-page.ts'
 
 /** The draft's text, exactly as the editor holds it. */
 export const draftText = (page: Page) => body(page).inputValue()
@@ -195,4 +195,31 @@ export async function checkDraftFidelity(page: Page, subject: string, other: str
   await body(page).press('ControlOrMeta+v')
   await roundTrip(`Typed first. ${PASTED}`, 'pasted text')
   await dock(page).getByRole('button', { name: 'Discard' }).click()
+}
+
+/**
+ * With Maya's draft open under Notes from Thursday and Tomas's open under Lease addendum for
+ * 4B: a reload keeps both, each as it was. Tomas's comes back folded to its bar with its words,
+ * and Maya's open, word for word. Ends with Tomas's draft open.
+ */
+export async function checkDraftsAfterReload(page: Page, mayaText: string) {
+  const tomasText = 'Signed, sending it back today.'
+  // Reopening a conversation does not move the focus to its draft, so focus it before Esc.
+  await body(page).focus()
+  await page.keyboard.press('Escape')
+  await bar(page).waitFor()
+  await page.reload()
+  await open(page, 'Lease addendum for 4B')
+  await bar(page).waitFor()
+  equal(
+    [await dock(page).count(), (await bar(page).textContent())?.startsWith(`Reply to TomasR${tomasText.slice(0, 7)}`)],
+    [0, true],
+    "after a reload Tomas's draft is still folded to its bar, with its words",
+  )
+  await open(page, 'Notes from Thursday')
+  await dock(page).waitFor()
+  equal(await draftText(page), mayaText, "after a reload Maya's draft is open, word for word")
+  await open(page, 'Lease addendum for 4B')
+  await bar(page).click()
+  equal(await draftText(page), tomasText, "after a reload Tomas's draft opens word for word")
 }

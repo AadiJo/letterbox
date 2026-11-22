@@ -1,8 +1,9 @@
 // Mail being written: one reply per conversation, and one new message or forward on the
 // compose page (`COMPOSE`), kept for the session as the user moves between conversations and
-// screens. The page's draft, and whether the page is up, are also kept across a reload. The
-// editors read and edit their draft here, and sending.ts takes it from here when it goes.
-// Nothing else holds a draft.
+// screens. Every draft the user can still edit is also kept across a reload: each reply, open
+// or folded, and the page's draft with whether the page is up. One waiting on the core is
+// sending.ts's to keep. The editors read and edit their draft here, and sending.ts takes it
+// from here when it goes. Nothing else holds a draft.
 
 import type {
   AccountId,
@@ -16,7 +17,13 @@ import type {
   ThreadId,
 } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
-import { readStoredPage, saveStoredPage } from './stored-sends.ts'
+import {
+  readStoredPage,
+  readStoredReplies,
+  type StoredReply,
+  saveStoredPage,
+  saveStoredReplies,
+} from './stored-sends.ts'
 
 /** One person on the To, Cc or Bcc line. `name` is only for the chip. The core gets the address. */
 export type Recipient = { address: string; name: string | null }
@@ -92,13 +99,23 @@ function savePage() {
   saveStoredPage(page?.state === 'open' ? { reply: page.reply, open: pageUp } : null)
 }
 
+/** Keeps every conversation's reply draft the user can still edit for the next load, open or folded. */
+function saveReplies() {
+  const rows = [...drafts].flatMap(([id, composer]): StoredReply[] =>
+    id !== COMPOSE && (composer.state === 'open' || composer.state === 'collapsed')
+      ? [{ threadId: id, reply: composer.reply, state: composer.state }]
+      : [],
+  )
+  saveStoredReplies(rows)
+}
+
 const set = (id: DraftKey, next: Composer | null) => {
   if (next) drafts.set(id, next)
   else drafts.delete(id)
   if (id === COMPOSE) {
     if (!next) pageUp = false
     savePage()
-  }
+  } else saveReplies()
   watchers.forEach((watcher) => watcher())
 }
 
@@ -107,6 +124,10 @@ const set = (id: DraftKey, next: Composer | null) => {
   if (kept) {
     drafts.set(COMPOSE, { state: 'open', reply: kept.reply, extra: false, problem: null })
     pageUp = kept.open
+  }
+  for (const { threadId, reply, state } of readStoredReplies()) {
+    const extra = reply.cc.length > 0 || reply.bcc.length > 0
+    drafts.set(threadId, { state, reply, extra, problem: null })
   }
 }
 

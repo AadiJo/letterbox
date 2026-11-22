@@ -1,15 +1,15 @@
-// The UI check of replying, over the dev host's parts in this process, like rollback.ts, so it
-// can tell the sim provider to refuse or hold a send and count the sends it got. R opens the
-// docked editor with To filled in, Shift+R adds Cc without the user, Esc keeps the draft, and
-// each conversation keeps its own. A bad address stops at its line. Send shows the reply at
-// once and offers Undo for exactly as long as the core holds it: page time, another screen
-// or a reload do not end it, the core's update does. Meanwhile R shows that reply read only
-// and starts no second one, and Undo brings back exactly that reply, even after someone
-// else wrote. Past the window the reply goes exactly once, and only then does the turn move.
-// A refused send says why and can be written again, and a send whose answer is lost waits as
-// Checking, then goes once.
-// reply-recovery.ts adds a reload without session storage, a merge of conversations and an
-// undo whose answer is lost, and reply-page.ts holds the mail and page helpers both share.
+// The UI check of replying, over the dev host's parts in this process, like rollback.ts, so it can
+// tell the sim provider to refuse or hold a send and count the sends it got. R opens the docked
+// editor with To filled in, Shift+R adds Cc without the user, Esc keeps the draft, and each
+// conversation keeps its own, open or folded, through a reload too. A bad address stops at its
+// line. Send shows the reply at once and offers Undo for exactly as long as the core holds it: page
+// time, another screen or a reload do not end it, the core's update does. Meanwhile R shows that
+// reply read only and starts no second one, and Undo brings back exactly that reply, even after
+// someone else wrote. Past the window the reply goes exactly once, and only then does the turn
+// move. A refused send says why and can be written again, and a send whose answer is lost waits as
+// Checking, then goes once. reply-recovery.ts adds a reload without session storage, a merge of
+// conversations and an undo whose answer is lost, and reply-page.ts holds the mail and page helpers
+// both share.
 //
 // The dev host's clock is fixed and its waits end at once, so a send's window passes as soon
 // as it starts. Cores started while `hold` is true get `--hold-waits`, which keeps the window
@@ -23,7 +23,15 @@ import type { Browser } from 'playwright'
 import { logChildrenTo, stopChildren } from '../children.ts'
 import { buildCore, type Paths } from '../core.ts'
 import { startServer } from '../server.ts'
-import { checkDockEdges, checkDockFits, checkDraftFidelity, checkDraftReadsLikeBody, draftText, write } from './dock.ts'
+import {
+  checkDockEdges,
+  checkDockFits,
+  checkDraftFidelity,
+  checkDraftsAfterReload,
+  checkDraftReadsLikeBody,
+  draftText,
+  write,
+} from './dock.ts'
 import { appErrors, capture, captureC2, equal, openPage, root } from './record.ts'
 import {
   bar,
@@ -163,6 +171,8 @@ export async function checkReply(browser: Browser) {
     equal(await draftText(page), mayaText, "Maya's draft is still Maya's")
     await open(page, 'Lease addendum for 4B')
     equal(await draftText(page), 'Signed, sending it back today.', "Tomas's draft is still Tomas's")
+
+    await checkDraftsAfterReload(page, mayaText)
     await dock(page).getByRole('button', { name: 'Discard' }).click()
     equal(
       [await dock(page).count(), await bar(page).textContent()],
