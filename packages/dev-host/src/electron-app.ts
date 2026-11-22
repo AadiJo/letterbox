@@ -92,8 +92,16 @@ export type Launched = {
   startedAt: number
 }
 
-/** Launches the app with its page at `renderer`, against the sim, with any extra Chromium `switches`. Main's output goes to the shell log. */
-export async function launch(name: string, renderer: string, switches: string[] = []): Promise<Launched> {
+/**
+ * Launches the app with its page at `renderer`, with any extra Chromium `switches`, against the
+ * sim unless `env` gives the shell another core (shellEnv). Main's output goes to the shell log.
+ */
+export async function launch(
+  name: string,
+  renderer: string,
+  switches: string[] = [],
+  env = shellEnv(paths, renderer, { kind: 'sim', now: seed.now }),
+): Promise<Launched> {
   const from = existsSync(MAIN_LOG) ? readFileSync(MAIN_LOG, 'utf8').length : 0
   const startedAt = Date.now()
   // Playwright turns Chromium's sandbox off unless asked. The app runs with it on, so the check does too.
@@ -102,7 +110,7 @@ export async function launch(name: string, renderer: string, switches: string[] 
       executablePath: electronBinary(),
       args: [...switches, SHELL],
       cwd: root,
-      env: shellEnv(paths, renderer, { kind: 'sim', now: seed.now }),
+      env,
       chromiumSandbox: true,
       timeout: WAIT_MS,
     })
@@ -176,8 +184,9 @@ export async function withApp<Result>(
   renderer: string,
   body: (run: Launched) => Promise<Result>,
   switches: string[] = [],
+  env?: Record<string, string>,
 ) {
-  const run = await launch(name, renderer, switches)
+  const run = await launch(name, renderer, switches, env)
   try {
     return await body(run)
   } finally {

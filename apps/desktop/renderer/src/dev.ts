@@ -1,8 +1,22 @@
 // Hooks for a coding agent driving the renderer in a browser. Dev builds only: main.tsx
 // loads this file behind `import.meta.env.DEV`. The routes it calls exist only in packages/dev-host.
+//
+// With `?sign-in=oauth` on the page URL, as `pnpm dev:desktop --core gmail` loads it, the page
+// also starts the core's OAuth sign-in once if no account is signed in (startOauth). The
+// renderer has no sign-in screen yet, and the real core's store starts empty.
 
 import type { Client } from '@letterbox/client'
-import type { Attachment, ThreadId } from '@letterbox/protocol'
+import type { Attachment, SignInError, ThreadId } from '@letterbox/protocol'
+
+/** The query parameter that asks for startOauth. packages/dev-host adds it to the page URL. */
+const SIGN_IN_PARAM = 'sign-in'
+
+/** What startOauth came to. */
+export type OauthStart =
+  | { kind: 'already-signed-in' }
+  | { kind: 'signed-in' }
+  | { kind: 'no-oauth-option' }
+  | { kind: 'failed'; error: SignInError }
 
 declare global {
   interface Window {
@@ -21,13 +35,40 @@ declare global {
       threadOf(subject: string): Promise<ThreadId>
       /** Marks the conversation with this subject read, and resolves once the core has answered everything before. */
       markRead(subject: string): Promise<void>
+      /** What the page's own OAuth sign-in came to, on a page loaded with `?sign-in=oauth`. Undefined on any other. */
+      oauth: Promise<OauthStart> | undefined
     }
   }
 }
 
-/** Puts the hooks on `window.letterboxDev`. */
+/**
+ * Starts the first OAuth option the core lists, if no account is signed in: none at all, or
+ * each one needing a sign-in again. The core sends the consent page as `open-url`. In the
+ * desktop shell main opens it in the browser with shell.openExternal; this page leaves it
+ * alone (core.ts claims nothing), so the page never shows or opens it. Resolves once the core
+ * answers, which is after the person finishes or abandons consent.
+ */
+async function startOauth(client: Client): Promise<OauthStart> {
+  const accounts = await client.query({ view: 'accounts' })
+  if (accounts.some((account) => account.status.state !== 'needs-sign-in')) return { kind: 'already-signed-in' }
+  const options = await client.query({ view: 'sign-in-options' })
+  const option = options.find((candidate) => candidate.method === 'oauth')
+  if (!option) return { kind: 'no-oauth-option' }
+  const signedIn = await client.request({ method: 'sign-in', option: option.id })
+  return signedIn.ok ? { kind: 'signed-in' } : { kind: 'failed', error: signedIn.error }
+}
+
+/** Puts the hooks on `window.letterboxDev`, and starts the OAuth sign-in if the page URL asks for it. */
 export function installDevHooks(client: Client) {
+  const oauth =
+    new URLSearchParams(location.search).get(SIGN_IN_PARAM) === 'oauth'
+      ? startOauth(client).then((start) => {
+          console.info('[dev] oauth sign-in:', start)
+          return start
+        })
+      : undefined
   window.letterboxDev = {
+    oauth,
     deliver: async (count) => {
       const response = await fetch('/dev/deliver', {
         method: 'POST',

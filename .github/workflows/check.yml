@@ -145,8 +145,9 @@ jobs:
   # The desktop app on Windows and macOS, where the owner runs it. Linux runs the full check
   # above. Here each OS builds the two core programs and runs what does not need unix sockets:
   #   - a real round trip through the system keychain (Credential Manager, Keychain Services)
-  #     with SystemKeychain, under a throwaway account named for this run, and on macOS a
-  #     locked keychain, which must give errors, not a panic (crates/keychain/examples);
+  #     with SystemKeychain, under a throwaway account named for this run: two stores apart,
+  #     an old entry moved, and on macOS a locked keychain, which must give errors, not a
+  #     panic (crates/keychain/examples/keychain-round-trip.rs);
   #   - the app host check: letterbox-core starts, answers hello, lists Gmail, and exits;
   #   - the Electron check: the shell on the sim core, over a named pipe on Windows, with each
   #     run but the gmail one, whose error dialog waits for a click (electron-check.ts).
@@ -181,29 +182,31 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: cargo build --bin core-sim --bin letterbox-core --package letterbox-keychain --example keychain-round-trip
+      # Both programs in one command. The keychain step's `cargo run` builds its example.
+      - run: cargo build --bin core-sim --bin letterbox-core
 
-      # The runner's own keychain: the login keychain on macOS, the runner user's Credential Manager on Windows.
+      # Credential Manager of the runner's user.
       - name: keychain round trip
+        if: runner.os == 'Windows'
         timeout-minutes: 3
         run: cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT"
 
-      # A throwaway keychain, made the default so the check can lock it, then removed.
-      - name: locked keychain
+      # Both macOS cases in one throwaway keychain, made, unlocked and made the default here,
+      # since the runner's login keychain may be locked. The trap puts the default back and
+      # removes the keychain however the step ends, and is set before the default changes.
+      - name: keychain round trip and locked keychain
         if: runner.os == 'macOS'
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: |
           keychain="$RUNNER_TEMP/letterbox-ci.keychain-db"
           login=$(security default-keychain -d user | xargs)
           security create-keychain -p letterbox-ci "$keychain"
+          trap 'security default-keychain -d user -s "$login"; security delete-keychain "$keychain"' EXIT
           security set-keychain-settings "$keychain"
           security unlock-keychain -p letterbox-ci "$keychain"
           security default-keychain -d user -s "$keychain"
-          status=0
-          cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT-locked" --locked || status=$?
-          security default-keychain -d user -s "$login"
-          security delete-keychain "$keychain"
-          exit $status
+          cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT"
+          cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT-locked" --locked "$keychain"
 
       - run: pnpm check:app-host
 
@@ -232,5 +235,8 @@ jobs:
           DESKTOP: ${{ needs.desktop.result }}
         run: |
           echo "changes: $CHANGES (break test needed: $NEEDS_BREAKS), checks: $CHECKS, breaks: $BREAKS, desktop: $DESKTOP"
-          test "$CHANGES" = success && test "$CHECKS" = success && test "$DESKTOP" = success
+          # One test per line: under bash -e, a failed test that is not the last of an && list does not stop the step.
+          test "$CHANGES" = success
+          test "$CHECKS" = success
+          test "$DESKTOP" = success
           if [ "$NEEDS_BREAKS" = true ]; then test "$BREAKS" = success; else test "$BREAKS" = skipped; fi

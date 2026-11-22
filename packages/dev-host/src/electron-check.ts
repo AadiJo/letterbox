@@ -2,7 +2,7 @@
 //
 // Builds the shell and a renderer, signs the people-first seed in at the sim provider, and
 // launches the app with Playwright's Electron driver. Main starts core-sim itself, as it
-// starts letterbox-core in the app. Seven runs, each a fresh app over the same store:
+// starts letterbox-core in the app. Nine runs, each a fresh app over the same store but oauth's:
 //   built     the built renderer on app://. The first row paints, the core's messages go
 //             over the MessagePort and nothing opens a WebSocket, the page runs in the OS
 //             sandbox with no switch turning it off, and its policy blocks inline script.
@@ -18,6 +18,8 @@
 //             dialogs and its OS open call stubbed (electron-attachments.ts).
 //   notify    the Vite renderer, as new mail syncs in, with main's notifications and badge
 //             stubbed (electron-notify.ts).
+//   oauth     the dev Gmail launch's sign-in against the fake Gmail: the page starts OAuth,
+//             main opens the consent page, and a restart resumes (electron-oauth.ts). Not on Windows.
 //   gmail     real mode with no client file, and with one that does not exist. Main exits
 //             with 1 and says what to set, before any window or core. Linux only (see gmailRun).
 // It also checks that the dev host refuses a --state that would empty the real core's store.
@@ -40,6 +42,7 @@ import { STOP_MS } from '@letterbox/desktop-shell/core'
 import { exited, killChildrenNow, logChildrenTo, startChild, stopChildren } from './children.ts'
 import { attachmentsRun } from './electron-attachments.ts'
 import { notifyRun } from './electron-notify.ts'
+import { oauthRun } from './electron-oauth.ts'
 import {
   ARTIFACTS,
   CheckFailure,
@@ -416,6 +419,7 @@ if (failure === null) {
   })
   await part(async () => sim && server && (await attachmentsRun(sim, server)))
   await part(async () => sim && server && (await notifyRun(sim, server)))
+  await part(async () => server && (await oauthRun(server)))
   await part(() => crashRun(renderer))
   await part(redirectRun)
   await part(insecureRun)

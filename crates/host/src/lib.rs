@@ -57,9 +57,9 @@ pub struct GmailClient {
 /// Gmail at Google's real endpoints.
 pub fn app_parts(data_path: PathBuf, gmail: GmailClient) -> Parts {
     Parts {
+        secrets: Box::new(SystemKeychain::for_store(&data_path)),
         data_path,
         env: Box::new(SystemEnvironment),
-        secrets: Box::new(SystemKeychain),
         factories: vec![gmail_factory(GmailConfig::google(gmail.id, gmail.secret))],
         undo_window: UNDO_WINDOW,
         confirm_window: CONFIRM_WINDOW,

@@ -3,17 +3,23 @@
 //! and macOS (Keychain Services), each time with an account name of its own:
 //!
 //!   cargo run -p letterbox-keychain --example keychain-round-trip -- <account>
-//!   cargo run -p letterbox-keychain --example keychain-round-trip -- <account> --locked
+//!   cargo run -p letterbox-keychain --example keychain-round-trip -- <account> --locked <keychain>
 //!
-//! The first form checks, in order: a missing entry reads None, deleting it is fine, a written
-//! session reads back in a new process (as after a restart), a second write replaces it, and
-//! after a delete it reads None again, in this process and a new one.
+//! The first form uses three throwaway stores, each a data folder in the temp folder, and
+//! checks in order:
+//!   - store A: a missing entry reads None, and deleting it is fine; a written session reads
+//!     back in a new process, as after a restart;
+//!   - store B, with the same account id: it reads None, then its own session, while A still
+//!     reads A's, each in a new process. Deleting A's leaves B's;
+//!   - store C: an entry from before store ids, named by the account id alone, reads back and
+//!     moves under C's name, so the old entry is gone and a new process still reads it.
 //!
-//! `--locked` is for macOS, where CI has made a throwaway keychain the default. It writes a
-//! session, locks that keychain (`security lock-keychain`), and stops Keychain Services from
-//! asking the user to unlock it, which is what a person pressing Cancel comes to. Then a read
-//! and a write must each return an error, never panic or read None: the core answers that
-//! write's sign-in with `keychain`, and that read at start shows the account needs a sign-in.
+//! `--locked` is for macOS, where CI has made the throwaway keychain at `<keychain>` the
+//! default. It writes a session, locks that keychain (`security lock-keychain <keychain>`),
+//! and stops Keychain Services from asking the user to unlock it, which is what a person
+//! pressing Cancel comes to. Then a read and a write must each return an error, never panic
+//! or read None: the core answers that write's sign-in with `keychain`, and that read at
+//! start shows the account needs a sign-in.
 //!
 //! It writes to the keychain of whoever runs it, so it runs only on a CI runner
 //! (GITHUB_ACTIONS=true) and only for an account named `letterbox-ci-...`. Each step prints
@@ -24,14 +30,18 @@
     reason = "a check program reports each step on stdout and stderr. No protocol runs here"
 )]
 
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use letterbox_core::secrets::Secrets;
+use letterbox_core::secrets::{Secrets, SecretsError};
 use letterbox_keychain::SystemKeychain;
 use letterbox_protocol::AccountId;
 
 /// Every account this program touches starts with this, so it never reads or writes a real one.
 const PREFIX: &str = "letterbox-ci-";
+
+/// The service `SystemKeychain` files entries under, for planting an entry from before store ids.
+const SERVICE: &str = "letterbox";
 
 /// Shaped like a Gmail session (crates/gmail/src/factory.rs), with a refresh token of Google's
 /// usual length. Windows keeps at most 2560 bytes of UTF-16, 1280 characters, per entry.
@@ -41,13 +51,20 @@ const SECOND: &str = r#"{"address":"ci@example.invalid","refresh_token":"1//0gCI
 /// What one step saw, as one line.
 type Step = Result<String, String>;
 
+enum Mode {
+    RoundTrip,
+    Locked(PathBuf),
+    /// The child half of a round trip: prints what a fresh process reads in one store.
+    Read(PathBuf),
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (account, mode) = match args.as_slice() {
         [account] => (account, Mode::RoundTrip),
-        [account, flag] if flag == "--locked" => (account, Mode::Locked),
-        [flag, account] if flag == "--read" => (account, Mode::Read),
-        _ => return refuse("usage: keychain-round-trip <account> [--locked]"),
+        [account, flag, keychain] if flag == "--locked" => (account, Mode::Locked(PathBuf::from(keychain))),
+        [flag, store, account] if flag == "--read" => (account, Mode::Read(PathBuf::from(store))),
+        _ => return refuse("usage: keychain-round-trip <account> [--locked <keychain>]"),
     };
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
         return refuse("this writes to the system keychain, so it runs only on a CI runner (GITHUB_ACTIONS=true)");
@@ -62,28 +79,23 @@ fn main() -> ExitCode {
         reason = "a check program names its own throwaway account"
     )]
     let account = AccountId::minted(account.clone());
+    let stores = std::env::temp_dir().join(account.as_str());
     match mode {
-        // The child half of a round trip: print what a fresh process reads, for the parent to compare.
-        Mode::Read => match SystemKeychain.read(&account) {
-            Ok(Some(session)) => {
-                println!("{session}");
-                ExitCode::SUCCESS
-            }
-            Ok(None) => {
-                println!("<none>");
+        Mode::Read(store) => match SystemKeychain::for_store(&store).read(&account) {
+            Ok(session) => {
+                println!("{}", session.as_deref().unwrap_or("<none>"));
                 ExitCode::SUCCESS
             }
             Err(error) => refuse(&format!("read failed: {}", error.0)),
         },
-        Mode::RoundTrip => report(&round_trip(&account)),
-        Mode::Locked => report(&locked(&account)),
+        Mode::RoundTrip => {
+            let _ = std::fs::remove_dir_all(&stores);
+            let code = report(&round_trip(&account, &stores));
+            let _ = std::fs::remove_dir_all(&stores);
+            code
+        }
+        Mode::Locked(keychain) => report(&locked(&account, &stores.join("locked"), &keychain)),
     }
-}
-
-enum Mode {
-    RoundTrip,
-    Locked,
-    Read,
 }
 
 fn refuse(why: &str) -> ExitCode {
@@ -125,17 +137,32 @@ fn reads(read: Result<Option<String>, String>, expected: Option<&str>) -> Step {
 }
 
 fn shown(session: Option<&str>) -> String {
-    session.map_or_else(
-        || "no entry".to_owned(),
-        |session| format!("{} characters", session.len()),
-    )
+    match session {
+        None => "no entry".to_owned(),
+        Some(FIRST) => "the first session".to_owned(),
+        Some(SECOND) => "the second session".to_owned(),
+        Some(other) => format!("another session of {} characters", other.len()),
+    }
 }
 
-/// Reads the entry in a new process of this program, as the app's core does after a restart.
-fn read_in_new_process(account: &AccountId) -> Result<Option<String>, String> {
+fn done(result: Result<(), SecretsError>) -> Step {
+    result
+        .map(|()| "done".to_owned())
+        .map_err(|error| format!("failed: {}", error.0))
+}
+
+/// Reads the entry of `store` in this process.
+fn here(store: &Path, account: &AccountId) -> Result<Option<String>, String> {
+    SystemKeychain::for_store(store).read(account).map_err(|error| error.0)
+}
+
+/// Reads the entry of `store` in a new process of this program, as the app's core does after a restart.
+fn in_new_process(store: &Path, account: &AccountId) -> Result<Option<String>, String> {
     let program = std::env::current_exe().map_err(|error| error.to_string())?;
     let output = Command::new(program)
-        .args(["--read", account.as_str()])
+        .arg("--read")
+        .arg(store)
+        .arg(account.as_str())
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -145,57 +172,94 @@ fn read_in_new_process(account: &AccountId) -> Result<Option<String>, String> {
     Ok((text != "<none>").then_some(text))
 }
 
-fn here(account: &AccountId) -> Result<Option<String>, String> {
-    SystemKeychain.read(account).map_err(|error| error.0)
+/// The entry named by the account id alone, as `SystemKeychain` filed sessions before store ids.
+fn old_entry(account: &AccountId) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SERVICE, account.as_str()).map_err(|error| error.to_string())
 }
 
-fn done(result: Result<(), letterbox_core::secrets::SecretsError>) -> Step {
-    result
-        .map(|()| "done".to_owned())
-        .map_err(|error| format!("failed: {}", error.0))
-}
-
-fn round_trip(account: &AccountId) -> Vec<(&'static str, Step)> {
-    let keychain = SystemKeychain;
-    vec![
-        ("a missing entry reads None", reads(here(account), None)),
-        ("deleting a missing entry is fine", done(keychain.delete(account))),
-        ("write a session", done(keychain.write(account, FIRST))),
-        (
-            "a new process reads it back",
-            reads(read_in_new_process(account), Some(FIRST)),
-        ),
-        ("write a second session over it", done(keychain.write(account, SECOND))),
-        ("it reads the second session", reads(here(account), Some(SECOND))),
-        ("delete it", done(keychain.delete(account))),
-        ("after the delete it reads None", reads(here(account), None)),
-        (
-            "a new process reads None too",
-            reads(read_in_new_process(account), None),
-        ),
-    ]
+/// Runs the steps in order. Each one runs only after the one before it has, which matters:
+/// store A reading a missing entry would move an old entry planted any earlier.
+fn round_trip(account: &AccountId, stores: &Path) -> Vec<(&'static str, Step)> {
+    let (a, b, c) = (stores.join("a"), stores.join("b"), stores.join("c"));
+    let store_a = SystemKeychain::for_store(&a);
+    let store_b = SystemKeychain::for_store(&b);
+    let store_c = SystemKeychain::for_store(&c);
+    let mut steps = Vec::new();
+    let mut step = |what: &'static str, saw: Step| steps.push((what, saw));
+    step("A: a missing entry reads None", reads(here(&a, account), None));
+    step("A: deleting a missing entry is fine", done(store_a.delete(account)));
+    step("A: write the first session", done(store_a.write(account, FIRST)));
+    step(
+        "A: a new process reads it back",
+        reads(in_new_process(&a, account), Some(FIRST)),
+    );
+    step("B, same account id: reads None", reads(here(&b, account), None));
+    step("B: write the second session", done(store_b.write(account, SECOND)));
+    step(
+        "A: a new process still reads A's",
+        reads(in_new_process(&a, account), Some(FIRST)),
+    );
+    step(
+        "B: a new process reads B's",
+        reads(in_new_process(&b, account), Some(SECOND)),
+    );
+    step("A: delete it", done(store_a.delete(account)));
+    step(
+        "A: after the delete it reads None",
+        reads(in_new_process(&a, account), None),
+    );
+    step(
+        "B: a new process still reads B's",
+        reads(in_new_process(&b, account), Some(SECOND)),
+    );
+    step("B: delete it", done(store_b.delete(account)));
+    let planted = old_entry(account).and_then(|old| old.set_password(FIRST).map_err(|error| error.to_string()));
+    step(
+        "plant an entry from before store ids",
+        planted.map(|()| "done".to_owned()),
+    );
+    step("C: reads the old entry", reads(here(&c, account), Some(FIRST)));
+    let old_left = old_entry(account).and_then(|old| match old.get_password() {
+        Ok(session) => Ok(Some(session)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    });
+    step("C: the old entry is gone, moved", reads(old_left, None));
+    step(
+        "C: a new process reads it under C's name",
+        reads(in_new_process(&c, account), Some(FIRST)),
+    );
+    step("C: delete it", done(store_c.delete(account)));
+    step(
+        "C: after the delete it reads None",
+        reads(in_new_process(&c, account), None),
+    );
+    steps
 }
 
 /// Holds when the call failed with an error, which the core turns into `keychain`.
 #[cfg(target_os = "macos")]
-fn refused<T: std::fmt::Debug>(result: Result<T, letterbox_core::secrets::SecretsError>) -> Step {
+fn refused<T: std::fmt::Debug>(result: Result<T, SecretsError>) -> Step {
     match result {
         Err(error) => Ok(format!("error: {}", error.0)),
         Ok(value) => Err(format!("expected an error, got Ok({value:?})")),
     }
 }
 
-/// A session written, the default keychain locked, then a read and a write that may not ask
-/// the user to unlock it. macOS only.
+/// A session written, `keychain` locked, then a read and a write that may not ask the user to
+/// unlock it. macOS only.
 #[cfg(target_os = "macos")]
-fn locked(account: &AccountId) -> Vec<(&'static str, Step)> {
-    let keychain = SystemKeychain;
-    let mut steps = vec![("write a session", done(keychain.write(account, FIRST)))];
-    let lock = Command::new("/usr/bin/security").arg("lock-keychain").status();
+fn locked(account: &AccountId, store: &Path, keychain: &Path) -> Vec<(&'static str, Step)> {
+    let secrets = SystemKeychain::for_store(store);
+    let mut steps = vec![("write a session", done(secrets.write(account, FIRST)))];
+    let lock = Command::new("/usr/bin/security")
+        .arg("lock-keychain")
+        .arg(keychain)
+        .status();
     steps.push((
-        "lock the default keychain",
+        "lock the keychain",
         match lock {
-            Ok(status) if status.success() => Ok("done".to_owned()),
+            Ok(status) if status.success() => Ok(keychain.display().to_string()),
             Ok(status) => Err(format!("security lock-keychain exited with {status}")),
             Err(error) => Err(error.to_string()),
         },
@@ -210,17 +274,17 @@ fn locked(account: &AccountId) -> Vec<(&'static str, Step)> {
     };
     steps.push((
         "a read from the locked keychain is an error",
-        refused(keychain.read(account)),
+        refused(secrets.read(account)),
     ));
     steps.push((
         "a write to the locked keychain is an error",
-        refused(keychain.write(account, SECOND)),
+        refused(secrets.write(account, SECOND)),
     ));
     steps
 }
 
 #[cfg(not(target_os = "macos"))]
-fn locked(_account: &AccountId) -> Vec<(&'static str, Step)> {
+fn locked(_account: &AccountId, _store: &Path, _keychain: &Path) -> Vec<(&'static str, Step)> {
     vec![(
         "--locked",
         Err("runs on macOS only, where CI can lock the keychain".to_owned()),

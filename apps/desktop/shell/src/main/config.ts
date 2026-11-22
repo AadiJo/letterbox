@@ -7,6 +7,10 @@
 //   LETTERBOX_GMAIL_CLIENT  gmail: the JSON file Google Cloud Console downloads for an OAuth
 //                           client of type Desktop app. Never bundled, never in the repo.
 //   LETTERBOX_SIM_SOCKET    sim: the sim provider's socket, a named pipe on Windows.
+//   LETTERBOX_SIM_GMAIL     sim: the fake Gmail's URL (packages/sim-provider/src/gmail), with
+//   LETTERBOX_SIM_GMAIL_REDIRECTS  the folder its sign-in redirects arrive in (core-sim's
+//                           --gmail and --gmail-redirects). The Electron check's oauth run
+//                           sets these. A sim core needs a socket, a fake Gmail, or both.
 //   LETTERBOX_SIM_NOW       sim: the fixed time the core runs at.
 //   LETTERBOX_USER_DATA     optional. Electron's own state. Defaults to Electron's folder.
 //   LETTERBOX_DATA          optional. The core's store. Defaults to <user data>/core.
@@ -23,7 +27,10 @@ export type Renderer = { kind: 'server'; url: URL } | { kind: 'folder'; folder: 
 /** Which core to start, before its store is known. */
 export type CoreChoice =
   | { kind: 'gmail'; program: string; client: string }
-  | { kind: 'sim'; program: string; socket: string; now: string }
+  | { kind: 'sim'; program: string; socket: string | undefined; gmail: FakeGmail | undefined; now: string }
+
+/** The fake Gmail a sim core signs in to: its URL, and the folder its redirects arrive in. */
+export type FakeGmail = { url: string; redirects: string }
 
 export type Config = {
   renderer: Renderer
@@ -67,9 +74,17 @@ export function readConfig(env: Env): { ok: true; config: Config } | { ok: false
     )
     core = { kind, program, client }
   } else if (kind === 'sim') {
-    const socket = required('LETTERBOX_SIM_SOCKET', "the sim provider's socket")
+    const url = env.LETTERBOX_SIM_GMAIL || undefined
+    const gmail =
+      url === undefined
+        ? undefined
+        : { url, redirects: existing('LETTERBOX_SIM_GMAIL_REDIRECTS', "the fake Gmail's redirect folder") }
+    const socket =
+      gmail === undefined
+        ? required('LETTERBOX_SIM_SOCKET', "the sim provider's socket")
+        : env.LETTERBOX_SIM_SOCKET || undefined
     const now = required('LETTERBOX_SIM_NOW', 'the time the sim core runs at')
-    core = { kind, program, socket, now }
+    core = { kind, program, socket, gmail, now }
   } else {
     problems.push(`LETTERBOX_CORE is ${kind}. Set it to gmail or sim.`)
   }
@@ -98,7 +113,11 @@ export function coreCommand(core: CoreChoice, data: string): CoreCommand {
   switch (core.kind) {
     case 'gmail':
       return { program: core.program, args: ['--data', data, '--gmail-client', core.client] }
-    case 'sim':
-      return { program: core.program, args: ['--data', data, '--sim', core.socket, '--now', core.now] }
+    case 'sim': {
+      const sim = core.socket === undefined ? [] : ['--sim', core.socket]
+      const gmail =
+        core.gmail === undefined ? [] : ['--gmail', core.gmail.url, '--gmail-redirects', core.gmail.redirects]
+      return { program: core.program, args: ['--data', data, ...sim, ...gmail, '--now', core.now] }
+    }
   }
 }

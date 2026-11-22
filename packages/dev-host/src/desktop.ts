@@ -8,8 +8,14 @@ import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/buil
 import { type Child, startChild } from './children.ts'
 import { coreProgram, type Paths } from './core.ts'
 
-/** Which core the shell runs: core-sim against the dev host's provider, or the app's own over Gmail. */
-export type DesktopCore = { kind: 'sim'; now: string } | { kind: 'gmail'; client: string | undefined }
+/**
+ * Which core the shell runs: core-sim against the dev host's provider, core-sim against the
+ * fake Gmail alone (the Electron check's oauth run), or the app's own over Gmail.
+ */
+export type DesktopCore =
+  | { kind: 'sim'; now: string }
+  | { kind: 'fake-gmail'; now: string; url: string; redirects: string }
+  | { kind: 'gmail'; client: string | undefined }
 
 /**
  * The environment the shell's main reads. Every LETTERBOX_ variable of this process is left
@@ -34,6 +40,16 @@ export function shellEnv(paths: Paths, renderer: string, core: DesktopCore): Rec
       LETTERBOX_CORE: 'gmail',
       LETTERBOX_CORE_PROGRAM: coreProgram(paths, 'letterbox-core'),
       ...(core.client !== undefined && { LETTERBOX_GMAIL_CLIENT: core.client }),
+    }
+  }
+  if (core.kind === 'fake-gmail') {
+    return {
+      ...shared,
+      LETTERBOX_CORE: 'sim',
+      LETTERBOX_CORE_PROGRAM: coreProgram(paths, 'core-sim'),
+      LETTERBOX_SIM_GMAIL: core.url,
+      LETTERBOX_SIM_GMAIL_REDIRECTS: core.redirects,
+      LETTERBOX_SIM_NOW: core.now,
     }
   }
   return {

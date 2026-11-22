@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto'
 import { platform } from 'node:process'
 
 /**
+ * The pipe carries the simulator only, for dev and checks. Gmail mode never opens it.
+ *
  * The provider's address for the socket file `path`: `path` itself, or on Windows a named pipe
  * whose name comes from `path`, so one folder keeps one pipe and two folders rarely share one.
  * Pass the result to `startSimProvider` and to core-sim's `--sim`.
