@@ -1,14 +1,21 @@
 // One core process and the page port it talks through. Main stays a byte pipe: each line
 // the core writes goes to the port as a string, and each string from the port goes to the
-// core's input as one line. No line is parsed, except one that may be an `open-url`.
+// core's input as one line. No line is parsed, except one that may be an `open-url` or a
+// `your-turn`, which still go to the page, and the updates of main's own subscription.
+//
+// Main keeps the dock or taskbar badge itself: at start it subscribes to the conversations
+// that are the user's turn and unread, and not yet moved to Let go, under a random id the page cannot guess, and those
+// updates go to main only.
 //
 // Main logs one line per start, stop and exit, with the core's PID (log.ts), so a check can
 // confirm that no core outlives the app.
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import type { MessagePortMain } from 'electron'
 import type { HostFrame } from '@letterbox/client/message-port'
+import type { ClientMessage, CoreMessage, SubscriptionId, YourTurn } from '@letterbox/protocol'
 import type { CoreCommand } from './config.ts'
 import { log } from './log.ts'
 
@@ -24,11 +31,21 @@ export type CoreSession = {
   stop(): Promise<void>
 }
 
+/** What main does with what the core says to it, besides passing it to the page. */
+export type CoreHooks = {
+  /** Gets the url of each `open-url`. */
+  openUrl(url: string): void
+  /** Gets each `your-turn`. */
+  yourTurn(event: YourTurn): void
+  /** Gets how many conversations are the user's turn and unread, each time that changes. */
+  badge(count: number): void
+}
+
 /**
- * Starts `command` with piped stdio. Its stderr passes through to main's. `openUrl` gets the
- * url of each `open-url` the core sends; the line still goes to the page as well.
+ * Starts `command` with piped stdio. Its stderr passes through to main's. `hooks` hear what
+ * main acts on; an `open-url` or a `your-turn` line still goes to the page as well.
  */
-export function startCore(command: CoreCommand, openUrl: (url: string) => void): CoreSession {
+export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
   const child = spawn(command.program, command.args, { stdio: ['pipe', 'pipe', 'pipe'] })
   const { pid } = child
   const unsent: HostFrame[] = []
@@ -56,12 +73,29 @@ export function startCore(command: CoreCommand, openUrl: (url: string) => void):
   })
   if (pid !== undefined) log(`core ${pid} started: ${command.program}`)
 
+  // serde writes `kind` first and `sub` next, so only a line with this start can be the badge's.
+  const badgeLine = `{"kind":"update","sub":"shell-badge-`
+  const badge = `shell-badge-${randomUUID()}` as SubscriptionId
   createInterface({ input: child.stdout }).on('line', (line) => {
+    if (line.startsWith(badgeLine)) {
+      const total = badgeIn(line, badge)
+      if (total !== undefined) return hooks.badge(total)
+    }
     toPage += 1
     post(line)
     const url = line.includes('"open-url"') ? openUrlIn(line) : undefined
-    if (url !== undefined) openUrl(url)
+    if (url !== undefined) hooks.openUrl(url)
+    const yourTurn = line.startsWith('{"kind":"your-turn"') ? yourTurnIn(line) : undefined
+    if (yourTurn !== undefined) hooks.yourTurn(yourTurn)
   })
+  // One row is enough: the badge reads only the total. Conversations old enough to have
+  // moved to Let go are left out, as People leaves them out.
+  const subscribe: ClientMessage = {
+    kind: 'subscribe',
+    sub: badge,
+    query: { view: 'threads', filter: { turn: 'mine', unread: true, retired: false }, offset: 0, limit: 1 },
+  }
+  child.stdin.write(`${JSON.stringify(subscribe)}\n`)
   createInterface({ input: child.stderr }).on('line', (line) => {
     process.stderr.write(`${line}\n`)
     stderr.push(line)
@@ -119,6 +153,21 @@ function openUrlIn(line: string): string | undefined {
   }
   if (typeof message !== 'object' || message === null || !('kind' in message) || message.kind !== 'open-url') return
   return 'url' in message && typeof message.url === 'string' ? message.url : undefined
+}
+
+/** The core writes only protocol messages, which the scenarios check against the schema. */
+const read = (line: string): CoreMessage => JSON.parse(line)
+
+/** How many conversations an update of main's badge subscription `sub` counts, or undefined for another line. */
+function badgeIn(line: string, sub: SubscriptionId): number | undefined {
+  const message = read(line)
+  return message.kind === 'update' && message.sub === sub && message.view === 'threads' ? message.data.total : undefined
+}
+
+/** The event of a `your-turn` line, or undefined for another line. */
+function yourTurnIn(line: string): YourTurn | undefined {
+  const message = read(line)
+  return message.kind === 'your-turn' ? message : undefined
 }
 
 /** What the page shows when its core exits on its own. The page adds its own full stop. */

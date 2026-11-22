@@ -8,7 +8,8 @@
     "./core": "./src/main/core.ts"
   },
   "dependencies": {
-    "@letterbox/client": "workspace:*"
+    "@letterbox/client": "workspace:*",
+    "@letterbox/protocol": "workspace:*"
   },
   "devDependencies": {
     "electron": "45.2.1",

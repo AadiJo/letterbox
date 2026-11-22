@@ -1,10 +1,13 @@
-// The preload: a thin bridge between the sandboxed page and main. It puts two things on
-// `window.letterbox` (ShellBridge): the platform, for styling, and `connect`, which asks main
-// for a core. Main answers with a MessagePort, which this passes to the page as a window
-// message, because contextBridge cannot carry a port. Core messages never pass through here.
+// The preload: a thin bridge between the sandboxed page and main. It puts these on
+// `window.letterbox` (ShellBridge): the platform, for styling; `connect`, which asks main
+// for a core; and `onOpenConversation`, which tells the page which conversation a chosen
+// notification names, holding one that came before the page listened. Main answers `connect` with a MessagePort, which this passes to the
+// page as a window message, because contextBridge cannot carry a port. Core messages never
+// pass through here.
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { PORT_MESSAGE, type ShellBridge } from '@letterbox/client/message-port'
+import type { ThreadId } from '@letterbox/protocol'
 import type { Channel } from '../shared/channels.ts'
 
 /**
@@ -20,7 +23,32 @@ ipcRenderer.on('core:port' satisfies Channel, (event, asker: unknown) => {
   for (const port of event.ports) port.close()
 })
 
+/**
+ * The page's listeners for conversation:open, and the conversation main asked for before
+ * the page had one. A window that a notification opened gets its id before its page has
+ * loaded, so the id waits here for the first listener.
+ */
+const listeners = new Set<(threadId: ThreadId) => void>()
+let held: ThreadId | undefined
+ipcRenderer.on('conversation:open' satisfies Channel, (_event, threadId: unknown) => {
+  // Main sends the thread id the core put in its `your-turn`, so the string is branded here.
+  if (typeof threadId !== 'string') return
+  if (listeners.size === 0) held = threadId as ThreadId
+  for (const listener of listeners) listener(threadId as ThreadId)
+})
+
 contextBridge.exposeInMainWorld('letterbox', {
   platform: process.platform,
   connect: () => ipcRenderer.send('core:connect' satisfies Channel, documentId),
+  onOpenConversation: (listener) => {
+    // A fresh function per call, so the same listener can listen twice and stop each once.
+    const each = (threadId: ThreadId) => listener(threadId)
+    listeners.add(each)
+    if (held !== undefined) {
+      const threadId = held
+      held = undefined
+      each(threadId)
+    }
+    return () => void listeners.delete(each)
+  },
 } satisfies ShellBridge)

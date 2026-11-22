@@ -2,10 +2,12 @@
 // types: each side writes a channel name itself and checks it with `satisfies Channel`.
 
 /**
- * The IPC channels between main and the preload. Neither carries core messages, which go
- * over the MessagePort. Both carry the id the preload made for its document.
- *   core:connect  preload to main, once per page load: the page wants a core.
- *   core:port     main to preload: the page's end of a MessageChannelMain to that core,
- *                 for the document with that id only.
+ * The IPC channels between main and the preload. None carries core messages, which go
+ * over the MessagePort. The first two carry the id the preload made for its document.
+ *   core:connect       preload to main, once per page load: the page wants a core.
+ *   core:port          main to preload: the page's end of a MessageChannelMain to that core,
+ *                      for the document with that id only.
+ *   conversation:open  main to preload, with a thread id: the person chose the notification
+ *                      for that conversation, so the page should open it.
  */
-export type Channel = 'core:connect' | 'core:port'
+export type Channel = 'core:connect' | 'core:port' | 'conversation:open'
