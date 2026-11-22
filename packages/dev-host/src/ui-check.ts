@@ -7,6 +7,8 @@
 //   done          `pnpm dev` with the people-first seed again: the reading column at 1920 px, Done
 //                 and its undo, archive and Trash, a late answer and a scroll during an exit,
 //                 an empty Your turn, reduced motion (ui/done.ts)
+//   updates       `pnpm dev` with the updates seed: Updates and its volume, an opened sender, Mark
+//                 read and Archive all and their undo, Let go? by month, Let go and its toast (ui/updates.ts)
 //   many          `pnpm dev` with 6,000 conversations: scrolls All mail top to bottom (ui/scroll.ts)
 //   first sync    the dev host's parts in this process, with snapshot pages held (ui/first-sync.ts)
 //   rollback      the same parts, with an archive the provider refuses (ui/rollback.ts)
@@ -34,6 +36,7 @@ import { checkReply } from './ui/reply.ts'
 import { checkRollback } from './ui/rollback.ts'
 import { ARTIFACTS, closeLeftOpen, fail, failed, summarize } from './ui/record.ts'
 import { checkScroll } from './ui/scroll.ts'
+import { checkUpdatesScreens } from './ui/updates.ts'
 
 rmSync(ARTIFACTS, { recursive: true, force: true })
 mkdirSync(ARTIFACTS, { recursive: true })
@@ -47,7 +50,7 @@ async function runCheck(check: () => Promise<void>) {
 /** Runs `check` against a fresh `pnpm dev` with `seed`, then stops the host and checks what it left. `cores` is its page loads. */
 async function withDevHost(
   run: string,
-  seed: 'people-first' | 'many',
+  seed: 'people-first' | 'updates' | 'many',
   cores: number,
   browser: Browser,
   check: (browser: Browser, url: string) => Promise<void>,
@@ -68,6 +71,7 @@ try {
   await withDevHost('people-first', 'people-first', 2, browser, checkPeopleFirst)
   // The undo checks end the connection three times, and reload each time to connect again.
   await withDevHost('done', 'people-first', 4, browser, checkDone)
+  await withDevHost('updates', 'updates', 1, browser, checkUpdatesScreens)
   await withDevHost('many', 'many', 1, browser, checkScroll)
   await runCheck(() => checkFirstSync(browser))
   await runCheck(() => checkRollback(browser))

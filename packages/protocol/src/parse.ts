@@ -96,6 +96,7 @@ const sender = type({
   unread: 'number',
   subject: 'string',
   lastMessageAt: 'string',
+  days: type({ messages: 'number', unread: 'number' }).array(),
 })
 
 const body = type({ state: "'ready'", text: 'string', html: 'string | null', hasRemoteContent: 'boolean' })
@@ -126,7 +127,10 @@ const update = type({ view: "'accounts'", data: account.array() })
   .or({ view: "'mailboxes'", data: mailbox.array() })
   .or({ view: "'threads'", data: { total: 'number', threads: type(summaryFields).array() } })
   .or({ view: "'thread'", data: type({ ...summaryFields, messages: message.array() }).or('null') })
-  .or({ view: "'senders'", data: { total: 'number', senders: sender.array() } })
+  .or({
+    view: "'senders'",
+    data: { total: 'number', unreadSenders: 'number', unread: 'number', senders: sender.array() },
+  })
   .or({ view: "'recipients'", data: type({ name: 'string | null', address: 'string', lastAt: 'string' }).array() })
   .or({ view: "'change'", data: { threadId: 'string | null' } })
 

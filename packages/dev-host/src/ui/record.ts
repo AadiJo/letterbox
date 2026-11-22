@@ -253,19 +253,19 @@ export async function closeLeftOpen() {
 }
 
 /**
- * A page at a fixed locale and time zone, so dates read the same on every machine. It
- * collects page errors and remote requests. Chromium reports a load that a frame's
+ * A page at a fixed locale and time zone (UTC unless `timezoneId` names another), so dates
+ * read the same on every machine. It collects page errors and remote requests. Chromium reports a load that a frame's
  * Content Security Policy refused as a request that failed with "csp" before it reached
  * the network: those go in `blocked`. Every other remote request goes in `remote`.
  * Its trace goes to artifacts/ui/`trace` when the check closes it, or when `closeLeftOpen` does.
  */
-export async function openPage(browser: Browser, url: string, trace: string) {
+export async function openPage(browser: Browser, url: string, trace: string, timezoneId = 'UTC') {
   const unsafe = trace.match(UNSAFE_IN_FILE_NAMES)
   if (unsafe)
     throw new Error(
       `the trace name "${trace}" has ${JSON.stringify(unsafe[0])} in it, which CI's artifact upload rejects`,
     )
-  const context: BrowserContext = await browser.newContext({ viewport: SIZES.wide, locale: 'en-US', timezoneId: 'UTC' })
+  const context: BrowserContext = await browser.newContext({ viewport: SIZES.wide, locale: 'en-US', timezoneId })
   await context.tracing.start({ screenshots: true, snapshots: true })
   const page: Page = await context.newPage()
   page.setDefaultTimeout(WAIT_MS)
@@ -308,7 +308,18 @@ export async function capture(page: Page, name: string) {
 }
 
 /** The C2 design's screens, each named for the mock it is compared with: `c2-<screen>.png`. */
-export type C2Screen = 'people-1440' | 'people-1920' | 'done-1440' | 'reply-1440' | 'narrow-1024'
+export type C2Screen =
+  | 'people-1440'
+  | 'people-1920'
+  | 'done-1440'
+  | 'reply-1440'
+  | 'narrow-1024'
+  | 'updates-1440'
+  | 'updates-1024'
+  | 'letgo-1440'
+  | 'letgo-undo-1440'
+  | 'letgo-undo-1024'
+  | 'people-letgo-1440'
 
 const C2_SIZES = {
   'people-1440': SIZES.wide,
@@ -316,6 +327,12 @@ const C2_SIZES = {
   'done-1440': SIZES.wide,
   'reply-1440': SIZES.wide,
   'narrow-1024': SIZES.narrow,
+  'updates-1440': SIZES.wide,
+  'updates-1024': SIZES.narrow,
+  'letgo-1440': SIZES.wide,
+  'letgo-undo-1440': SIZES.wide,
+  'letgo-undo-1024': SIZES.narrow,
+  'people-letgo-1440': SIZES.wide,
 } as const satisfies Record<C2Screen, (typeof SIZES)[keyof typeof SIZES]>
 
 /**

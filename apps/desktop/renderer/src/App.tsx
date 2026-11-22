@@ -7,11 +7,13 @@ import { useState } from 'react'
 import { type Chosen, useChosen } from './chosen.ts'
 import { useView } from './core.ts'
 import { MailboxesProvider } from './Label.tsx'
+import { LetGoScreen } from './LetGoScreen.tsx'
 import { MailScreen } from './MailScreen.tsx'
 import { PeopleScreen, usePeople } from './PeopleScreen.tsx'
 import type { Chrome } from './Screen.tsx'
 import { Search } from './Search.tsx'
 import { type Place, Sidebar } from './Sidebar.tsx'
+import { updatesInbox, UpdatesScreen } from './UpdatesScreen.tsx'
 
 export function App() {
   const knownAccounts = useView({ view: 'accounts' })
@@ -73,6 +75,12 @@ export function App() {
     switch (place.kind) {
       case 'people':
         return <PeopleScreen key="people" chrome={chrome} accounts={accounts} />
+      case 'let-go':
+        return <LetGoScreen key="let-go" chrome={chrome} accounts={accounts} />
+      case 'updates': {
+        const inbox = updatesInbox(accounts, mailboxes)
+        return inbox && <UpdatesScreen key="updates" chrome={chrome} accounts={accounts} inbox={inbox} />
+      }
       case 'all':
         return <MailScreen key="all" title="All mail" filter={{}} chrome={chrome} accounts={accounts} />
       case 'mailbox': {

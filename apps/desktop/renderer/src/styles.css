@@ -28,6 +28,8 @@
   --color-pill: rgb(255 255 255 / 8%);
   --color-nav: rgb(255 255 255 / 7%);
   --color-keycap: rgb(255 255 255 / 12%);
+  /* The line a sender's volume strip stands on. */
+  --color-baseline: rgb(255 255 255 / 9%);
   --color-fg: #f5f5f5;
   --color-fg2: #d2d2d2;
   --color-muted: #a3a3a3;
@@ -52,6 +54,9 @@
   /* Initials in an avatar. */
   --text-tiny: 10px;
   --text-tiny--line-height: 1;
+  /* Initials on a sender's square mark in a list row. */
+  --text-mark: 10.5px;
+  --text-mark--line-height: 1;
   --text-key: 11px;
   --text-key--line-height: 16px;
   --text-caption: 11.5px;
@@ -129,6 +134,9 @@
   --color-tint: hsl(var(--hue) 70% 60% / 16%);
   --color-tint-fg: hsl(var(--hue) 75% 75%);
   --color-tint-dot: hsl(var(--hue) 72% 70%);
+  /* An avatar's tile and initials: opaque, so the initials read at 5.3:1 or more on every hue. */
+  --color-avatar: hsl(var(--hue) 40% 22%);
+  --color-avatar-fg: hsl(var(--hue) 75% 75%);
 }
 
 /* Styles for the macOS app, where the shell draws the traffic lights over the page (main.tsx sets the platform). */
