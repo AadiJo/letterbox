@@ -142,6 +142,40 @@ export function watchThreadDetail(id: ThreadId, listener: (detail: ThreadDetail 
   return stop
 }
 
+/** How many rows around the found place `positionIn` reads, to make sure. */
+const NEAR = 10
+
+/**
+ * Where `thread` sits in the list over `filter`, or null when it is not there or the core
+ * cannot say. A list sorts newest message first, then by id (the core's live_view.rs `Place`),
+ * so this halves the list with one-row reads, about 17 for 100,000 conversations, then reads
+ * the rows around that place to make sure, since the list may change meanwhile.
+ */
+export async function positionIn(filter: ThreadFilter, thread: ThreadSummary): Promise<number | null> {
+  const read = (offset: number, limit: number) => client.query({ view: 'threads', filter, offset, limit })
+  const sortsBefore = (other: ThreadSummary) =>
+    other.lastMessageAt > thread.lastMessageAt || (other.lastMessageAt === thread.lastMessageAt && other.id < thread.id)
+  try {
+    let low = 0
+    let high = (await read(0, 1)).total
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2)
+      // oxlint-disable-next-line no-await-in-loop -- each read decides where the next one looks
+      const [row] = (await read(middle, 1)).threads
+      if (!row) break
+      if (sortsBefore(row)) low = middle + 1
+      else high = middle
+    }
+    const start = Math.max(0, low - NEAR / 2)
+    const near = await read(start, NEAR)
+    remember(near)
+    const index = near.threads.findIndex((row) => row.id === thread.id)
+    return index === -1 ? null : start + index
+  } catch {
+    return null
+  }
+}
+
 // Pagers: one live list each, over one filter, showing one range at a time.
 
 type Open = { range: Range; subscription: Subscription<'threads'>; stop: () => void }

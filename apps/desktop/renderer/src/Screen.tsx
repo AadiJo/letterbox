@@ -76,6 +76,11 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     }
   }, [])
 
+  // The selection whose conversation opened before its summary was here, as one a
+  // notification opened from outside every list's window. It is marked read once, as the
+  // reader brings the summary, unless anything was selected meanwhile.
+  const unmarked = useRef<number | null>(null)
+
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
     // Opening a conversation puts the compose page away. Its draft stays.
@@ -84,7 +89,15 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     setSelected(id)
     const thread = id === null ? undefined : threadRecord(id)
     if (thread) markRead(thread, mail)
+    unmarked.current = id !== null && !thread ? generation.current : null
   }
+  const summary = useThread(selected)
+  const markLate = useEffectEvent(() => {
+    if (!summary || unmarked.current !== generation.current) return
+    unmarked.current = null
+    markRead(summary, mail)
+  })
+  useEffect(() => markLate(), [summary])
 
   /**
    * Runs `action` on the open conversation, unless the screen goes before the core answers.

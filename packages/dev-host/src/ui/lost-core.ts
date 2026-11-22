@@ -234,6 +234,16 @@ export async function checkLostCore(browser: Browser) {
     // The notice lasts 5 s. Every picture above must show it.
     equal(await toast(page).filter({ hasText: NOT_UNDONE }).count(), 1, 'the toast was up for every picture')
 
+    // An unread conversation the page already knows, opened while lost: its mark-read fails quietly.
+    const beforeRead = appErrors(errors, { lostCore: true }).length
+    await page.locator('[role="option"][data-unread="true"]').first().click()
+    await settled(page)
+    equal(
+      appErrors(errors, { lostCore: true }).slice(beforeRead),
+      [],
+      'with the core lost, opening an unread conversation leaves no mark-read failing unseen',
+    )
+
     // Another screen while lost: People's views close and All mail's open on the closed connection.
     // Nothing throws, and All mail shows, with the strip and no rows.
     const logged = appErrors(errors, { lostCore: true }).length

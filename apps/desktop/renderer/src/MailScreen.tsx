@@ -4,12 +4,12 @@
 // rendered rows stand in for the rest, so a row that leaves can fold and the rows below follow.
 
 import type { Account, ThreadFilter } from '@letterbox/protocol'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { leavesMailbox } from './actions.ts'
 import { useHeld } from './motion.ts'
 import { Row, ROW_HEIGHT } from './Row.tsx'
 import { type Chrome, Screen, useSelection } from './Screen.tsx'
-import { type Range, type Slice, useThreadWindow } from './threads.ts'
+import { positionIn, type Range, type Slice, useThread, useThreadWindow } from './threads.ts'
 
 /** Rows rendered above and below the screen. */
 const OVERSCAN = 6
@@ -47,19 +47,27 @@ export function MailScreen({ title, filter, chrome, accounts }: Props) {
       selection={selection}
     >
       {/* A new filter starts a new list at the top. */}
-      <WindowedList key={JSON.stringify(filter)} label={title} slice={slice} show={show} selection={selection} />
+      <WindowedList
+        key={JSON.stringify(filter)}
+        label={title}
+        filter={filter}
+        slice={slice}
+        show={show}
+        selection={selection}
+      />
     </Screen>
   )
 }
 
 type ListProps = {
   label: string
+  filter: ThreadFilter
   slice: Slice | undefined
   show: (range: Range) => void
   selection: ReturnType<typeof useSelection>
 }
 
-function WindowedList({ label, slice, show, selection }: ListProps) {
+function WindowedList({ label, filter, slice, show, selection }: ListProps) {
   const list = useRef<HTMLDivElement>(null)
   // The first row on screen, and how many rows fit.
   const [first, setFirst] = useState(0)
@@ -94,6 +102,28 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
     else if (top + ROW_HEIGHT > element.scrollTop + element.clientHeight)
       element.scrollTop = top + ROW_HEIGHT - element.clientHeight
   }, [selectedIndex])
+
+  // A conversation opened from outside the window, as from a notification: once its summary is
+  // here, find where it sits and scroll there, a third of the way down. The window then holds
+  // its row, and the arrow keys move from it.
+  const summary = useThread(selection.selected)
+  const outside = slice && summary && position === -1 ? summary.id : null
+  const find = useEffectEvent(async () => {
+    if (!summary) return null
+    return positionIn(filter, summary)
+  })
+  useEffect(() => {
+    if (outside === null) return
+    let current = true
+    void find().then((index) => {
+      const element = list.current
+      if (!current || index === null || !element) return
+      element.scrollTop = Math.max(0, index * ROW_HEIGHT - element.clientHeight / 3)
+    })
+    return () => {
+      current = false
+    }
+  }, [outside])
 
   const total = slice?.total ?? 0
   const start = Math.max(0, first - OVERSCAN)

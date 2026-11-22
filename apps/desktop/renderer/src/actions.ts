@@ -106,9 +106,9 @@ export async function run(action: Action, thread: ThreadSummary, mail: Mail) {
   return command && change ? { command, change } : null
 }
 
-/** Marks a conversation read when it opens, as Apple Mail does. */
+/** Marks a conversation read when it opens, as Apple Mail does. With the core gone, nothing happens. */
 export function markRead(thread: ThreadSummary, mail: Mail) {
   if (!thread.unread) return
   const account = mail.accounts.find((candidate) => candidate.id === thread.accountId)
-  if (account?.can.modify) void client.command({ kind: 'set-flags', threadIds: [thread.id], unread: false })
+  if (account?.can.modify) void send({ kind: 'set-flags', threadIds: [thread.id], unread: false })
 }
