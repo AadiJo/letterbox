@@ -291,9 +291,10 @@ scenario(
     box.releaseApplies()
     box.holdApplies()
     await box.applyHeld()
+    // Settled before the second change's call went out, so awaited first: the order stays fixed.
+    t.equal((await core.settled(lost.change)).result, 'done', "the push's pull settles the first change")
     box.damageNextApplyAnswer('disconnect')
     box.releaseApplies()
-    t.equal((await core.settled(lost.change)).result, 'done', "the push's pull settles the first change")
     t.equal(
       (await core.settled(second.change)).result,
       'done',
