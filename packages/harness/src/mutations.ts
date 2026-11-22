@@ -15,6 +15,7 @@
 // short incremental build.
 
 import { type Mutation, runBreaks } from './breaks.ts'
+import { ATTACHMENT_MUTATIONS } from './mutations-attachments.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { YOUR_TURN_MUTATIONS } from './mutations-your-turn.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
@@ -421,4 +422,5 @@ await runBreaks([
   ...TURN_MUTATIONS,
   ...FORWARD_MUTATIONS,
   ...YOUR_TURN_MUTATIONS,
+  ...ATTACHMENT_MUTATIONS,
 ])

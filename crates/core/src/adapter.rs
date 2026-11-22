@@ -373,7 +373,8 @@ pub trait Adapter {
     /// The body of one message, fetched when someone opens it.
     fn body(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<BodyResult>>;
     /// The content of one attachment: the one at `index` in the list `body` gives for the
-    /// message. The core asks it when it sends a forward of the message (see outbox.rs).
+    /// message. The core asks it when it sends a forward of the message (see outbox.rs), and
+    /// when a UI asks for the file to open or save it (attachments.rs).
     fn attachment(&self, r#ref: MessageRef, index: usize) -> LocalFuture<'_, Outcome<AttachmentResult>>;
     /// Pushes one change. The core calls this one at a time, in the order the user acted.
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>>;

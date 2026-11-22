@@ -287,14 +287,14 @@ export type SignInMethod = "oauth" | "password";
 /**
  * Every one-shot call. Add a variant here and a matching one to `Response`.
  */
-export type Request = { "method": "sign-in", option: SignInOptionId, password?: PasswordInput, } | { "method": "sign-out", accountId: AccountId, deleteLocalMail: boolean, } | { "method": "sync-now", accountId?: AccountId, } | { "method": "blob", blobId: BlobId, };
+export type Request = { "method": "sign-in", option: SignInOptionId, password?: PasswordInput, } | { "method": "sign-out", accountId: AccountId, deleteLocalMail: boolean, } | { "method": "sync-now", accountId?: AccountId, } | { "method": "blob", blobId: BlobId, } | { "method": "attachment", blobId: BlobId, };
 
 export type PasswordInput = { username: string, password: string, server?: string, };
 
 /**
  * The answer to one request, by method.
  */
-export type Response = { "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>;
+export type Response = { "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError>;
 
 /**
  * A result or an error. On the wire: `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}`.
@@ -332,9 +332,20 @@ export type BlobUrl = { url: string, mime: string, size: number, };
 
 export type BlobError = "offline" | "gone" | "not-supported";
 
+/**
+ * The answer to `attachment`, after its bytes. `size` is how many bytes the chunks carried.
+ */
+export type AttachmentFile = { 
+/**
+ * The file name the message gives. Hostile input: a UI that makes a path from it cleans it first.
+ */
+name: string, mime: string, size: number, };
+
+export type AttachmentError = "offline" | "gone" | "too-large";
+
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
 
 /**
  * A sync brought a message from a person, in the inbox, that leaves this conversation the

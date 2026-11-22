@@ -24,6 +24,7 @@
 //!      `response`. A client that has the answer has already seen the effects.
 
 mod answer;
+mod attachment;
 mod command;
 mod holder;
 mod ids;
@@ -37,6 +38,7 @@ mod your_turn;
 use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
+pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
 pub use command::{Command, TurnChoice};
 pub use holder::ChangeHolder;
 pub use ids::{
@@ -343,6 +345,8 @@ pub enum Request {
     },
     /// A local URL the core serves for one attachment or inline image.
     Blob { blob_id: BlobId },
+    /// One attachment's bytes, fetched from the provider. They come in `chunk` messages, in order, then the response.
+    Attachment { blob_id: BlobId },
 }
 
 /// The answer to one request, by method.
@@ -353,27 +357,13 @@ pub enum Response {
     SignOut(Answer<Empty, Never>),
     SyncNow(Answer<Empty, SyncNowError>),
     Blob(Answer<BlobUrl, BlobError>),
+    Attachment(Answer<AttachmentFile, AttachmentError>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum SyncNowError {
     Offline,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
-pub struct BlobUrl {
-    pub url: String,
-    pub mime: String,
-    pub size: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum BlobError {
-    Offline,
-    Gone,
-    NotSupported,
 }
 
 // ---------------------------------------------------------------- envelope
@@ -444,6 +434,11 @@ pub enum CoreMessage {
     OpenUrl {
         id: RequestId,
         url: String,
+    },
+    /// The next bytes of the file an `attachment` request asked for: at most 64 KiB, as base64.
+    Chunk {
+        id: RequestId,
+        data: String,
     },
     /// New mail from a person made it the user's turn in a conversation. See `YourTurn`.
     YourTurn(YourTurn),

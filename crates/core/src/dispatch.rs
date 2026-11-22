@@ -183,6 +183,7 @@ impl Inner {
             } => self.sign_out(id, account_id, delete_local_mail),
             Request::SyncNow { account_id } => self.sync_now(id, account_id),
             Request::Blob { .. } => self.respond(id, Response::Blob(Answer::from(Err(BlobError::NotSupported)))),
+            Request::Attachment { blob_id } => self.attachment(id, blob_id),
         }
     }
 

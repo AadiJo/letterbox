@@ -1,9 +1,10 @@
 // The preload: a thin bridge between the sandboxed page and main. It puts these on
 // `window.letterbox` (ShellBridge): the platform, for styling; `connect`, which asks main
-// for a core; and `onOpenConversation`, which tells the page which conversation a chosen
-// notification names, holding one that came before the page listened. Main answers `connect` with a MessagePort, which this passes to the
-// page as a window message, because contextBridge cannot carry a port. Core messages never
-// pass through here.
+// for a core; `saveAttachment` and `openAttachment`, which pass a blob id to main and hand
+// back what happened, never a path; and `onOpenConversation`, which tells the page which
+// conversation a chosen notification names, holding one that came before the page listened.
+// Main answers `connect` with a MessagePort, which this passes to the page as a window
+// message, because contextBridge cannot carry a port. Core messages never pass through here.
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { PORT_MESSAGE, type ShellBridge } from '@letterbox/client/message-port'
@@ -40,6 +41,8 @@ ipcRenderer.on('conversation:open' satisfies Channel, (_event, threadId: unknown
 contextBridge.exposeInMainWorld('letterbox', {
   platform: process.platform,
   connect: () => ipcRenderer.send('core:connect' satisfies Channel, documentId),
+  saveAttachment: (blobId) => ipcRenderer.invoke('attachment:save' satisfies Channel, blobId),
+  openAttachment: (blobId) => ipcRenderer.invoke('attachment:open' satisfies Channel, blobId),
   onOpenConversation: (listener) => {
     // A fresh function per call, so the same listener can listen twice and stop each once.
     const each = (threadId: ThreadId) => listener(threadId)

@@ -211,7 +211,10 @@ export interface Adapter {
   changes(cursor: Cursor): Promise<Outcome<ChangesResult>>
   /** The body of one message, fetched when someone opens it. */
   body(ref: MessageRef): Promise<Outcome<BodyResult>>
-  /** The content of one attachment, the one at `index` in what `body` lists. The core asks it when it forwards the message. */
+  /**
+   * The content of one attachment, the one at `index` in what `body` lists. The core asks it
+   * when it forwards the message, and when a UI asks for the file to open or save it.
+   */
   attachment(call: AttachmentCall): Promise<Outcome<AttachmentResult>>
   /** Pushes one change. The core calls this one at a time, in the order the user acted. */
   apply(mutation: Mutation): Promise<Outcome<ApplyResult>>

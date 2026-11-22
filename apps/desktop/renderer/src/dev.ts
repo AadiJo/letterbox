@@ -2,7 +2,7 @@
 // loads this file behind `import.meta.env.DEV`. The routes it calls exist only in packages/dev-host.
 
 import type { Client } from '@letterbox/client'
-import type { ThreadId } from '@letterbox/protocol'
+import type { Attachment, ThreadId } from '@letterbox/protocol'
 
 declare global {
   interface Window {
@@ -13,6 +13,8 @@ declare global {
       signIn(address: string, password: string): Promise<void>
       /** Resolves once the core has answered everything this tab sent before it. */
       settle(): Promise<void>
+      /** Syncs, then gives the files of the conversation with this subject once its bodies have loaded. */
+      attachments(subject: string): Promise<Attachment[]>
       /** Syncs every account once. */
       sync(): Promise<void>
       /** The id of the conversation with this subject. */
@@ -55,6 +57,21 @@ export function installDevHooks(client: Client) {
       const answer = await client.command({ kind: 'set-flags', threadIds: [threadId], unread: false })
       if (answer.kind !== 'accepted') throw new Error(`marking read was rejected: ${answer.reason}`)
       await window.letterboxDev?.settle()
+    },
+    attachments: async (subject) => {
+      await window.letterboxDev?.sync()
+      const threadId = await window.letterboxDev?.threadOf(subject)
+      if (threadId === undefined) throw new Error('the dev hooks are gone')
+      const open = client.subscribe({ view: 'thread', threadId })
+      try {
+        let detail = open.latest() ?? (await open.next())
+        while (detail?.messages.some((message) => message.body.state === 'loading'))
+          // oxlint-disable-next-line no-await-in-loop -- each update is the one after the last
+          detail = await open.next()
+        return detail?.messages.flatMap((message) => message.attachments) ?? []
+      } finally {
+        open.close()
+      }
     },
     signIn: async (address, password) => {
       const options = await client.query({ view: 'sign-in-options' })
