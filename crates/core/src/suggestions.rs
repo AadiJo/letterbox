@@ -353,9 +353,11 @@ impl People {
         });
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         let recipients = ranked.into_iter().take(limit).map(|(key, person, _)| {
+            let newest = person.seen.iter().next_back();
             let recipient = Recipient {
                 name: person.named.values().next_back().cloned(),
-                address: person.seen.values().next_back().cloned().unwrap_or_default(),
+                address: newest.map(|(_, address)| address.clone()).unwrap_or_default(),
+                last_at: newest.map(|((at, _), _)| at.clone()).unwrap_or_default(),
             };
             (key.clone(), recipient)
         });

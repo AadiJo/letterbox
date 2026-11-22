@@ -1,6 +1,6 @@
 // The end-to-end UI check, run by `pnpm check:ui` and `pnpm check`.
 //
-// Seven runs, each against real cores over the sim provider, in Playwright's Chromium:
+// Eight runs, each against real cores over the sim provider, in Playwright's Chromium:
 //   people-first  `pnpm dev` (main.ts) with the people-first seed: People, All mail, the
 //                 reader, the C2 design's rules (ui/c2.ts), HTML bodies, the narrow window,
 //                 keyboard actions, new mail, a reload (ui/people-first.ts)
@@ -11,6 +11,8 @@
 //   first sync    the dev host's parts in this process, with snapshot pages held (ui/first-sync.ts)
 //   rollback      the same parts, with an archive the provider refuses (ui/rollback.ts)
 //   reply         the same parts: the docked reply editor, sending, undo, a refused send and a lost answer (ui/reply.ts)
+//   compose       the same parts: the compose page, a new message and a forward, recipient
+//                 suggestions, sending and undo from it (ui/compose.ts, ui/forward.ts)
 //   lost core     the same parts: the strip at the reader's foot once the connection drops, and Reload (ui/lost-core.ts)
 // Every process a run started must be gone at its end.
 //
@@ -22,6 +24,7 @@
 
 import { mkdirSync, rmSync } from 'node:fs'
 import { type Browser, chromium } from 'playwright'
+import { checkCompose } from './ui/compose.ts'
 import { checkDone } from './ui/done.ts'
 import { checkFirstSync } from './ui/first-sync.ts'
 import { checkLostCore } from './ui/lost-core.ts'
@@ -69,6 +72,7 @@ try {
   await runCheck(() => checkFirstSync(browser))
   await runCheck(() => checkRollback(browser))
   await runCheck(() => checkReply(browser))
+  await runCheck(() => checkCompose(browser))
   await runCheck(() => checkLostCore(browser))
 } finally {
   await browser.close()

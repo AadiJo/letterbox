@@ -25,6 +25,7 @@
 
 mod answer;
 mod command;
+mod holder;
 mod ids;
 mod lists;
 mod outcome;
@@ -35,6 +36,7 @@ use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
+pub use holder::ChangeHolder;
 pub use ids::{
     AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SenderId, SignInOptionId, SubscriptionId, ThreadId,
 };
@@ -288,6 +290,9 @@ pub enum Query {
         prefix: String,
         limit: NonZeroU64,
     },
+    Change {
+        change: ChangeId,
+    },
 }
 
 /// The answer to a query. A threads update replaces the whole window.
@@ -301,6 +306,7 @@ pub enum Update {
     Thread { data: Option<ThreadDetail> },
     Senders { data: SenderPage },
     Recipients { data: Vec<Recipient> },
+    Change { data: ChangeHolder },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

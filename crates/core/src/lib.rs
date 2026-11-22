@@ -33,6 +33,7 @@ mod confirm;
 mod dispatch;
 mod draft;
 mod effect;
+mod forward;
 mod live_view;
 mod maps;
 mod mime;
