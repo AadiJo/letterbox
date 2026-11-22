@@ -340,7 +340,7 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'an open conversation shows a body loading after the fetch failed',
     file: core('live_view.rs'),
-    find: 'touched || loading_changed',
+    find: 'touched || outside_changed',
     replace: 'touched',
     scenarios: 'cannot load offline',
   },
