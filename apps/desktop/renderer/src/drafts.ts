@@ -1,9 +1,12 @@
-// Replies being written: one draft per conversation, kept for the session as the user moves
-// between conversations and screens. The composer reads and edits its draft here, and
-// sending.ts takes it from here when it goes. Nothing else holds a draft.
+// Mail being written: one reply per conversation, and one new message or forward on the
+// compose page (`COMPOSE`), kept for the session as the user moves between conversations and
+// screens. The page's draft, and whether the page is up, are also kept across a reload. The
+// editors read and edit their draft here, and sending.ts takes it from here when it goes.
+// Nothing else holds a draft.
 
 import type {
   AccountId,
+  BlobId,
   ChangeId,
   Draft,
   Message,
@@ -13,18 +16,34 @@ import type {
   ThreadId,
 } from '@letterbox/protocol'
 import { useSyncExternalStore } from 'react'
+import { readStoredPage, saveStoredPage } from './stored-sends.ts'
 
 /** One person on the To, Cc or Bcc line. `name` is only for the chip. The core gets the address. */
 export type Recipient = { address: string; name: string | null }
 
 export type Field = 'to' | 'cc' | 'bcc'
 
-/** The reply as the user has it so far. `typing` is what each address line holds that is not a chip yet. */
+/** Where a draft lives: a conversation's reply, or the compose page's new message or forward. */
+export type DraftKey = ThreadId | typeof COMPOSE
+export const COMPOSE = 'compose'
+
+/**
+ * A forward's original, `of` in conversation `threadId`, and the files the user took off it.
+ * The core writes the original into the message and carries the rest of its files. `subject`
+ * is the one the forward started with, so a draft whose subject the user changed is kept.
+ */
+export type Forwarding = { of: MessageId; threadId: ThreadId; without: readonly BlobId[]; subject: string }
+
+/**
+ * The mail as the user has it so far: a reply (`inReplyTo`), a forward (`forward`), or with
+ * neither, a new conversation. `typing` is what each address line holds that is not a chip yet.
+ */
 export type Reply = {
   accountId: AccountId
   /** The message being answered. */
-  inReplyTo: MessageId
-  /** Already "Re: …". The composer does not show it. */
+  inReplyTo: MessageId | null
+  forward: Forwarding | null
+  /** A reply's is already "Re: …", and its editor does not show it. The compose page edits it. */
   subject: string
   to: readonly Recipient[]
   cc: readonly Recipient[]
@@ -58,13 +77,37 @@ export const isBusy = (
 ): composer is Extract<Composer, { state: 'submitting' | 'checking' }> =>
   composer?.state === 'submitting' || composer?.state === 'checking'
 
-const drafts = new Map<ThreadId, Composer>()
-const watchers = new Set<() => void>()
+/** Where a draft of `reply` lives: its conversation for a reply, else the compose page. */
+export const homeOf = (reply: Reply, threadId: ThreadId | null): DraftKey =>
+  reply.inReplyTo === null || threadId === null ? COMPOSE : threadId
 
-const set = (id: ThreadId, next: Composer | null) => {
+const drafts = new Map<DraftKey, Composer>()
+const watchers = new Set<() => void>()
+/** True while the compose page takes the reader. It shows only with a draft there. */
+let pageUp = false
+
+/** Keeps the page's draft for the next load, while the user can edit it. One waiting on the core is sending.ts's to keep. */
+function savePage() {
+  const page = drafts.get(COMPOSE)
+  saveStoredPage(page?.state === 'open' ? { reply: page.reply, open: pageUp } : null)
+}
+
+const set = (id: DraftKey, next: Composer | null) => {
   if (next) drafts.set(id, next)
   else drafts.delete(id)
+  if (id === COMPOSE) {
+    if (!next) pageUp = false
+    savePage()
+  }
   watchers.forEach((watcher) => watcher())
+}
+
+{
+  const kept = readStoredPage()
+  if (kept) {
+    drafts.set(COMPOSE, { state: 'open', reply: kept.reply, extra: false, problem: null })
+    pageUp = kept.open
+  }
 }
 
 const subscribe = (onChange: () => void) => {
@@ -72,22 +115,39 @@ const subscribe = (onChange: () => void) => {
   return () => void watchers.delete(onChange)
 }
 
-/** The draft for a conversation, or undefined when it has none. */
-export function useComposer(id: ThreadId) {
+/** The draft for a conversation or the compose page, or undefined when it has none. */
+export function useComposer(id: DraftKey) {
   return useSyncExternalStore(subscribe, () => drafts.get(id))
 }
 
 /** The same, read once, for an event handler. */
-export const composerFor = (id: ThreadId) => drafts.get(id)
+export const composerFor = (id: DraftKey) => drafts.get(id)
 
-/** The conversation whose editor the user just opened, until the editor takes it. */
-let opening: ThreadId | null = null
+/** True while the compose page takes the reader. */
+export function usePageUp() {
+  return useSyncExternalStore(subscribe, () => pageUp)
+}
+
+/** The same, read once, for an event handler. */
+export const isPageUp = () => pageUp
+
+/** Shows the compose page's draft, or takes the page down and keeps the draft. Esc and opening a conversation take it down. */
+export function showPage(up: boolean) {
+  if (up ? !drafts.has(COMPOSE) : !pageUp) return
+  if (up) opening = COMPOSE
+  pageUp = up
+  savePage()
+  watchers.forEach((watcher) => watcher())
+}
+
+/** The draft whose editor the user just opened, until the editor takes it. */
+let opening: DraftKey | null = null
 
 /**
  * True once after the user opened `id`'s editor, by Reply, R, undo or a retry. The editor
  * slides in and takes focus only then, not when it reappears as the user moves between conversations.
  */
-export function takeOpening(id: ThreadId) {
+export function takeOpening(id: DraftKey) {
   if (opening !== id) return false
   opening = null
   return true
@@ -108,10 +168,10 @@ function others(people: readonly Person[], except: readonly Recipient[]) {
   return kept
 }
 
-/** "Re: " once, and no line breaks, which a subject header cannot hold. */
-const replySubject = (subject: string) => {
+/** `prefix` once, as "Re: " or "Fwd: ", and no line breaks, which a subject header cannot hold. */
+const prefixed = (prefix: 'Re' | 'Fwd', subject: string) => {
   const flat = subject.replace(/[\r\n]+/g, ' ').trim()
-  return /^re:/i.test(flat) ? flat : `Re: ${flat}`
+  return flat.toLowerCase().startsWith(`${prefix.toLowerCase()}:`) ? flat : `${prefix}: ${flat}`
 }
 
 /**
@@ -140,7 +200,8 @@ export function newReply(thread: ThreadDetail, all: boolean, before?: Message): 
   return {
     accountId: thread.accountId,
     inReplyTo: message.id,
-    subject: replySubject(thread.subject),
+    forward: null,
+    subject: prefixed('Re', thread.subject),
     to,
     cc: all ? others([...message.to, ...message.cc], to) : [],
     bcc: [],
@@ -148,6 +209,53 @@ export function newReply(thread: ThreadDetail, all: boolean, before?: Message): 
     bccLost: false,
     text: '',
   }
+}
+
+/** A message to nobody yet, from `accountId`. */
+const blank = (accountId: AccountId): Reply => ({
+  accountId,
+  inReplyTo: null,
+  forward: null,
+  subject: '',
+  to: [],
+  cc: [],
+  bcc: [],
+  typing: EMPTY_TYPING,
+  bccLost: false,
+  text: '',
+})
+
+/** True for a draft with nothing the user put in it, which a new one may replace. */
+const untouched = (reply: Reply) =>
+  [reply.to, reply.cc, reply.bcc].every((line) => line.length === 0) &&
+  Object.values(reply.typing).every((typed) => typed.trim() === '') &&
+  reply.text.trim() === '' &&
+  (reply.forward
+    ? reply.forward.without.length === 0 && reply.subject === reply.forward.subject
+    : reply.subject.trim() === '')
+
+/**
+ * Puts the compose page up with `fresh` as its draft. A draft already there that the user has
+ * put anything in comes up instead, and `fresh` is dropped, so nothing written is lost.
+ */
+function startPage(fresh: Reply) {
+  const current = drafts.get(COMPOSE)
+  if (!current || (current.state === 'open' && untouched(current.reply)))
+    set(COMPOSE, { state: 'open', reply: fresh, extra: false, problem: null })
+  showPage(true)
+}
+
+/** C and the list head's pen: a new message from `accountId`, on the compose page. */
+export const composeNew = (accountId: AccountId) => startPage(blank(accountId))
+
+/** Forward: `message` of `thread`, with every file, to nobody yet, on the compose page. */
+export function composeForward(thread: ThreadDetail, message: Message) {
+  const subject = prefixed('Fwd', thread.subject)
+  startPage({
+    ...blank(thread.accountId),
+    forward: { of: message.id, threadId: thread.id, without: [], subject },
+    subject,
+  })
 }
 
 /**
@@ -178,49 +286,50 @@ export function openReply(thread: ThreadDetail, all: boolean) {
  * reply on its way (sending.ts), so nothing else is there to merge with or lose. Returns
  * whether it landed: a draft waiting on the core takes nothing.
  */
-export function restore(id: ThreadId, reply: Reply) {
+export function restore(id: DraftKey, reply: Reply) {
   if (isBusy(drafts.get(id))) return false
   opening = id
   set(id, { state: 'open', reply, extra: reply.cc.length > 0 || reply.bcc.length > 0, problem: null })
+  if (id === COMPOSE) showPage(true)
   return true
 }
 
 /** Changes the open draft. Any problem shown goes, since the user is fixing it. */
-export function edit(id: ThreadId, change: (reply: Reply) => Reply) {
+export function edit(id: DraftKey, change: (reply: Reply) => Reply) {
   const current = drafts.get(id)
   if (current?.state !== 'open') return
   set(id, { ...current, reply: change(current.reply), problem: null })
 }
 
 /** The user has looked at the recipients of a reply rebuilt without its Bcc, so it can be sent. */
-export function confirmBcc(id: ThreadId) {
+export function confirmBcc(id: DraftKey) {
   edit(id, (reply) => ({ ...reply, bccLost: false }))
   showExtra(id)
 }
 
 /** Shows the Cc and Bcc lines. */
-export function showExtra(id: ThreadId) {
+export function showExtra(id: DraftKey) {
   const current = drafts.get(id)
   if (current?.state === 'open') set(id, { ...current, extra: true })
 }
 
 /** Folds the editor to the bar under the thread, keeping the draft. Esc does this. */
-export function collapse(id: ThreadId) {
+export function collapse(id: DraftKey) {
   const current = drafts.get(id)
   if (current?.state === 'open') set(id, { ...current, state: 'collapsed' })
 }
 
 /** Throws the draft away. Discard asks nothing. */
-export const discard = (id: ThreadId) => set(id, null)
+export const discard = (id: DraftKey) => set(id, null)
 
 /** Shows why the draft cannot go, with `reply` as Send left it. */
-export function flag(id: ThreadId, reply: Reply, problem: Problem) {
+export function flag(id: DraftKey, reply: Reply, problem: Problem) {
   const current = drafts.get(id)
   if (current?.state === 'open') set(id, { ...current, reply, problem })
 }
 
 /** Marks the open draft as handed to the core under `change`. Only sending.ts calls this, and then `settle`. */
-export function submit(id: ThreadId, reply: Reply, change: ChangeId) {
+export function submit(id: DraftKey, reply: Reply, change: ChangeId) {
   const current = drafts.get(id)
   if (current?.state === 'open') set(id, { state: 'submitting', reply, extra: current.extra, change })
 }
@@ -229,13 +338,13 @@ export function submit(id: ThreadId, reply: Reply, change: ChangeId) {
  * Marks `reply` as sent under `change` with no answer known: the answer was lost, or this is
  * a reload asking again. Only sending.ts calls this, and `settle` once the core says.
  */
-export function unsure(id: ThreadId, reply: Reply, change: ChangeId) {
+export function unsure(id: DraftKey, reply: Reply, change: ChangeId) {
   const current = drafts.get(id)
   set(id, { state: 'checking', reply, extra: current?.extra ?? reply.cc.length + reply.bcc.length > 0, change })
 }
 
 /** Ends a submit or a check: the core accepted it, so the draft goes, or it did not, so the editor shows why. */
-export function settle(id: ThreadId, problem: Problem | null) {
+export function settle(id: DraftKey, problem: Problem | null) {
   const current = drafts.get(id)
   if (!isBusy(current)) return
   set(id, problem ? { state: 'open', reply: current.reply, extra: current.extra, problem } : null)
@@ -243,19 +352,26 @@ export function settle(id: ThreadId, problem: Problem | null) {
 
 /**
  * A reply saying again what `message`, one of the user's that was not sent, said: to the same
- * people, answering the message before it. Bcc is not kept on a message, so it starts empty
- * and marked `bccLost` until the user confirms the recipients.
+ * people, answering the message before it. A message that answers nothing in its conversation
+ * started it, so it comes back as a new message, for the compose page (`homeOf`). A forward
+ * comes back that way too, with the original in its text and without its files, since the
+ * message does not say what it forwarded. Bcc is not kept on a message, so it starts empty and
+ * marked `bccLost` until the user confirms the recipients.
  */
-export function replyFrom(thread: ThreadDetail, message: Message): Reply | null {
-  const base = newReply(thread, false, message)
-  if (!base) return null
+export function replyFrom(thread: ThreadDetail, message: Message): Reply {
+  const base = newReply(thread, false, message) ?? {
+    ...blank(thread.accountId),
+    subject: thread.subject.replace(/[\r\n]+/g, ' ').trim(),
+  }
   const text = message.body.state === 'ready' ? message.body.text : ''
   return { ...base, to: message.to.map(recipient), cc: message.cc.map(recipient), text, bccLost: true }
 }
 
 /** `reply` with whatever was typed on each address line turned into chips. */
+const FIELDS = ['to', 'cc', 'bcc'] as const
+
 export function commitTyping(reply: Reply, only?: Field): Reply {
-  const fields = only ? [only] : (['to', 'cc', 'bcc'] as const)
+  const fields = only ? [only] : FIELDS
   const next = { ...reply, typing: { ...reply.typing } }
   for (const field of fields) {
     next[field] = [...reply[field], ...parseRecipients(reply.typing[field])]
@@ -303,7 +419,7 @@ export function check(reply: Reply): { draft: Draft } | { problem: Problem } {
     cc: [...reply.cc, ...parseRecipients(reply.typing.cc)],
     bcc: [...reply.bcc, ...parseRecipients(reply.typing.bcc)],
   } satisfies Record<Field, Recipient[]>
-  for (const field of ['to', 'cc', 'bcc'] as const) {
+  for (const field of FIELDS) {
     const bad = lines[field].find((person) => !isPlainAddress(person.address))
     if (!bad) continue
     const text = `"${bad.address}" is not an address Letterbox can send to. Use a plain address, like name@example.com.`
@@ -312,16 +428,19 @@ export function check(reply: Reply): { draft: Draft } | { problem: Problem } {
   const addresses = (field: Field) => lines[field].map((person) => person.address)
   const [to, cc, bcc] = [addresses('to'), addresses('cc'), addresses('bcc')]
   if (to.length + cc.length + bcc.length === 0) return { problem: { at: 'to', text: 'Add someone to send this to.' } }
+  const { forward } = reply
   return {
     draft: {
       accountId: reply.accountId,
       to,
       cc,
       bcc,
-      subject: reply.subject,
+      subject: reply.subject.replace(/[\r\n]+/g, ' '),
       text: reply.text,
       html: null,
       inReplyTo: reply.inReplyTo,
+      ...(forward && { forwardOf: forward.of }),
+      ...(forward && forward.without.length > 0 && { forwardWithout: [...forward.without] }),
     },
   }
 }

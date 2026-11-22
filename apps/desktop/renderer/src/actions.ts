@@ -1,5 +1,5 @@
 // What each toolbar button and shortcut does to a conversation, as a protocol command.
-// Replies go through drafts.ts and sending.ts. Composing a new conversation is not here yet.
+// Replies, new messages and forwards go through drafts.ts and sending.ts.
 
 import type { Account, Command, Mailbox, MailboxId, ThreadSummary } from '@letterbox/protocol'
 import { client } from './core.ts'
@@ -19,6 +19,12 @@ export const SHORTCUTS = { done: 'd', archive: 'e', trash: '#', flag: 's', unrea
 
 /** The key that opens a reply to the open conversation. With Shift, Reply all. */
 export const REPLY_KEY = 'r'
+
+/** The key that forwards the open conversation's newest message, on the compose page. */
+export const FORWARD_KEY = 'f'
+
+/** The key that starts a new message, on the compose page. */
+export const COMPOSE_KEY = 'c'
 
 /** Whether the account can send a reply in `thread` at all. */
 export function canReply(thread: ThreadSummary, mail: Mail) {

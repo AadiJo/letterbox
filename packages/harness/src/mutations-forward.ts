@@ -8,6 +8,13 @@ const core = (file: string) => `crates/core/src/${file}`
 
 export const FORWARD_MUTATIONS: Mutation[] = [
   {
+    name: 'the change view keeps naming the conversation it opened with, after a merge or an undo',
+    file: core('live_view.rs'),
+    find: '                let now = holder_of(world, change);',
+    replace: '                let now = holder.clone();',
+    scenarios: 'the change view names the conversation holding a send',
+  },
+  {
     name: 'an undone new conversation stays where it was',
     file: core('outbox.rs'),
     find: 'self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));',
@@ -79,6 +86,41 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     scenarios: 'original is gone before it goes out',
   },
   {
+    name: 'a forward carries every file of the original, even those the user took off',
+    file: core('forward.rs'),
+    find: '.filter(|(index, _)| !self.left_out.contains(index))',
+    replace: '.filter(|_| true)',
+    scenarios: 'a forward without some of the original files',
+  },
+  {
+    name: 'a forward that leaves out a file fetches the others by their places among those it carries',
+    file: core('outbox.rs'),
+    find: '        for (index, _) in forward.carried() {',
+    replace: '        for (index, _) in forward.carried().enumerate().map(|(at, (_, file))| (at, file)) {',
+    scenarios: 'a forward without some of the original files',
+  },
+  {
+    name: 'a held forward lists the files the user took off',
+    file: core('draft.rs'),
+    find: '        .flat_map(Forward::carried)',
+    replace: '        .flat_map(|forward| forward.files.iter().enumerate())',
+    scenarios: 'a forward without some of the original files',
+  },
+  {
+    name: 'a forward that leaves out a file the original lacks goes out with every file',
+    file: core('draft.rs'),
+    find: '    without.iter().map(|blob| place(blob).ok_or(Refusal::Invalid)).collect()',
+    replace: '    Ok(without.iter().filter_map(place).collect())',
+    scenarios: 'leaving out a file is refused',
+  },
+  {
+    name: 'a draft that forwards nothing may leave out files',
+    file: core('draft.rs'),
+    find: '        None if draft.forward_without.is_some() => return Err(Refusal::Invalid),\n',
+    replace: '',
+    scenarios: 'leaving out a file is refused',
+  },
+  {
     name: 'a forward of a message still loading is refused as if the message were gone',
     file: core('draft.rs'),
     find: '        None => Err(Refusal::Conflict),',
@@ -119,6 +161,13 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     find: '        parse(at).timestamp().div_euclid(PERIOD_SECONDS)',
     replace: '        parse(at).timestamp().div_euclid(i64::MAX)',
     scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: "a suggestion's last mail is its oldest",
+    file: core('suggestions.rs'),
+    find: '            let newest = person.seen.iter().next_back();',
+    replace: '            let newest = person.seen.iter().next();',
+    scenarios: 'put people I wrote to first',
   },
   {
     name: 'the sender of a newsletter is suggested',

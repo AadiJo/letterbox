@@ -108,11 +108,12 @@ scenario('recipient suggestions put people I wrote to first, then by how much an
   t.equal(
     await suggest(core, accountId, 'an'),
     [
-      { name: 'Ana Lima', address: 'ana@example.com' },
-      { name: null, address: ANDREW },
-      { name: 'Anabel Ortiz', address: 'Anabel@Example.org' },
+      { name: 'Ana Lima', address: 'ana@example.com', lastAt: '2025-12-01T10:00:00.000Z' },
+      { name: null, address: ANDREW, lastAt: '2024-12-01T09:00:00.000Z' },
+      { name: 'Anabel Ortiz', address: 'Anabel@Example.org', lastAt: '2025-10-03T09:00:00.000Z' },
     ],
-    'Ana and Andrew, whom I wrote to, newest first, then Anabel, who only wrote to me, as her mail wrote her address',
+    'Ana and Andrew, whom I wrote to, newest first, then Anabel, who only wrote to me, as her mail wrote her ' +
+      'address, each with when the newest mail with them was sent, either way',
   )
   t.equal(
     addresses(await suggest(core, accountId, 'b')),
