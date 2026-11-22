@@ -81,7 +81,7 @@ export const SEND_MUTATIONS: Mutation[] = [
     file: core('confirm.rs'),
     find: '            _ => {\n                let step =',
     replace:
-      '            _ if true => {\n                self.restage(record, &outbound, Stage::Due);\n                self.background(&account_id, Rc::clone(&self).pass(account_id.clone(), Pull::No));\n            }\n            _ => {\n                let step =',
+      '            _ if true => {\n                self.restage(record, &outbound, Stage::Due);\n                self.background(&account_id, Rc::clone(&self).pass(account_id.clone(), crate::sync::Pull::No));\n            }\n            _ => {\n                let step =',
     scenarios: 'cut off by a crash',
   },
   {
