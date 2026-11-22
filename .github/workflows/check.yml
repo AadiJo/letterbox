@@ -235,7 +235,8 @@ jobs:
           DESKTOP: ${{ needs.desktop.result }}
         run: |
           echo "changes: $CHANGES (break test needed: $NEEDS_BREAKS), checks: $CHECKS, breaks: $BREAKS, desktop: $DESKTOP"
-          # One test per line: under bash -e, a failed test that is not the last of an && list does not stop the step.
+          # One test per line: under `bash -e`, a failing test that is not the last of an `&&`
+          # list does not stop the script, so a later line could pass the gate.
           test "$CHANGES" = success
           test "$CHECKS" = success
           test "$DESKTOP" = success
