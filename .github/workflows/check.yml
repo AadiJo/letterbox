@@ -1,23 +1,26 @@
 # Runs every check on each pull request and on main: format, types, lint, the lint
-# self-test, the scenarios, the break test, the UI check and the Electron check. It is
+# self-test, the scenarios (each run twice, to catch a transcript that changes from run to
+# run), the break test, the UI check and the Electron check. It is
 # `pnpm check`, the same command a person runs locally, split into parallel jobs: the
 # `checks` job runs everything but the break test, and the `breaks` jobs share out the break
-# test, which alone takes most of the time. The `check` job passes only when they all pass.
-# The runner's preinstalled Rust toolchain builds the core.
+# test, which alone takes most of the time. The `changes` job skips the break test for a change
+# that cannot alter its result. The `check` job passes only when they all pass.
+# The runner's preinstalled Rust toolchain builds the core. The pull request title has its own
+# workflow, title.yml.
 
 name: check
 
 # Pull requests, plus main after each merge. Not every branch push: a push run reports a
-# `check` on the same commit as the PR run, and could stand in for a failing one.
+# `check` on the same commit as the PR run, and could stand in for a failing one. Not `edited`
+# either: editing a title or description changes no code, and title.yml checks the title.
 on:
   push:
     branches: [main]
   pull_request:
-    # `edited` reruns the title check below when only the title changes.
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened]
 
-# A new run for a pull request stops the one before it, which checks a commit or title that
-# is gone. Runs on main all finish, so each merge gets its own result.
+# A new run for a pull request stops the one before it, which checks a commit that is gone.
+# Runs on main all finish, so each merge gets its own result.
 concurrency:
   group: check-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -51,15 +54,9 @@ jobs:
       # version, and so the browser's, comes from packages/dev-host/package.json.
       - run: pnpm --filter @letterbox/dev-host exec playwright install --with-deps --only-shell chromium
 
-      # A squash merge makes the PR title the commit on main, so it follows the commit rules.
-      # The title goes through an environment variable, never straight into the script.
-      - if: github.event_name == 'pull_request'
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-        run: node lint/commit-title.ts --title "$TITLE"
-
       # On a pull request, the file-size check compares the baseline with the base commit's,
-      # so the baseline can only shrink. A shallow checkout lacks that commit, so fetch it.
+      # and the scenarios compare packages/harness/drift-allowed.txt with it, so both can only
+      # shrink. A shallow checkout lacks that commit, so fetch it.
       - if: github.event_name == 'pull_request'
         run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
 
@@ -71,6 +68,7 @@ jobs:
       - run: xvfb-run -a pnpm check:without-breaks
         env:
           FILE_SIZE_BASE: ${{ github.event.pull_request.base.sha }}
+          DRIFT_BASE: ${{ github.event.pull_request.base.sha }}
 
       # One transcript per scenario run, and the UI and Electron checks' screenshots, trace and logs.
       # Uploaded on failure too, when it matters most.
@@ -81,9 +79,43 @@ jobs:
           path: artifacts
           if-no-files-found: warn
 
+  # Whether this change can alter the break test's result, as output `breaks`. Every break edits
+  # a file under crates/ or packages/ (packages/harness/src/mutations*.ts) and runs scenarios,
+  # which never load the desktop app, the dev host or the lint rules. So a change made only of
+  # apps/desktop/, packages/dev-host/, lint/ and Markdown files skips the break test. Any other
+  # file, an empty diff, or a base commit that cannot be fetched runs it. A pull request compares
+  # its merge commit with that commit's first parent, which is the base it merges into. A push
+  # to main compares with the commit main was at before.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      breaks: ${{ steps.decide.outputs.breaks }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - id: decide
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          breaks=true
+          changed=''
+          if [ "$BASE" = 'HEAD^1' ] || git fetch --depth=1 origin "$BASE"; then
+            changed=$(git diff --name-only "$BASE" HEAD) || changed=''
+          fi
+          if [ -n "$changed" ] && ! grep -qvE '^(apps/desktop/|packages/dev-host/|lint/)|\.md$' <<<"$changed"; then
+            breaks=false
+          fi
+          echo "breaks=$breaks" >> "$GITHUB_OUTPUT"
+          echo "Run the break test: $breaks. Files changed since $BASE:"
+          echo "${changed:-(none read)}"
+
   # The break test (`pnpm scenarios:selftest`), one shard per job. Each break rebuilds the core
   # and runs scenarios, one at a time, so more jobs is the only way to run them side by side.
   breaks:
+    needs: changes
+    if: needs.changes.outputs.breaks == 'true'
     runs-on: ubuntu-latest
     strategy:
       # Every shard finishes, so one run lists every missed break.
@@ -109,15 +141,19 @@ jobs:
 
       - run: pnpm scenarios:selftest --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
-  # The status the main branch's ruleset requires. It passes only when every job above passed.
+  # The status the main branch's ruleset requires. It passes only when every job above passed,
+  # and the break test either passed or was skipped because `changes` said it could not fail.
   check:
-    needs: [checks, breaks]
+    needs: [changes, checks, breaks]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - env:
+          CHANGES: ${{ needs.changes.result }}
+          NEEDS_BREAKS: ${{ needs.changes.outputs.breaks }}
           CHECKS: ${{ needs.checks.result }}
           BREAKS: ${{ needs.breaks.result }}
         run: |
-          echo "checks: $CHECKS, breaks: $BREAKS"
-          test "$CHECKS" = success && test "$BREAKS" = success
+          echo "changes: $CHANGES (break test needed: $NEEDS_BREAKS), checks: $CHECKS, breaks: $BREAKS"
+          test "$CHANGES" = success && test "$CHECKS" = success
+          if [ "$NEEDS_BREAKS" = true ]; then test "$BREAKS" = success; else test "$BREAKS" = skipped; fi

@@ -49,4 +49,25 @@ export const YOUR_TURN_MUTATIONS: Mutation[] = [
     replace: '            drop(arrivals);\n',
     scenarios: 'told once',
   },
+  {
+    name: 'a restart tells every conversation that became my turn while the app was quit',
+    file: notify,
+    find: '                .filter(after_start)\n',
+    replace: '',
+    scenarios: 'a restart catches up',
+  },
+  {
+    name: 'an account that catches up through a snapshot stays quiet for one change set too many',
+    file: 'crates/core/src/sync.rs',
+    find: '        self.caught_up_by_snapshot(account_id);\n',
+    replace: '',
+    scenarios: 'a restart catches up',
+  },
+  {
+    name: 'the first change set after a restart tells nothing, so a reply sent after the start is never told',
+    file: notify,
+    find: '.then(|| catch_up.since.clone())',
+    replace: '.then(|| "9999-12-31T00:00:00Z".to_owned())',
+    scenarios: 'sent after the start',
+  },
 ]

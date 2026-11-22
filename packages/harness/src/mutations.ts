@@ -15,9 +15,12 @@
 // short incremental build.
 
 import { type Mutation, runBreaks } from './breaks.ts'
+import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { YOUR_TURN_MUTATIONS } from './mutations-your-turn.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
+import { PEOPLE_MUTATIONS } from './mutations-people.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
+import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
@@ -319,8 +322,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'an open list keeps a thread after it leaves the filter',
     file: core('live_view.rs'),
-    find: 'moved |= listed.remove(&place(before));',
-    replace: 'moved |= listed.contains(&place(before));',
+    find: 'moved |= listed.remove(&place(&before.summary));',
+    replace: 'moved |= listed.contains(&place(&before.summary));',
     scenarios: 'open list follows',
   },
   {
@@ -409,4 +412,13 @@ const MUTATIONS: Mutation[] = [
   },
 ]
 
-runBreaks([...MUTATIONS, ...SEND_MUTATIONS, ...UNDO_MUTATIONS, ...GMAIL_MUTATIONS, ...YOUR_TURN_MUTATIONS])
+await runBreaks([
+  ...MUTATIONS,
+  ...SEND_MUTATIONS,
+  ...UNDO_MUTATIONS,
+  ...GMAIL_MUTATIONS,
+  ...PEOPLE_MUTATIONS,
+  ...TURN_MUTATIONS,
+  ...FORWARD_MUTATIONS,
+  ...YOUR_TURN_MUTATIONS,
+])

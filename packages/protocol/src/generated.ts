@@ -125,19 +125,85 @@ accountId?: AccountId, mailboxId?: MailboxId, turn?: Turn, unread?: boolean,
 /**
  * Full-text search over the local index.
  */
-text?: string, };
+text?: string, 
+/**
+ * True lists only conversations whose last message is 30 days old or more, false only the
+ * newer ones. With `turn: mine` these are Let go? and Your turn. The core's clock decides,
+ * so a conversation moves from one list to the other while the app runs. Leave out for both.
+ */
+retired?: boolean, 
+/**
+ * Only the conversations Updates groups under this sender (see `SenderSummary`).
+ */
+sender?: SenderId, };
 
 /**
  * Every live view. Add a variant here and a matching one to `Update`.
  */
-export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "view": "mailboxes", accountId?: AccountId, } | { "view": "threads", filter: ThreadFilter, offset: number, limit: number, } | { "view": "thread", threadId: ThreadId, };
+export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "view": "mailboxes", accountId?: AccountId, } | { "view": "threads", filter: ThreadFilter, offset: number, limit: number, } | { "view": "thread", threadId: ThreadId, } | { "view": "senders", accountId?: AccountId, mailboxId?: MailboxId, offset: number, limit: number, } | { "view": "recipients", accountId: AccountId, prefix: string, limit: number, } | { "view": "change", change: ChangeId, };
 
 /**
  * The answer to a query. A threads update replaces the whole window.
  */
-export type Update = { "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, };
+export type Update = { "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, };
 
 export type ThreadPage = { total: number, threads: Array<ThreadSummary>, };
+
+/**
+ * One per sender in Updates, in one account.
+ */
+export type SenderId = Id<'Sender'>;
+
+/**
+ * One row of Updates: every automated conversation from one sender, in one account. A
+ * conversation is automated when its newest message from someone else is (see turns.rs in
+ * the core). Its sender is that message's address, compared without case, so news@ and
+ * no-reply@ of one company are two senders. To act on all of a sender's conversations, list
+ * them with `sender` in a threads filter and send one command naming their ids.
+ */
+export type SenderSummary = { id: SenderId, accountId: AccountId, 
+/**
+ * The name and address the newest conversation's message came from.
+ */
+name: string | null, address: string, 
+/**
+ * How many conversations, how many messages are in them, and how many of those are unread.
+ */
+threads: number, messages: number, unread: number, 
+/**
+ * The newest conversation's subject, and when its last message came.
+ */
+subject: string, lastMessageAt: string, };
+
+/**
+ * One window of Updates, newest sender first. `total` counts every sender in it.
+ */
+export type SenderPage = { total: number, senders: Array<SenderSummary>, };
+
+/**
+ * Someone a `recipients` view suggests for a recipient field on `account_id`: a person the
+ * user wrote to, or who wrote to the user, in the mail the core holds. Mail from machines
+ * (list or bulk headers, or the provider's bulk verdict) and mail in spam count for nothing.
+ * No-reply addresses and the account's own are never suggested. `prefix` matches, without
+ * case, the start of the address, of any word of a name, or of a whole name. An empty prefix
+ * suggests nobody.
+ *
+ * People the user wrote to come first, then people who only wrote to the user. Within each
+ * group, people with more and newer mail come first: each message with them counts twice as
+ * much as one from 30 days before it. Then the one with the newest mail, then by address.
+ *
+ * `address` is as their newest mail wrote it, and `name` is the newest display name their
+ * mail gave, if any. `last_at` is when the newest mail with them was sent, either way.
+ */
+export type Recipient = { name: string | null, address: string, lastAt: string, };
+
+/**
+ * The conversation holding the message that send `change` wrote, for a UI that has to find
+ * it: the one a new message started, or the one the core merged it into. Live, so a merge
+ * moves it. `thread_id` is null for a change that is not a send the core holds, and once the
+ * message is gone, as after an undo. Once the provider holds the message it stays where it is.
+ */
+export type ChangeHolder = { threadId: ThreadId | null, };
 
 /**
  * A user intent. Every command acts on whole threads.
@@ -153,6 +219,8 @@ export type TurnChoice = "mine" | "theirs" | "none" | "auto";
 /**
  * A message for the core to send. `to`, `cc` and `bcc` hold bare addresses, for example
  * "ana@example.com". The core writes From, Date, Message-ID, In-Reply-To and References.
+ * A new conversation has neither `in_reply_to` nor `forward_of`, a reply has the first, and
+ * a forward the second. A draft with both is refused `invalid`.
  */
 export type Draft = { accountId: AccountId, to: Array<string>, cc: Array<string>, bcc: Array<string>, subject: string, text: string, 
 /**
@@ -162,7 +230,25 @@ html: string | null,
 /**
  * The message this answers. Required, but may be null for a new conversation.
  */
-inReplyTo: MessageId | null, };
+inReplyTo: MessageId | null, 
+/**
+ * The message this forwards. The core adds the original below `text` (and `html`) in the
+ * usual "Forwarded message" form, and carries its attachments with their names and types,
+ * so a UI sends only what the user wrote. Leave it out for anything but a forward. A forward
+ * starts a conversation of its own: it does not answer the original, so it moves no turn
+ * there. Refused `unknown-target` when the core has no such message, or its body is gone,
+ * and `conflict` while its body has not loaded (it loads when its conversation is open).
+ * A forward of a send of the user's that the provider does not hold yet waits, `sending`,
+ * until it does. It fails `unknown-target` if that send fails, or if an attachment is gone
+ * by the time it goes out.
+ */
+forwardOf?: MessageId, 
+/**
+ * The original's files a forward leaves out, each by the `blobId` the original's message
+ * lists it under. Leave it out to carry every file. Refused `invalid` on a draft that
+ * forwards nothing, or for a file the original does not carry.
+ */
+forwardWithout?: Array<BlobId>, };
 
 /**
  * How far a message the user sent has got. Messages the provider holds have none.
@@ -248,7 +334,7 @@ export type BlobError = "offline" | "gone" | "not-supported";
 
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
 
 /**
  * A sync brought a message from a person, in the inbox, that leaves this conversation the

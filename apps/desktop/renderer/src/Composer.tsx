@@ -1,6 +1,6 @@
 // Replying, under the conversation. With no editor open, a reply bar ends the conversation:
-// Reply to the last sender, Reply all when anyone else is on the message, and a folded draft's
-// first words. The editor docks below the conversation as an inset field that grows with its
+// Reply to the last sender, with a folded draft's first words, Reply all when anyone else is
+// on the message, and Forward, which opens the compose page (ComposePage.tsx). The editor docks below the conversation as an inset field that grows with its
 // text up to 40% of the reader. Past that its lines and text scroll, and Send stays in view.
 // Esc folds it back to the bar and keeps the draft; Discard throws the draft away. drafts.ts
 // holds the draft, DraftText.tsx edits its text and sending.ts sends it. While a reply is on
@@ -8,14 +8,16 @@
 // Send locked until that reply has gone.
 
 import type { ThreadDetail, ThreadId } from '@letterbox/protocol'
-import { ChevronDown, CircleAlert, Clock, Reply as ReplyIcon, ReplyAll, Trash2 } from 'lucide-react'
+import { ChevronDown, CircleAlert, Clock, Forward, Reply as ReplyIcon, ReplyAll } from 'lucide-react'
 import { type KeyboardEvent, type ReactNode } from 'react'
-import { REPLY_KEY } from './actions.ts'
+import { FORWARD_KEY, REPLY_KEY } from './actions.ts'
 import { AddressLine, Chip } from './AddressLine.tsx'
 import {
   collapse,
+  composeForward,
   confirmBcc,
   type Composer,
+  type DraftKey,
   discard,
   newReply,
   type Recipient,
@@ -23,13 +25,14 @@ import {
   takeOpening,
 } from './drafts.ts'
 import { DraftText } from './DraftText.tsx'
-import { chord, Key } from './Key.tsx'
+import { Key, shifted } from './Key.tsx'
+import { DiscardButton, SendButton, SendStatus } from './Send.tsx'
 import { slideUp } from './motion.ts'
 import { useSecondsUntil } from './clock.ts'
 import {
   dropUndone,
   hidePending,
-  type Pending,
+  type Located,
   restoreUndone,
   sendReply,
   startReply,
@@ -41,23 +44,26 @@ import {
 import { Tooltip } from './Tooltip.tsx'
 import { UNDO_KEY } from './undo.ts'
 
-const SEND_KEY = chord('↵')
-
 const firstName = (recipient: Recipient | undefined) => recipient?.name?.split(' ')[0] ?? recipient?.address ?? ''
 
 /** True while the editor shows, rather than the bar. */
 export const isComposing = (composer: Composer | undefined) => composer !== undefined && composer.state !== 'collapsed'
 
+/** The message Forward sends on: the newest the provider holds, not one of the user's still on its way. */
+export const forwardable = (thread: ThreadDetail) => thread.messages.findLast((message) => message.delivery === null)
+
 /**
  * The bar that ends the conversation: Reply to whoever wrote last, with a folded draft's first
- * words, and Reply all only when the message went to anyone besides the user and them. It
- * shows whenever a reply can go to anyone, as on the user's own message sent only to Cc.
+ * words, Reply all only when the message went to anyone besides the user and them, and
+ * Forward. It shows whenever a reply can go to anyone, as on the user's own message sent only
+ * to Cc, or there is a message to forward.
  */
 export function ReplyBar({ thread, composer }: { thread: ThreadDetail; composer: Composer | undefined }) {
   const to = composer?.reply.to[0] ?? newReply(thread, false)?.to[0]
   const others = newReply(thread, true)?.cc.length ?? 0
   const preview = composer?.reply.text.replace(/\s+/g, ' ').trim() ?? ''
-  if (!composer && !to && others === 0) return null
+  const original = forwardable(thread)
+  if (!composer && !to && others === 0 && !original) return null
   return (
     <div className="mt-4 flex h-11 items-center rounded-[10px] bg-well text-row text-muted shadow-well">
       <button
@@ -69,21 +75,50 @@ export function ReplyBar({ thread, composer }: { thread: ThreadDetail; composer:
       >
         <ReplyIcon className="size-[15px] flex-none" strokeWidth={1.75} aria-hidden />
         <span className="flex-none">{to ? `Reply to ${firstName(to)}` : 'Reply'}</span>
-        <span className="min-w-0 flex-1 truncate text-faint">{preview}</span>
         <Key>{REPLY_KEY.toUpperCase()}</Key>
+        <span className="min-w-0 flex-1 truncate text-faint">{preview}</span>
       </button>
       {others > 0 && (
-        <button
-          type="button"
-          aria-keyshortcuts={`Shift+${REPLY_KEY}`}
+        <Segment
+          label="Reply all"
+          icon={<ReplyAll className="size-[15px]" strokeWidth={1.75} aria-hidden />}
+          shortcut={`Shift+${REPLY_KEY}`}
+          keycap={shifted(REPLY_KEY.toUpperCase())}
           onClick={() => startReply(thread, true)}
-          className="flex h-full flex-none items-center gap-1.5 rounded-r-[10px] pr-3.5 pl-3 hover:text-fg"
-        >
-          <ReplyAll className="size-[15px]" strokeWidth={1.75} aria-hidden />
-          Reply all
-        </button>
+        />
+      )}
+      {original && (
+        <Segment
+          label="Forward"
+          icon={<Forward className="size-[15px]" strokeWidth={1.75} aria-hidden />}
+          shortcut={FORWARD_KEY}
+          keycap={FORWARD_KEY.toUpperCase()}
+          onClick={() => composeForward(thread, original)}
+        />
       )}
     </div>
+  )
+}
+
+type SegmentProps = { label: string; icon: ReactNode; shortcut: string; keycap: string; onClick: () => void }
+
+/** One of the bar's buttons after Reply, behind a hairline. The last one rounds off the bar. */
+function Segment({ label, icon, shortcut, keycap, onClick }: SegmentProps) {
+  return (
+    <>
+      <span aria-hidden className="h-[18px] w-px flex-none bg-line" />
+      <button
+        type="button"
+        aria-label={label}
+        aria-keyshortcuts={shortcut}
+        onClick={onClick}
+        className="flex h-full flex-none items-center gap-1.5 pr-2.5 pl-3 last:rounded-r-[10px] hover:bg-hover hover:text-fg"
+      >
+        {icon}
+        {label}
+        <Key>{keycap}</Key>
+      </button>
+    </>
   )
 }
 
@@ -129,63 +164,16 @@ export function Editor({ id, composer }: { id: ThreadId; composer: Exclude<Compo
       notice={
         <>
           {undone && <UndoneNotice undone={undone} over busy={busy} />}
-          {reply.bccLost && (
-            <button
-              type="button"
-              data-field="bcc-notice"
-              title="Confirm the recipients"
-              onClick={() => confirmBcc(id)}
-              className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
-            >
-              <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
-              Bcc wasn't kept after the reload. Check recipients before sending.
-            </button>
-          )}
+          {reply.bccLost && <BccNotice id={id} />}
         </>
       }
       footer={
         <>
-          <button
-            type="button"
-            disabled={blocked}
-            onClick={() => void sendReply(id)}
-            className="inline-flex h-8 flex-none items-center gap-2.5 rounded-[9px] bg-blue pr-1.5 pl-3.5 text-row font-semibold text-paper enabled:hover:brightness-110 disabled:opacity-60"
-          >
-            Send
-            <Key tone="send">{SEND_KEY}</Key>
-          </button>
-          {composer.state === 'checking' ? (
-            <p role="status" data-field="send-checking" className="truncate text-row text-fg2">
-              Checking whether this was sent…
-            </p>
-          ) : problem?.at === 'send' ? (
-            <p role="alert" data-field="send-problem" className="flex min-w-0 items-center gap-1.5 text-row text-red">
-              <CircleAlert className="size-3.5 flex-none" strokeWidth={2} aria-hidden />
-              <span className="truncate">{problem.text}</span>
-            </p>
-          ) : reply.bccLost ? (
-            <p role="status" data-field="send-locked" className="truncate text-row text-fg2">
-              Check the recipients before sending
-            </p>
-          ) : earlier ? (
-            <p role="status" data-field="send-locked" className="truncate text-row text-fg2">
-              {earlier.until === null ? 'Your earlier reply is still sending' : <StillSending until={earlier.until} />}
-            </p>
-          ) : (
-            <p className="truncate text-row text-muted">Sends after 10 s. Undo with {UNDO_KEY.toUpperCase()}.</p>
-          )}
+          <SendButton disabled={blocked} onSend={() => void sendReply(id)} />
+          <SendStatus composer={composer} earlier={earlier} />
           <span className="flex-1" />
           <Minimize onClick={() => collapse(id)} />
-          <button
-            type="button"
-            aria-label="Discard"
-            title="Discard"
-            disabled={busy}
-            onClick={() => discard(id)}
-            className="inline-flex size-8 flex-none items-center justify-center rounded-lg text-muted enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-60"
-          >
-            <Trash2 className="size-4" strokeWidth={1.75} aria-hidden />
-          </button>
+          <DiscardButton disabled={busy} onDiscard={() => discard(id)} />
         </>
       }
     >
@@ -280,7 +268,7 @@ function Minimize({ onClick }: { onClick: () => void }) {
  * The reply on its way in this conversation, read only: who it goes to and what it says. Undo
  * takes it back into the editor while the core holds it. No second draft starts meanwhile.
  */
-export function PendingReply({ pending }: { pending: Pending }) {
+export function PendingReply({ pending }: { pending: Located }) {
   const { reply } = pending
   const lines = [
     { label: 'To', people: reply?.to ?? [] },
@@ -336,6 +324,22 @@ export function PendingReply({ pending }: { pending: Pending }) {
   )
 }
 
+/** A draft rebuilt without its Bcc. Pressing it confirms the recipients, and Send can go. */
+export function BccNotice({ id }: { id: DraftKey }) {
+  return (
+    <button
+      type="button"
+      data-field="bcc-notice"
+      title="Confirm the recipients"
+      onClick={() => confirmBcc(id)}
+      className="mx-4 mb-2 flex flex-none items-center gap-2 rounded-lg bg-red/[0.07] px-3 py-2 text-left text-row text-fg2 inset-ring inset-ring-red/35 hover:bg-red/[0.12] wide:mx-6"
+    >
+      <CircleAlert className="size-3.5 flex-none text-red" strokeWidth={2} aria-hidden />
+      Bcc wasn't kept after the reload. Check recipients before sending.
+    </button>
+  )
+}
+
 /**
  * A reply the core took back while the conversation's draft had text: Restore it over the
  * draft, or discard it. `over` says a draft is there to be replaced, and `busy` that it waits
@@ -366,11 +370,6 @@ export function UndoneNotice({ undone, over, busy }: { undone: Undone; over: boo
       </button>
     </div>
   )
-}
-
-/** Why this draft cannot go yet: the conversation's earlier reply, and its seconds left by the core's deadline. */
-function StillSending({ until }: { until: string }) {
-  return <>Your earlier reply is still sending ({useSecondsUntil(until)} s)</>
 }
 
 /** How long the core will hold the reply, by its deadline. Display only: the core's update ends it. */

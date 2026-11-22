@@ -44,6 +44,9 @@ scenario('three unconfirmed sends are looked up once each per round, before and 
   for (const [index, subject] of ['Second note', 'Third note'].entries()) {
     const core = t.startCore({ confirmWindow: LONG_WINDOW })
     await core.hello()
+    // The sync queues behind the checks the start booked, so their writes come before the send.
+    // Unwaited, the send could be accepted before or after them, at a different rev each run.
+    await sync(core)
     const send = await core.command({ kind: 'send', draft: draft(accountId, null, { subject }) })
     changes.push(send.change)
     await box.sendHeld(index + 2)

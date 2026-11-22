@@ -17,6 +17,7 @@ use crate::adapter::{MessageRef, RemoteFacts, RemoteMailbox, RemoteMessage, Remo
 use crate::maps::{HashMap, HashSet, IndexMap, IndexSet};
 use crate::outbox::Arrived;
 use crate::store::Transaction;
+use crate::turns::{held_override, newest_held};
 use crate::world::{
     ChangeOutcome, ChangeRecord, MailboxRecord, MessageRecord, MessageState, Origin, ThreadRecord, World, messages_of,
     put_change, put_mailbox, put_message, put_thread, remove_mailbox, remove_message, remove_thread, scoped,
@@ -95,6 +96,7 @@ pub fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountI
                 id: id.clone(),
                 account_id: account_id.clone(),
                 turn_override: None,
+                override_since: None,
             },
         );
         return id;
@@ -117,16 +119,22 @@ pub fn thread_for(world: &mut World, tx: &Transaction<'_>, account_id: &AccountI
                 },
             );
         }
+        // A turn the user set keeps the time it was set against. Against the merged mail,
+        // the survivor's turn may no longer hold while the loser's does, as when the loser
+        // holds the newest message: then the loser's turn, with its time, carries on.
         let kept = world.threads.get(&winner).cloned();
-        let turn_override = world.threads.get(&loser).and_then(|thread| thread.turn_override);
-        if let (Some(kept), Some(turn_override)) = (kept, turn_override)
-            && kept.turn_override.is_none()
+        let lost = world.threads.get(&loser).cloned();
+        let newest = newest_held(world, &winner);
+        if let (Some(kept), Some(lost)) = (kept, lost)
+            && held_override(&kept, newest.as_ref()).is_none()
+            && held_override(&lost, newest.as_ref()).is_some()
         {
             put_thread(
                 world,
                 tx,
                 ThreadRecord {
-                    turn_override: Some(turn_override),
+                    turn_override: lost.turn_override,
+                    override_since: lost.override_since,
                     ..kept
                 },
             );

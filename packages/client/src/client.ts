@@ -90,7 +90,10 @@ export type Subscription<V extends View> = {
 export type Client = {
   /** Says hello with this client's protocol version and resolves with the welcome. */
   hello(): Promise<Of<'welcome'>>
-  /** Opens a live view. The core sends an update now and on every change to its data. */
+  /**
+   * Opens a live view. The core sends an update now and on every change to its data. Once the
+   * core is gone, opening or closing a view sends nothing and does not throw.
+   */
   subscribe<V extends View>(query: QueryFor<V>): Subscription<V>
   /** Asks once: subscribes, takes the first update and unsubscribes. */
   query<V extends View>(query: QueryFor<V>): Promise<Queries[V]['result']>
@@ -201,11 +204,16 @@ export function createClient(transport: Transport, options: Options): KeepingCli
 
   const take: KeepingClient['take'] = (kind) => waitFor((message): message is Of<typeof kind> => message.kind === kind)
 
+  /**
+   * Opens a live view. Once the core is gone, opening and closing one send nothing and never
+   * throw, so a UI can keep mounting and unmounting views: a view opened then has no data,
+   * and its `next` rejects with why the core ended.
+   */
   const subscribe = <V extends View>(query: QueryFor<V>): Subscription<V> => {
     const sub = options.newId('sub') as SubscriptionId
     const open: Open = { latest: undefined, count: 0, closed: false, waiting: [], watchers: new Set() }
     subscriptions.set(sub, open)
-    transport.send({ kind: 'subscribe', sub, query })
+    if (!ended) transport.send({ kind: 'subscribe', sub, query })
     // Updates on this subscription carry the data for the view it asked for.
     const dataOf = (update: Of<'update'>) => update.data as Queries[V]['result']
     return {
@@ -231,7 +239,8 @@ export function createClient(transport: Transport, options: Options): KeepingCli
         subscriptions.delete(sub)
         const error = new Error(`the subscription to ${query.view} was closed`)
         for (const waiting of open.waiting.splice(0)) waiting.reject(error)
-        transport.send({ kind: 'unsubscribe', sub })
+        // The core forgot every subscription when it ended.
+        if (!ended) transport.send({ kind: 'unsubscribe', sub })
       },
     }
   }

@@ -22,7 +22,9 @@ export type ShellBridge = {
   connect(): void
   /**
    * Calls `listener` with the conversation each time the person chooses a notification for it,
-   * after the shell has brought the window forward. Returns a function that stops listening.
+   * after the shell has brought the window forward. A conversation chosen before the page
+   * listened, as when the choice opened this window, goes to the first listener at once.
+   * Returns a function that stops listening.
    */
   onOpenConversation(listener: (threadId: ThreadId) => void): () => void
 }

@@ -1,10 +1,11 @@
 // The main window: the sidebar, then the list pane and the reader pane of the place it shows.
-// Below 1100 px wide the sidebar folds away behind a toggle in the list's head. Choosing a
-// notification (the desktop shell's) opens its conversation where it lives.
+// Below 1100 px wide the sidebar folds away behind a toggle in the list's head. With the core
+// lost, the reader pane says so at its foot (LostCore.tsx). Choosing a notification opens its
+// conversation where it lives (chosen.ts).
 
-import type { ThreadId } from '@letterbox/protocol'
-import { useEffect, useEffectEvent, useState } from 'react'
-import { useLost, useView } from './core.ts'
+import { useState } from 'react'
+import { type Chosen, useChosen } from './chosen.ts'
+import { useView } from './core.ts'
 import { MailboxesProvider } from './Label.tsx'
 import { MailScreen } from './MailScreen.tsx'
 import { PeopleScreen, usePeople } from './PeopleScreen.tsx'
@@ -16,12 +17,13 @@ export function App() {
   const accounts = useView({ view: 'accounts' }) ?? []
   const mailboxes = useView({ view: 'mailboxes' }) ?? []
   const people = usePeople()
-  const lost = useLost()
   const [place, setPlace] = useState<Place>({ kind: 'people' })
   const [query, setQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  // The conversation a chosen notification names, for the screen to open. A new object each time.
-  const [opening, setOpening] = useState<{ id: ThreadId } | null>(null)
+  // The choice of conversation App has acted on, and the one the screen is to open.
+  const chosen = useChosen()
+  const [handled, setHandled] = useState<Chosen | null>(null)
+  const [opening, setOpening] = useState<Chosen | null>(null)
 
   const goTo = (next: Place) => {
     setPlace(next)
@@ -29,19 +31,16 @@ export function App() {
     setSidebarOpen(false)
     setOpening(null)
   }
-
-  /**
-   * Opens the conversation a chosen notification names: in People when it is there, else in
-   * All mail, which holds every conversation. One that is gone opens to the reader saying so.
-   */
-  const openChosen = useEffectEvent((id: ThreadId) => {
-    const inPeople = people !== undefined && (people.mine.includes(id) || people.theirs.includes(id))
-    goTo(inPeople ? { kind: 'people' } : { kind: 'all' })
-    setOpening({ id })
-  })
-  // The shell brings the window forward first. A plain browser tab has no shell, and no notifications.
-  useEffect(() => window.letterbox?.onOpenConversation((id) => openChosen(id)), [])
-
+  // A new choice opens in People when it is there, else in All mail, which holds every
+  // conversation, and a gone one opens to the reader saying so. It waits for People to load,
+  // as a choice that opened this window arrives first.
+  if (chosen !== handled && people !== undefined) {
+    setHandled(chosen)
+    if (chosen) {
+      goTo(people.mine.includes(chosen.id) || people.theirs.includes(chosen.id) ? { kind: 'people' } : { kind: 'all' })
+      setOpening(chosen)
+    }
+  }
   const chrome: Chrome = {
     mail: { accounts, mailboxes },
     onToggleSidebar: () => setSidebarOpen(!sidebarOpen),
@@ -115,14 +114,6 @@ export function App() {
           )}
           <div className="flex min-w-0 flex-1">{screen()}</div>
         </MailboxesProvider>
-        {lost && (
-          <p
-            role="alert"
-            className="absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-xl bg-float px-3.5 py-2.5 text-meta text-fg2 shadow-float"
-          >
-            Lost the core: {lost}. Reload to connect again.
-          </p>
-        )}
       </div>
     </div>
   )

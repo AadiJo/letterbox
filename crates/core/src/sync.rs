@@ -12,7 +12,6 @@ use letterbox_protocol::{AccountId, Answer, Empty, MessageId, RequestId, Respons
 use tokio::sync::oneshot;
 
 use crate::adapter::{AdapterFailure, ChangesResult};
-use crate::notify::Arrivals;
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
 use crate::world::{AccountRecord, Health, MessageRecord, put_account, put_message};
@@ -95,7 +94,7 @@ impl Inner {
             if !self.still_current(account_id, linked) {
                 return Ok(Pulled::Done);
             }
-            let arrivals = Arrivals::before(&self.state.borrow().world, account_id, &set);
+            let arrivals = self.arrivals(account_id, &set);
             let mut arrived = None;
             let rev = self.commit(|world, tx, at| {
                 let Some(account) = world.accounts.get(account_id).cloned() else {
@@ -121,6 +120,7 @@ impl Inner {
         if !self.still_current(account_id, linked) {
             return Ok(Pulled::Done);
         }
+        self.caught_up_by_snapshot(account_id);
         self.snapshot_page(account_id, linked).await
     }
 

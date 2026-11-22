@@ -2,19 +2,20 @@
 // through a sync, with main's notification API and badge stubbed inside main, so nothing
 // reaches the desktop. It checks that mail from a machine stays quiet, that a person's mail
 // that is the user's turn shows one notification with the sender and subject only, that a
-// newer one in the same conversation replaces it, that the badge counts conversations, and
-// that choosing a notification brings the window forward and opens the conversation in the
-// page, or says quietly that it is gone.
+// newer one in the same conversation replaces it, that the badge counts conversations and
+// drops one once read, and that choosing a notification brings the window forward and opens
+// the conversation in the reader, even after it timed out and the window closed, as on macOS.
+// A conversation gone by then opens to the reader saying so.
 
-import type { ThreadId } from '@letterbox/protocol'
 import type { SeedMessage } from '@letterbox/sim-provider/contract'
-import { checkQuit, equal, quit, seed, WAIT_MS, withApp, within } from './electron-app.ts'
+import type { Page } from 'playwright'
+import { checkQuit, corePids, equal, quit, seed, untilLogged, WAIT_MS, withApp, within } from './electron-app.ts'
 import type { DevServer } from './server.ts'
 import type { RunningSim } from './sim.ts'
 
 /** What the stubs in main were asked, kept on main's globalThis with the notifications made. */
 type Stubs = {
-  shown: { title: string; body: string }[]
+  shown: { id: string; title: string; body: string }[]
   /** The title of each notification closed, as a newer one replaces it. */
   closed: string[]
   badges: number[]
@@ -46,6 +47,21 @@ const mail = (
   ...more,
 })
 
+/** The sidebar entry that is current, by its first words. */
+const placeOf = async (page: Page) => {
+  const text = await page.getByRole('navigation', { name: 'Sidebar' }).locator('[aria-current="page"]').textContent()
+  return ['People', 'All mail'].find((name) => text?.startsWith(name)) ?? text
+}
+
+/** Waits for the reader to show `subject`, then says where: the current sidebar entry, and the chosen row. */
+async function opensIn(page: Page, subject: string) {
+  await page.locator('h3[data-field="reader-subject"]', { hasText: subject }).waitFor({ timeout: WAIT_MS })
+  return {
+    place: await placeOf(page),
+    chosen: await page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row'),
+  }
+}
+
 export const notifyRun = (sim: RunningSim, server: DevServer) =>
   withApp('notify', server.url, async (run) => {
     const { app, page } = run
@@ -54,7 +70,7 @@ export const notifyRun = (sim: RunningSim, server: DevServer) =>
       globalThis.letterboxNotifyStubs = stubs
       Notification.isSupported = () => true
       Notification.prototype.show = function show(this: Electron.Notification) {
-        stubs.shown.push({ title: this.title, body: this.body })
+        stubs.shown.push({ id: this.id, title: this.title, body: this.body })
         stubs.made.push(this)
       }
       Notification.prototype.close = function close(this: Electron.Notification) {
@@ -91,10 +107,11 @@ export const notifyRun = (sim: RunningSim, server: DevServer) =>
     sim.mailbox.deliver(mail('notify-lunch', ANA, LUNCH))
     await sync()
     const first = await asked()
+    const lunch = await page.evaluate((subject) => window.letterboxDev?.threadOf(subject), LUNCH)
     equal(
       first.shown,
-      [{ title: 'Ana Check', body: 'Lunch &lt;next&gt; week &amp; more?' }],
-      "notify: a person's mail that is my turn shows one notification: the sender, and the subject as plain text",
+      [{ id: lunch ?? '', title: 'Ana Check', body: 'Lunch &lt;next&gt; week &amp; more?' }],
+      "notify: a person's mail that is my turn shows one notification, under its conversation's id: the sender, and the subject as plain text",
     )
     const badge = first.badges.at(-1) ?? -1
     equal(badge > 0, true, `notify: the badge counts the conversations that are my turn (${badge})`)
@@ -116,36 +133,78 @@ export const notifyRun = (sim: RunningSim, server: DevServer) =>
       globalThis.letterboxNotifyStubs?.made[1]?.emit('click')
     })
     const opened = await page.waitForFunction(() => document.body.dataset.opened, null, { timeout: WAIT_MS })
-    const lunch: ThreadId | undefined = await page.evaluate((subject) => window.letterboxDev?.threadOf(subject), LUNCH)
     equal(await opened.jsonValue(), lunch, 'notify: choosing it tells the page to open that conversation')
     equal(
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMinimized()),
       false,
       'notify: choosing it brings the window back',
     )
-
-    // The page opens it where it lives: People, since it is my turn, in the reader, with its row chosen.
-    const current = () =>
-      page.getByRole('navigation', { name: 'Sidebar' }).locator('[aria-current="page"]').textContent()
-    await page.locator('h3[data-field="reader-subject"]', { hasText: LUNCH }).waitFor({ timeout: WAIT_MS })
     equal(
-      [
-        (await current())?.startsWith('People'),
-        await page.locator('[role="option"][aria-selected="true"]').getAttribute('data-row'),
-      ],
-      [true, lunch],
+      await opensIn(page, LUNCH),
+      { place: 'People', chosen: lunch ?? null },
       'notify: the page opens that conversation in People, in the reader, with its row chosen',
     )
 
-    // A conversation gone since its notification opens quietly: All mail, with the reader saying so.
-    sim.mailbox.expunge('notify-other')
-    await sync()
-    await app.evaluate(() => globalThis.letterboxNotifyStubs?.made[2]?.emit('click'))
-    await page.getByText('This conversation is gone').waitFor({ timeout: WAIT_MS })
-    equal(
-      [(await current())?.startsWith('All mail'), await page.getByRole('alert').count()],
-      [true, 0],
-      'notify: a conversation gone since its notification opens All mail, whose reader says it is gone, and nothing breaks',
+    await within(
+      page.evaluate((subject) => window.letterboxDev?.markRead(subject), LUNCH),
+      'marking it read',
     )
-    checkQuit('notify', run, await quit(run))
+    equal((await asked()).badges.at(-1), badge, 'notify: reading a conversation takes it off the badge')
+
+    // As on macOS: the window closes and the app stays up. A hidden window keeps Linux and
+    // Windows from quitting with the last one. Then the notification times out, and the
+    // person chooses it from the notification center.
+    const reopened = app.waitForEvent('window', { timeout: WAIT_MS })
+    await app.evaluate(
+      ({ BrowserWindow }) =>
+        new Promise<void>((closed) => {
+          const [shown] = BrowserWindow.getAllWindows()
+          // Kept on globalThis, so it lives until the app quits.
+          Reflect.set(globalThis, 'letterboxKeepAlive', new BrowserWindow({ show: false }))
+          shown?.once('closed', () => closed())
+          shown?.close()
+        }),
+    )
+    await app.evaluate(() => {
+      const reply = globalThis.letterboxNotifyStubs?.made[1]
+      reply?.emit('close', { reason: 'timedOut' })
+      reply?.emit('click')
+    })
+    // The preload holds the id until the page's one listener (the renderer's chosen.ts) takes it.
+    const next = await reopened
+    equal(
+      await opensIn(next, LUNCH),
+      { place: 'People', chosen: lunch ?? null },
+      'notify: with the window closed, choosing it opens a window whose page opens that conversation',
+    )
+
+    // The other conversation is gone by the time its notification opens a window: the page says so, quietly.
+    await next.waitForFunction(() => window.letterboxDev !== undefined, null, { timeout: WAIT_MS })
+    sim.mailbox.expunge('notify-other')
+    await within(
+      next.evaluate(() => window.letterboxDev?.sync()),
+      'a sync',
+    )
+    const third = app.waitForEvent('window', { timeout: WAIT_MS })
+    await app.evaluate(
+      ({ BrowserWindow }) =>
+        new Promise<void>((closed) => {
+          const shown = BrowserWindow.getAllWindows().find((window) => window.isVisible())
+          shown?.once('closed', () => closed())
+          shown?.close()
+        }),
+    )
+    await app.evaluate(() => globalThis.letterboxNotifyStubs?.made[2]?.emit('click'))
+    const last = await third
+    const errors: string[] = []
+    last.on('pageerror', (error) => errors.push(error.message))
+    await last.getByText('This conversation is gone').waitFor({ timeout: WAIT_MS })
+    equal(
+      [await placeOf(last), await last.getByRole('alert').count(), errors],
+      ['All mail', 0, []],
+      'notify: a conversation gone before its notification opened a window opens All mail, whose reader says it is gone, and nothing breaks',
+    )
+    // Each new page asks for a core of its own. Quit once the last has one, not while main starts it.
+    await untilLogged(run, (lines) => corePids(lines).length === 3, "the last page's core starting")
+    checkQuit('notify', run, await quit(run), 3)
   })
