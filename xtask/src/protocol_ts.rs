@@ -38,7 +38,7 @@ pub fn generate() -> String {
         ThreadFilter, Query, Update, ThreadPage, SenderId, SenderSummary, SenderPage, Recipient, ChangeHolder,
         Command, TurnChoice, Draft, Delivery, Refusal, ChangeResult, UndoConflict, UndoField,
         SignInOption, SignInMethod, Request, PasswordInput, Response, Answer<Empty, Never>, True, False, Empty, Never,
-        SignedIn, SignInError, SyncNowError, BlobUrl, BlobError, AttachmentFile, AttachmentError,
+        SignedIn, SignInError, SyncNowError, BlobUrl, BlobError, AttachmentFile, AttachmentError, Position,
         ClientMessage, CoreMessage, YourTurn, ProtocolErrorReason,
     );
     out

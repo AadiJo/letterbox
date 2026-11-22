@@ -144,6 +144,8 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
   .or({ method: "'blob'", ok: 'false', error: "'offline' | 'gone' | 'not-supported'" })
   .or({ method: "'attachment'", ok: 'true', result: { name: 'string', mime: 'string', size: 'number' } })
   .or({ method: "'attachment'", ok: 'false', error: "'offline' | 'gone' | 'too-large'" })
+  .or({ method: "'position'", ok: 'true', result: { offset: 'number | null' } })
+  .or({ method: "'position'", ok: 'false', error: 'never' })
 
 const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' })
   .or(type({ kind: "'update'", sub: 'string', rev: 'number' }).and(update))

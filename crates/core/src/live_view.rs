@@ -122,6 +122,34 @@ fn listing(filter: &ThreadFilter, rows: &Rows, meter: &Meter) -> BTreeSet<Place>
         .collect()
 }
 
+/// Where `thread_id` sits in the list `filter` gives at `now`: how many of the list's threads
+/// sort before it, or None when the list does not hold it. It reads every row once, as a new
+/// list does (`listing`), and counts them instead of keeping them. `now` is read only for a
+/// filter on `retired`, and must then be the time the lists go by (`State::views_now`).
+pub fn position(filter: &ThreadFilter, thread_id: &ThreadId, rows: &Rows, now: &Time, meter: &Meter) -> Option<u64> {
+    let cut = filter.retired.map(|_| cut(now));
+    let shown = |at: &Place| match (filter.retired, &cut) {
+        (Some(true), Some(cut)) => at >= cut,
+        (Some(false), Some(cut)) => at < cut,
+        _ => true,
+    };
+    let target = rows
+        .listed(thread_id)
+        .filter(|listed| matches(listed, filter))
+        .map(|listed| place(&listed.summary))
+        .filter(shown)?;
+    let before = rows
+        .all()
+        .filter(|listed| {
+            meter.matched();
+            matches(listed, filter)
+        })
+        .map(|listed| place(&listed.summary))
+        .filter(|at| shown(at) && *at < target)
+        .count();
+    Some(before as u64)
+}
+
 impl LiveView {
     /// The view for a new subscription. Call it with rows that are up to date.
     pub fn open(
