@@ -78,6 +78,9 @@ importers:
       '@letterbox/client':
         specifier: workspace:*
         version: link:../../../packages/client
+      '@letterbox/protocol':
+        specifier: workspace:*
+        version: link:../../../packages/protocol
     devDependencies:
       electron:
         specifier: 45.2.1
