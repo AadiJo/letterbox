@@ -3,7 +3,8 @@
 // to its last sender, an opened sender with its newest marked read and every older line
 // reachable, Mark read and Archive all of a sender with over 50 conversations and their
 // undo, the Let go? pile by month with Let go on d and its toast, People, avatar contrast,
-// and the edges in updates-edges.ts: the keyboard past the loaded window, and a lost core.
+// and the edges in updates-edges.ts: the keyboard past the loaded window, a sender's files, and a
+// lost core.
 // Each is checked against what the seed holds, and captured at the mock's scenes
 // (c2-updates-1440.png beside b-updates-1440.png, and so on).
 
@@ -13,6 +14,7 @@ import type { Browser, Page } from 'playwright'
 import { MUTED } from './c2.ts'
 import { appErrors, captureC2, equal, openPage, SIZES } from './record.ts'
 import {
+  checkFilesInUpdates,
   checkKeyboardPastTheWindow,
   checkLost,
   nav,
@@ -429,6 +431,7 @@ export async function checkUpdatesScreens(browser: Browser, url: string) {
   await captureC2(page, 'people-letgo-1440')
 
   await page.setViewportSize(SIZES.wide)
+  await checkFilesInUpdates(page)
   await checkLost(page, relay.drop)
   equal(appErrors(errors, { lostCore: true }), [], 'the page logged no errors')
   await close()

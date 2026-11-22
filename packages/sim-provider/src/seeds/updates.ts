@@ -2,6 +2,7 @@
 //   - its machines get names that look apart (one "C" tile, not five) and subjects of their own
 //   - two weeks of mail from eight of them, each day's count from the Updates design, so a busy
 //     sender sits beside a quiet one. Today's is unread, and about half of each one's older mail
+//   - the bank's newest alert is its statement, with the statement attached as a PDF
 //   - five more turns of mine that waited over 30 days, four of them two to four letters long
 // Every name, address and company here is made up.
 
@@ -211,6 +212,14 @@ const CODEYARD = [
   'Sam Whitlow mentioned you in #199',
 ]
 
+/** The bank's newest alert: its statement, with the statement as a PDF, so Updates shows a file. */
+const STATEMENT = {
+  from: 'alerts@northbank.example',
+  subject: 'Your February statement is ready',
+  text: 'Your statement for February is attached. It is also in your account under Documents.',
+  file: { name: 'Northwind-statement-2026-02.pdf', mime: 'application/pdf', size: 188_416 },
+} as const
+
 const NEWEST_TEXT =
   'Lena Ortiz requested your review on harbor/api #212.\n\nFold quoted replies behind a single line, so long threads open at the newest message. 4 files changed, 212 additions, 31 deletions.'
 
@@ -230,15 +239,18 @@ function messagesOf(volume: Volume, number: number): SeedMessage[] {
   })
   return times.map((sentAt, index): SeedMessage => {
     const fromNewest = times.length - 1 - index
-    const subject =
-      (number === 0 ? CODEYARD[fromNewest] : undefined) ?? machine.subjects[index % machine.subjects.length] ?? ''
+    const statement = volume.from === STATEMENT.from && fromNewest === 0
+    const subject = statement
+      ? STATEMENT.subject
+      : ((number === 0 ? CODEYARD[fromNewest] : undefined) ?? machine.subjects[index % machine.subjects.length] ?? '')
     return {
       key: `volume-${number}-${index}`,
       mailboxes: ['inbox'],
       from: { name: machine.name, address: machine.address },
       to: [ME],
       subject,
-      text: number === 0 && fromNewest === 0 ? NEWEST_TEXT : `${subject}.`,
+      text: statement ? STATEMENT.text : number === 0 && fromNewest === 0 ? NEWEST_TEXT : `${subject}.`,
+      attachments: statement ? [STATEMENT.file] : 0,
       sentAt: at(sentAt),
       // Today's mail is unread, and every other message before it.
       unread: sentAt >= TODAY || index % 2 === 0,
