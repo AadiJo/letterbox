@@ -59,8 +59,9 @@ const RUNS_CODE = new Set(
     'exe com scr pif cpl msi msix msixbundle appx msp msc bat cmd',
     'ps1 psm1 vbs vbe js jse ws wsf wsc wsh sct hta lnk url scf reg inf',
     'application appref-ms gadget library-ms settingcontent-ms chm jar',
-    // macOS apps, installers and scripts.
-    'app pkg mpkg command tool workflow scpt applescript terminal',
+    // macOS apps, installers and scripts, and Launch Services shortcuts, which open the URL
+    // inside them, a file:// one included.
+    'app pkg mpkg command tool workflow scpt applescript terminal webloc inetloc fileloc',
     // Linux and Unix programs, packages and scripts.
     'sh bash zsh csh ksh fish run desktop appimage deb rpm',
     'py pyw pl rb php',

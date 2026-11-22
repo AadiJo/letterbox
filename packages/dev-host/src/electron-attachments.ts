@@ -37,7 +37,7 @@ const SUBJECT = 'Files for the check'
  * A file of a little over three chunks, one whose name tries a path, a hidden file and a
  * reversed extension, and names over the 200 bytes main keeps: two the cut leaves ending in
  * ".exe." and ".exe ", which Windows creates as ".exe", and two whose risky extension sits
- * past byte 200.
+ * past byte 200, and a macOS shortcut, which opens whatever URL it holds.
  */
 const FILES = [
   { name: 'Q3 report.pdf', mime: 'application/pdf', size: 3 * 64 * 1024 + 5 },
@@ -46,6 +46,7 @@ const FILES = [
   { name: `${'c'.repeat(195)}.exe ${'b'.repeat(40)}`, mime: 'application/octet-stream', size: 10 },
   { name: `${'d'.repeat(300)}.exe`, mime: 'application/octet-stream', size: 10 },
   { name: `${'e'.repeat(300)}.settingcontent-ms`, mime: 'application/octet-stream', size: 10 },
+  { name: 'Office map.webloc', mime: 'application/octet-stream', size: 10 },
 ]
 
 /** The warning main shows before it opens a file of this name. */
@@ -103,8 +104,10 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       page.evaluate((subject) => window.letterboxDev?.attachments(subject), SUBJECT),
       'the conversation with the files',
     )
-    const [report, setup, ...long] = files ?? []
-    if (!report || !setup || long.length !== 4)
+    const [report, setup, ...rest] = files ?? []
+    const long = rest.slice(0, 4)
+    const [shortcut] = rest.slice(4)
+    if (!report || !setup || !shortcut || long.length !== 4)
       throw new Error(`the conversation lists ${files?.length ?? 0} files, not ${FILES.length}`)
     // Bounded, so main never answering fails the check instead of hanging it.
     const save = (blobId: BlobId) =>
@@ -175,6 +178,12 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
         warning(`${'e'.repeat(182)}.settingcontent-ms`),
       ],
       'attachments: a long name is cut to keep its extension, with no dot or space at its end, and a program still warns',
+    )
+    await open(shortcut.blobId)
+    equal(
+      (await asked()).warned.at(-1),
+      warning('Office map.webloc'),
+      'attachments: a macOS shortcut, which opens the URL inside it, warns too',
     )
 
     equal(
