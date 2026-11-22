@@ -1,6 +1,6 @@
 // The end-to-end UI check, run by `pnpm check:ui` and `pnpm check`.
 //
-// Nine runs, each against real cores over the sim provider, in Playwright's Chromium:
+// Ten runs, each against real cores over the sim provider, in Playwright's Chromium:
 //   people-first  `pnpm dev` (main.ts) with the people-first seed: People, All mail, the
 //                 reader, the C2 design's rules (ui/c2.ts), HTML bodies, the narrow window,
 //                 keyboard actions, new mail, a reload (ui/people-first.ts)
