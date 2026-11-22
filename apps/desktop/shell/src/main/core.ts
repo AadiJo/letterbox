@@ -9,8 +9,9 @@
 // page cannot guess, and those updates go to main only.
 //
 // Main asks the core for an attachment's bytes itself (`attachment`), so the page never holds
-// a file or a path. Its requests carry random ids the page cannot guess, and their chunks and
-// response go to main only. A line with any other id goes to the page as before.
+// a file or a path, and tells it when the network may be back (`network-back`, network.ts).
+// Its requests carry random ids the page cannot guess, and their chunks and responses go to
+// main only. A line with any other id goes to the page as before.
 //
 // Main logs one line per start, stop and exit, with the core's PID (log.ts), so a check can
 // confirm that no core outlives the app.
@@ -56,6 +57,8 @@ export type CoreSession = {
    * removes the file whatever the answer.
    */
   attachment(blobId: BlobId, path: string): Promise<Fetched>
+  /** Tells the core the network may be back. Main logs the core's answer. */
+  networkBack(): void
   /** Closes the core's input, waits up to STOP_MS for it to finish its work, then kills it by PID. */
   stop(): Promise<void>
 }
@@ -91,6 +94,8 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
    * still main's and never reach the page.
    */
   const fetching = new Map<string, { fd: number; done: (fetched: Fetched) => void; failed: boolean }>()
+  /** Main's own `network-back` requests the core has not answered yet. */
+  const hinting = new Set<string>()
 
   /** Ends main's request `id` with `fetched`: closes its file and resolves its promise. */
   const finish = (id: string, fetched: Fetched) => {
@@ -108,6 +113,10 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
       return false
     // The core writes only protocol messages, which the scenarios check against the schema.
     const message: CoreMessage = JSON.parse(line)
+    if (message.kind === 'response' && hinting.delete(message.id)) {
+      log('the core heard that the network may be back')
+      return true
+    }
     const request = (message.kind === 'chunk' || message.kind === 'response') && fetching.get(message.id)
     if (!request) return false
     if (message.kind === 'chunk') write(request, message.data)
@@ -187,6 +196,13 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
       const request: ClientMessage = { kind: 'request', id, request: { method: 'attachment', blobId } }
       child.stdin.write(`${JSON.stringify(request)}\n`)
       return asked
+    },
+    networkBack: () => {
+      if (exited || !child.stdin.writable) return
+      const id = `shell-${randomUUID()}` as RequestId
+      hinting.add(id)
+      const request: ClientMessage = { kind: 'request', id, request: { method: 'network-back' } }
+      child.stdin.write(`${JSON.stringify(request)}\n`)
     },
     stop: async () => {
       const gone = exited

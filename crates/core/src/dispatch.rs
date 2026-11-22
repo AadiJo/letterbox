@@ -187,6 +187,7 @@ impl Inner {
             Request::Blob { .. } => self.respond(id, Response::Blob(Answer::from(Err(BlobError::NotSupported)))),
             Request::Attachment { blob_id } => self.attachment(id, blob_id),
             Request::Position { filter, thread_id } => self.position(id, &filter, &thread_id),
+            Request::NetworkBack => self.network_back(id),
         }
     }
 

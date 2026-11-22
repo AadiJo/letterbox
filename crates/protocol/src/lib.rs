@@ -287,6 +287,11 @@ pub enum Request {
     Attachment { blob_id: BlobId },
     /// Where a conversation sits in the list `filter` gives right now (position.rs). Answers at once.
     Position { filter: ThreadFilter, thread_id: ThreadId },
+    /// The device's network may be back: it came online, or the machine woke or was unlocked.
+    /// Each account whose last pull found its provider offline pulls again within seconds,
+    /// instead of after the rest of its backoff. Other accounts are left as they are, so a host
+    /// may send it on every such event. Answers at once.
+    NetworkBack,
 }
 
 /// The answer to one request, by method.
@@ -299,6 +304,7 @@ pub enum Response {
     Blob(Answer<BlobUrl, BlobError>),
     Attachment(Answer<AttachmentFile, AttachmentError>),
     Position(Answer<Position, Never>),
+    NetworkBack(Answer<Empty, Never>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]

@@ -15,6 +15,11 @@
 //!   - When the account's health clears, because some other call reached the provider, the
 //!     network is back: it pulls at once, through a wait of zero. A pull that failed while
 //!     another call cleared the health counts as cleared too, as no wait was there to be woken.
+//!   - When the host says the network may be back (`network-back`), an account whose last pull
+//!     found its provider offline cuts its wait to SETTLE. The failures in a row still count, so
+//!     a pull that finds it offline again backs off as before. An account that is not offline
+//!     ignores it, and so does one already waiting SETTLE or pulling, so a network that flaps
+//!     brings each offline account at most one pull per SETTLE, and a healthy one none.
 //!   - It starts no pull while another one is queued or running for the account (`pulls`, see
 //!     `Inner::pulling` in queue.rs), or a backfill's next page is queued: that pull does the
 //!     work. It waits PERIOD more instead.
@@ -32,7 +37,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use letterbox_protocol::AccountId;
+use letterbox_protocol::{AccountId, Answer, Empty, RequestId, Response};
 use tokio::sync::oneshot;
 
 use crate::adapter::AdapterFailure;
@@ -52,6 +57,11 @@ pub(crate) const PERIOD: Duration = Duration::from_secs(60);
 /// say so. A provider that keeps failing is asked no more than that.
 const MOST: Duration = Duration::from_secs(300);
 
+/// How long an offline account waits to pull after the host says the network may be back. A
+/// network that just came back gets a moment to settle, and the hints a resume and a reconnect
+/// send together fold into one pull.
+const SETTLE: Duration = Duration::from_secs(2);
+
 /// Where a schedule starts.
 pub(crate) enum Start {
     /// With a pull due at once: an account the core resumed at start.
@@ -66,6 +76,8 @@ enum Woke {
     Due,
     /// The account's health cleared: the provider can be reached again.
     Cleared,
+    /// The host says the network may be back, and the account's last pull found it offline.
+    NetworkBack,
     /// The link stopped.
     Stopped,
 }
@@ -96,25 +108,38 @@ impl Inner {
             }
         };
         loop {
-            // Registered before the wait begins, so health that clears while it runs wakes it.
-            let cleared = linked.wake.notified();
-            let due = async {
-                match wait {
-                    Some(wait) => self.env.idle(wait).await,
+            let timer = wait.map(|wait| self.env.idle(wait));
+            let mut due = std::pin::pin!(async move {
+                match timer {
+                    Some(timer) => timer.await,
                     None => std::future::pending().await,
                 }
-            };
-            let woke = tokio::select! {
-                biased;
-                () = linked.stop.cancelled() => Woke::Stopped,
-                () = cleared => Woke::Cleared,
-                () = due => Woke::Due,
+            });
+            // A hint the account ignores goes back to the same wait, which keeps its time.
+            let woke = loop {
+                // Registered before the wait goes on, so health that clears or a hint that comes while it runs wakes it.
+                let cleared = linked.wake.notified();
+                let network = linked.network.notified();
+                let woke = tokio::select! {
+                    biased;
+                    () = linked.stop.cancelled() => Woke::Stopped,
+                    () = cleared => Woke::Cleared,
+                    () = network => Woke::NetworkBack,
+                    () = &mut due => Woke::Due,
+                };
+                if !matches!(woke, Woke::NetworkBack) || (wait != Some(SETTLE) && self.offline(&account_id)) {
+                    break woke;
+                }
             };
             match woke {
                 Woke::Stopped => return,
                 Woke::Cleared => {
                     failures = 0;
                     wait = Some(Duration::ZERO);
+                    continue;
+                }
+                Woke::NetworkBack => {
+                    wait = Some(SETTLE);
                     continue;
                 }
                 Woke::Due => {}
@@ -185,6 +210,22 @@ impl Inner {
             // A backfill whose page never ran, as at close, said nothing worth backing off for.
             ended = backfill => Some(ended.unwrap_or(Ok(()))),
         }
+    }
+
+    /// Tells every schedule the network may be back (`Request::NetworkBack`), and answers at once.
+    /// Each decides for itself whether that changes its wait (see the module docs).
+    pub(crate) fn network_back(self: &Rc<Self>, id: RequestId) {
+        for linked in self.state.borrow().adapters.values() {
+            linked.network.notify_waiters();
+        }
+        self.respond(id, Response::NetworkBack(Answer::from(Ok(Empty {}))));
+    }
+
+    /// True when the account's last call found its provider offline.
+    fn offline(&self, account_id: &AccountId) -> bool {
+        let state = self.state.borrow();
+        let account = state.world.accounts.get(account_id);
+        account.is_some_and(|account| account.health == Health::Offline)
     }
 
     /// The wait before the next pull, after one that ended with `ended`. `failures` counts the
