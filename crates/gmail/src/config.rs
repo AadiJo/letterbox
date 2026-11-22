@@ -57,9 +57,10 @@ pub struct Timeouts {
     pub call: Duration,
     /// A call that moves a file: an attachment's download, or a send's upload.
     pub transfer: Duration,
-    /// How long any request may go without a byte arriving. A download that stopped moving
-    /// then frees the account's queue long before its transfer budget runs out, while one that
-    /// is slow but moving finishes.
+    /// How long a download may go without a byte arriving. One that stopped moving then frees
+    /// the account's queue long before its transfer budget runs out, while one that is slow but
+    /// moving finishes. Only downloads get it: reqwest runs it, unreset, while a request
+    /// uploads too, so it would end a send whose upload is slow (see `Clients` in api.rs).
     pub stall: Duration,
 }
 

@@ -91,9 +91,20 @@ impl CallError {
     }
 }
 
+/// The two HTTP clients an account's calls go through. They differ only in `stall`.
+#[derive(Clone)]
+pub struct Clients {
+    /// Every call but a download. It has no stall budget: reqwest's read timeout also runs,
+    /// unreset, while a request uploads, so it would end a send whose upload is slow.
+    pub calls: reqwest::Client,
+    /// An attachment's download. Its stall budget (`Timeouts::stall`) ends one that stopped moving.
+    pub downloads: reqwest::Client,
+}
+
 /// One account's connection to the API.
 pub struct Api {
     http: reqwest::Client,
+    downloads: reqwest::Client,
     config: GmailConfig,
     refresh_token: String,
     access_token: RefCell<Option<String>>,
@@ -103,14 +114,10 @@ pub struct Api {
 
 impl Api {
     /// `access_token` is the one the sign-in got, or None after a restart.
-    pub fn new(
-        http: reqwest::Client,
-        config: GmailConfig,
-        refresh_token: String,
-        access_token: Option<String>,
-    ) -> Self {
+    pub fn new(clients: Clients, config: GmailConfig, refresh_token: String, access_token: Option<String>) -> Self {
         Api {
-            http,
+            http: clients.calls,
+            downloads: clients.downloads,
             config,
             refresh_token,
             access_token: RefCell::new(access_token),
@@ -133,12 +140,13 @@ impl Api {
         Ok(token)
     }
 
-    /// Sends the request `build` makes, within `budget` each time (see `Timeouts`). A rate-limited answer is sent again after a wait: the
+    /// Sends the request `build` makes on `client`, within `budget` each time (see `Timeouts`). A rate-limited answer is sent again after a wait: the
     /// seconds a Retry-After header names, else a backoff from FIRST_BACKOFF that doubles up
     /// to MAX_BACKOFF. After RATE_LIMIT_TRIES of them in a row the call answers with the last.
     /// A Retry-After given as a date is read as absent, since the adapter reads no clock.
     async fn send(
         &self,
+        client: &reqwest::Client,
         budget: Duration,
         build: impl Fn(&reqwest::Client) -> RequestBuilder,
     ) -> Result<Response, CallError> {
@@ -146,7 +154,7 @@ impl Api {
         let mut backoff = FIRST_BACKOFF;
         let mut refused = 0;
         loop {
-            let response = self.send_once(&build).await?;
+            let response = self.send_once(client, &build).await?;
             if response.status().is_success() {
                 return Ok(response);
             }
@@ -172,7 +180,11 @@ impl Api {
     }
 
     /// Sends the request once, refreshing the token once on a 401. Any other status comes back as it is.
-    async fn send_once(&self, build: &impl Fn(&reqwest::Client) -> RequestBuilder) -> Result<Response, CallError> {
+    async fn send_once(
+        &self,
+        client: &reqwest::Client,
+        build: &impl Fn(&reqwest::Client) -> RequestBuilder,
+    ) -> Result<Response, CallError> {
         let held = self.access_token.borrow().clone();
         let token = match held {
             Some(token) => token,
@@ -187,10 +199,10 @@ impl Api {
                 CallError::Lost
             }
         };
-        let response = build(&self.http).bearer_auth(&token).send().await.map_err(offline)?;
+        let response = build(client).bearer_auth(&token).send().await.map_err(offline)?;
         let response = if response.status() == StatusCode::UNAUTHORIZED {
             let token = self.fresh_token().await.map_err(CallError::Failure)?;
-            build(&self.http).bearer_auth(&token).send().await.map_err(offline)?
+            build(client).bearer_auth(&token).send().await.map_err(offline)?
         } else {
             response
         };
@@ -237,16 +249,20 @@ impl Api {
     pub async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T, CallError> {
         let url = self.url(path);
         Self::read(
-            self.send(self.config.timeouts.call, |http| http.get(&url).query(query))
-                .await?,
+            self.send(&self.http, self.config.timeouts.call, |http| {
+                http.get(&url).query(query)
+            })
+            .await?,
         )
         .await
     }
 
-    /// GET `users/me/<path>`, within the transfer budget: an attachment's download.
+    /// GET `users/me/<path>`, within the transfer budget and on the client with a stall
+    /// budget: an attachment's download.
     pub async fn get_transfer<T: DeserializeOwned>(&self, path: &str) -> Result<T, CallError> {
         let url = self.url(path);
-        Self::read(self.send(self.config.timeouts.transfer, |http| http.get(&url)).await?).await
+        let download = self.send(&self.downloads, self.config.timeouts.transfer, |http| http.get(&url));
+        Self::read(download.await?).await
     }
 
     /// POST `users/me/<path>` with a JSON body, within the transfer budget, and read the
@@ -258,8 +274,10 @@ impl Api {
     ) -> Result<T, CallError> {
         let url = self.url(path);
         Self::read(
-            self.send(self.config.timeouts.transfer, |http| http.post(&url).json(body))
-                .await?,
+            self.send(&self.http, self.config.timeouts.transfer, |http| {
+                http.post(&url).json(body)
+            })
+            .await?,
         )
         .await
     }
@@ -267,7 +285,7 @@ impl Api {
     /// POST `users/me/<path>` with a JSON body, within the call budget. The response body, if any, is ignored.
     pub async fn post(&self, path: &str, body: &impl Serialize) -> Result<(), CallError> {
         let url = self.url(path);
-        self.send(self.config.timeouts.call, |http| http.post(&url).json(body))
+        self.send(&self.http, self.config.timeouts.call, |http| http.post(&url).json(body))
             .await
             .map(drop)
     }

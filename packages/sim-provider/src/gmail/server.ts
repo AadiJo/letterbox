@@ -85,6 +85,11 @@ export interface GmailFake {
    * never ends either.
    */
   stallNextAnswer(part?: string, trickle?: boolean): void
+  /**
+   * The next API call whose path under `users/me/` holds `part` is not read for `seconds`: its
+   * client gets nothing back meanwhile, as one whose upload is slow does.
+   */
+  slowNextRequest(part: string, seconds: number): void
   /** Resolves once the answer `stallNextAnswer` named has stalled. Rejects if none has within 5 s. */
   answerStalled(): Promise<void>
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
@@ -346,6 +351,8 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   // any call, a string only a call whose path holds it.
   let stallNext: boolean | string = false
   let trickleNext = false
+  // Set by `slowNextRequest`, and cleared by the call it slows.
+  let slowNext: { part: string; seconds: number } | null = null
   // Told when that call's answer stalls.
   let onStalled: (() => void)[] = []
   let stalls = 0
@@ -369,7 +376,11 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     busy.add(request.socket)
     response.on('close', () => busy.delete(request.socket))
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-    void readBody(request).then(async (body) => {
+    const slowed = slowNext !== null && url.pathname.includes(slowNext.part) ? slowNext : null
+    if (slowed) slowNext = null
+    const read = () => readBody(request)
+    const reading = slowed ? new Promise<void>((done) => setTimeout(done, slowed.seconds * 1000)).then(read) : read()
+    void reading.then(async (body) => {
       if (request.method === 'POST' && url.pathname === '/token') {
         const form = new URLSearchParams(body)
         const address = oauth.accountOf(form)
@@ -436,6 +447,9 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     stallNextAnswer: (part, trickle = false) => {
       stallNext = part ?? true
       trickleNext = trickle
+    },
+    slowNextRequest: (part, seconds) => {
+      slowNext = { part, seconds }
     },
     answerStalled: () =>
       new Promise<void>((resolve, reject) => {

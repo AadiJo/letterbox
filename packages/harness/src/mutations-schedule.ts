@@ -86,8 +86,8 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: "a scheduled pull queued before a sign-out runs on the next sign-in's adapter",
     file: core('schedule.rs'),
-    find: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) || pulled_since {',
-    replace: 'if pulled_since {',
+    find: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) {',
+    replace: 'if false {',
     scenarios: 'before a sign-out',
   },
   {
@@ -148,8 +148,8 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: 'a scheduled pull runs though a push queued ahead of it already pulled',
     file: core('schedule.rs'),
-    find: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) || pulled_since {',
-    replace: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) {',
+    find: 'if core.pulls_ended_well(&id) != ticked {',
+    replace: 'if false {',
     scenarios: 'push queued ahead of it',
   },
   {
@@ -162,8 +162,29 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: 'a gmail download that stops moving holds the account for its whole transfer budget',
     file: 'crates/gmail/src/factory.rs',
-    find: '            .read_timeout(config.timeouts.stall)\n',
-    replace: '',
+    find: '            downloads: builder().read_timeout(config.timeouts.stall).build().expect(built),',
+    replace: '            downloads: builder().build().expect(built),',
     scenarios: 'stops moving',
+  },
+  {
+    name: "a scheduled pull skipped for a push's pull reports success before the backfill that pull left ends",
+    file: core('schedule.rs'),
+    find: '                    return Some((Some(Ok(())), Some(backfill), false));',
+    replace: '                    drop(backfill);\n                    return None;',
+    scenarios: 'leaves a backfill stands',
+  },
+  {
+    name: "a scheduled pull is skipped though a change is still uncertain after the push's pull",
+    file: core('schedule.rs'),
+    find: '                if !core.unsure(&id) {',
+    replace: '                if true {',
+    scenarios: 'loses another change',
+  },
+  {
+    name: 'a gmail send whose upload is slow is ended by the stall budget meant for downloads',
+    file: 'crates/gmail/src/factory.rs',
+    find: '            calls: builder().build().expect(built),',
+    replace: '            calls: builder().read_timeout(config.timeouts.stall).build().expect(built),',
+    scenarios: 'upload is slow',
   },
 ]

@@ -6,8 +6,9 @@
 // inside it only by the stall budget.
 //
 // Ways it can go wrong: no deadline, so the call hangs; a deadline read as Gmail's own error; an
-// error answer whose reason never came read as a refusal, though the call may have landed; and a
-// download that stopped moving held for the whole transfer budget.
+// error answer whose reason never came read as a refusal, though the call may have landed; a
+// download that stopped moving held for the whole transfer budget; and a send whose upload is
+// slow ended by the stall budget, which is only for downloads.
 
 import type { Attachment } from '@letterbox/protocol'
 import type { Scenario } from '../src/scenario.ts'
@@ -120,6 +121,20 @@ scenario(
     const fetched = await core.request({ method: 'attachment', blobId: file.blobId })
     t.equal(fetched.ok ? null : fetched.error, 'offline', 'the download gives up once no byte has come for a while')
     t.check((await core.request({ method: 'sync-now' })).ok, 'and a sync queued after it goes through')
+  },
+  ['gmail'],
+)
+
+scenario(
+  'on gmail, a send whose upload is slow past the stall budget still goes out within its transfer budget',
+  async (t) => {
+    const gmail = gmailOf(t)
+    // A stall budget of a second, and the send not read for two: only a download may be ended by it.
+    const { core, box, accountId } = await startWith(t, { gmailTimeouts: [3, 60, 1] })
+    gmail.slowNextRequest('messages/send', 2)
+    const send = await core.command({ kind: 'send', draft: draft(accountId, null, { subject: 'New message' }) })
+    t.equal((await core.settled(send.change)).result, 'done', 'the send goes out')
+    t.equal(box.sent().length, 1, 'once')
   },
   ['gmail'],
 )

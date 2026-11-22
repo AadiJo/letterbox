@@ -13,7 +13,7 @@
 
 import type { Subscription } from '../src/client.ts'
 import type { Scenario } from '../src/scenario.ts'
-import { fromBen, ME, PASSWORD, signIn, standardSeed, start, thread, untilAccounts } from '../src/fixtures.ts'
+import { fromBen, ME, PASSWORD, signIn, standardSeed, start, sync, thread, untilAccounts } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 
 const ANA = { name: 'Ana', address: 'ana@example.com' }
@@ -238,6 +238,71 @@ scenario('a scheduled pull skips when a push queued ahead of it pulled to settle
   t.equal(await core.idleWaits(2), [60, 60], 'the schedule waits a minute more')
   t.equal(box.calls().changes, pulls + 1, "only the push's pull reached the provider")
 })
+
+scenario("a push's pull that leaves a backfill stands for the scheduled pull, and its failure backs off", async (t) => {
+  const { core, box } = await start(t, standardSeed(t.dialect, { pageSize: 2 }))
+  await core.idleWaits(1)
+  const target = await thread(core, 'Can you review the draft?')
+  const other = await thread(core, 'Lunch on Friday?')
+  // As in the scenario above, a push queued behind a held one will pull to settle its lost answer.
+  box.damageNextApplyAnswer('disconnect')
+  box.holdApplies()
+  const lost = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  await box.applyHeld()
+  const next = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
+  await core.command({ kind: 'undo', change: next.change })
+  // Its pull lists the mailbox again, page by page, so its next page queues behind the tick's job.
+  box.expireCursors()
+  box.holdSnapshots()
+  core.advanceClock(60)
+  await core.query({ view: 'accounts' })
+  box.releaseApplies()
+  await box.snapshotHeld()
+  box.releaseSnapshots()
+  box.holdSnapshots()
+  // The tick's job ran and left the pulling to that backfill. Its next page fails offline.
+  await box.snapshotHeld()
+  box.setOffline(true)
+  box.releaseSnapshots()
+  t.equal(await core.idleWaits(2), [60, 120], "the backfill's failure backs the schedule off")
+  box.setOffline(false)
+  await sync(core)
+  // How it settles is the push's business (see 18-undo-partial.ts). Here it only must.
+  await core.settled(lost.change)
+})
+
+scenario(
+  "a push that loses another change's answer after its pull leaves the scheduled pull to settle it",
+  async (t) => {
+    const { core, box } = await start(t)
+    await core.idleWaits(1)
+    const target = await thread(core, 'Can you review the draft?')
+    const other = await thread(core, 'Lunch on Friday?')
+    box.damageNextApplyAnswer('disconnect')
+    box.holdApplies()
+    const lost = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+    await box.applyHeld()
+    const second = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
+    core.advanceClock(60)
+    await core.query({ view: 'accounts' })
+    const pulls = box.calls().changes
+    // The first answer is lost. The second change's push pulls first, which settles the first,
+    // then carries the second, whose answer is lost too.
+    box.releaseApplies()
+    box.holdApplies()
+    await box.applyHeld()
+    box.damageNextApplyAnswer('disconnect')
+    box.releaseApplies()
+    t.equal((await core.settled(lost.change)).result, 'done', "the push's pull settles the first change")
+    t.equal(
+      (await core.settled(second.change)).result,
+      'done',
+      "the tick's pull settles the second, without waiting a minute more",
+    )
+    t.equal(await core.idleWaits(2), [60, 60], 'and the schedule waits a minute')
+    t.equal(box.calls().changes, pulls + 2, "the push's pull and the tick's")
+  },
+)
 
 scenario("a pull the schedule queued before a sign-out does not run on the next sign-in's link", async (t) => {
   const { core, box, accountId } = await start(t)

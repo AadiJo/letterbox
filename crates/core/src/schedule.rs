@@ -134,17 +134,29 @@ impl Inner {
     /// Queues one quiet pull, and hands back how it ended once it has, a backfill it starts
     /// included. None when the link stopped first, even while the pull waits in the queue.
     ///
-    /// The pass checks again as it reaches the head of the queue, and does not pull when the
-    /// link stopped, or when a pull ended well since the tick: a job queued ahead of it can turn
-    /// into one, as a push does that pulls first to settle a change whose answer was lost.
+    /// The job checks again as it reaches the head of the queue. It does not pull when the
+    /// link stopped. A job queued ahead of it can have pulled since the tick, as a push does
+    /// that pulls first to settle a change whose answer was lost. Then:
+    ///   - when that pull left a backfill, whose next page is queued behind this job, the job
+    ///     does not pull, and the backfill's end stands for this pull's, failures included;
+    ///   - else when a change is still uncertain, as when that push lost the answer to another
+    ///     change after its pull, the job pulls all the same, so the change settles now;
+    ///   - else the job does not pull: the account is in step.
     async fn scheduled_pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> Option<PassResult> {
         let core = Rc::clone(self);
         let (id, link) = (account_id.clone(), linked.clone());
         let ticked = self.pulls_ended_well(account_id);
         let pass = self.enqueue_pull(account_id, async move {
-            let pulled_since = core.pulls_ended_well(&id) != ticked;
-            if link.stop.is_cancelled() || !core.still_current(&id, &link) || pulled_since {
+            if link.stop.is_cancelled() || !core.still_current(&id, &link) {
                 return None;
+            }
+            if core.pulls_ended_well(&id) != ticked {
+                if let Some(backfill) = core.join_backfill(&id) {
+                    return Some((Some(Ok(())), Some(backfill), false));
+                }
+                if !core.unsure(&id) {
+                    return None;
+                }
             }
             Some(core.sync_pass(id, Pull::Quiet).await)
         });
