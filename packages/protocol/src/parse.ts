@@ -127,7 +127,8 @@ const update = type({ view: "'accounts'", data: account.array() })
   .or({ view: "'threads'", data: { total: 'number', threads: type(summaryFields).array() } })
   .or({ view: "'thread'", data: type({ ...summaryFields, messages: message.array() }).or('null') })
   .or({ view: "'senders'", data: { total: 'number', senders: sender.array() } })
-  .or({ view: "'recipients'", data: type({ name: 'string | null', address: 'string' }).array() })
+  .or({ view: "'recipients'", data: type({ name: 'string | null', address: 'string', lastAt: 'string' }).array() })
+  .or({ view: "'change'", data: { threadId: 'string | null' } })
 
 const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 'string' } })
   .or({

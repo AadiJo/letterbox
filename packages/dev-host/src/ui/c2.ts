@@ -14,8 +14,8 @@ export const MUTED = 'rgb(163, 163, 163)'
 /** Each toolbar control and the key its tooltip must show: actions.ts's SHORTCUTS. */
 const KEYS = { Done: 'D', Archive: 'E', 'Move to Trash': '#', Flag: 'S', 'Mark as unread': 'U' } as const
 
-/** Controls that would do nothing yet, by their Lucide icon class or their name. */
-const DEAD = '.lucide-paperclip, .lucide-square-pen, .lucide-pen-square, .lucide-chevrons-up-down'
+/** Controls that would do nothing yet, by their Lucide icon class or their name. The list head's pen works: it opens the compose page. */
+const DEAD = '.lucide-paperclip, .lucide-chevrons-up-down'
 
 /**
  * A class name that is both a color and a type size (`text-key`) gets both, so its text takes
@@ -170,12 +170,9 @@ export async function checkC2(page: Page) {
   equal(chevron, { size: 14, color: MUTED }, 'a folded message has a 14 px chevron in the secondary color')
 
   equal(
-    [
-      await page.locator(DEAD).count(),
-      await page.getByRole('button', { name: /compose|new message|switch account|attach/i }).count(),
-    ],
+    [await page.locator(DEAD).count(), await page.getByRole('button', { name: /switch account|attach/i }).count()],
     [0, 0],
-    'no compose button, account switcher or attachment control',
+    'no account switcher or attachment control',
   )
 }
 
