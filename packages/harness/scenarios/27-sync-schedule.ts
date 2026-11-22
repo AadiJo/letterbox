@@ -51,10 +51,13 @@ scenario('mail that comes while the core runs is listed once the clock passes a 
   box.deliver(fromBen('fresh', 'Fresh news', '2025-12-09T09:00:00.000Z'))
   core.advanceClock(60)
   await untilListed(t, list, 'Fresh news', 'the new mail is listed')
+  // Ben is a person, so his mail is told. Taken here, so it lands in the same place every run.
+  await core.take('your-turn')
   t.equal(await core.idleWaits(2), [60, 60], 'and the pull after it is a minute later')
   box.deliver(fromBen('fresher', 'Fresher news', '2025-12-09T10:00:00.000Z'))
   core.advanceClock(60)
   await untilListed(t, list, 'Fresher news', 'so is the mail after that')
+  await core.take('your-turn')
 })
 
 scenario('the schedule starts no pull while another one is running or queued', async (t) => {
@@ -111,6 +114,8 @@ scenario('the schedule backs off while offline, and pulls at once when the provi
   t.equal(await core.idleWaits(4), [60, 120, 240, 0], 'the next pull is due at once, not after the backoff')
   core.advanceClock(0)
   await untilListed(t, list, 'Sent while you were offline', 'the mail sent while it was offline is listed')
+  // Ben is a person, so his mail is told. Taken here, so it lands in the same place every run.
+  await core.take('your-turn')
   t.equal(await core.idleWaits(5), [60, 120, 240, 0, 60], 'and the pulls after it are a minute apart again')
 })
 

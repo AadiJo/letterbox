@@ -61,6 +61,12 @@ export type CoreOptions = {
    * so a scenario can act after a deadline passes and before the timer for it runs.
    */
   holdWaits?: boolean
+  /**
+   * Seconds for the Gmail adapter's call, transfer and stall budgets, Google's unless given
+   * (see `Timeouts` in crates/gmail/src/config.rs). Real time: give short ones only to a
+   * scenario that stalls an answer, so the call fails inside its wait.
+   */
+  gmailTimeouts?: [call: number, transfer: number, stall: number]
 }
 
 /** An undo window that holds while the core runs, so a scenario can act inside it. */
@@ -224,6 +230,7 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
         ...(options.undoWindow === undefined ? [] : ['--undo-window', String(options.undoWindow)]),
         ...(options.confirmWindow === undefined ? [] : ['--confirm-window', String(options.confirmWindow)]),
         ...(options.holdWaits ? ['--hold-waits'] : []),
+        ...(options.gmailTimeouts === undefined ? [] : ['--gmail-timeouts', options.gmailTimeouts.join(',')]),
       ]
       const clock = join(folder, `clock-${cores.length}.sock`)
       const core = startCore(data, [...backend.args, ...flags], clock, record, newId, backend.reachable)

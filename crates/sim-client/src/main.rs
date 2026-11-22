@@ -1,14 +1,17 @@
 //! The core as a process, wired to the sim provider. This is what every scenario
 //! talks to: one JSON message per line on stdin, one per line on stdout.
 //!
-//!   core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] [--now <time>]
-//!            [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]
+//!   core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>]
+//!            [--gmail-timeouts <call>,<transfer>,<stall>] [--now <time>] [--undo-window <seconds>]
+//!            [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]
 //!
 //! `--sim` lists the two sim provider options. `--gmail` adds the Gmail option, pointed at
 //! the fake Gmail server at `<url>` (packages/sim-provider/src/gmail). Its consent URLs must
 //! not change between runs, so its random source and loopback port are fixed here, and the
 //! browser's redirect arrives on a unix socket in `--gmail-redirects`. At least one is needed.
-//! `--gmail` needs unix sockets, so on Windows core-sim refuses it.
+//! `--gmail` needs unix sockets, so on Windows core-sim refuses it. Its requests get Google's
+//! time budgets unless `--gmail-timeouts` gives seconds for them, as a scenario that stalls an
+//! answer does, so the call fails inside its wait (see packages/harness/scenarios/28-gmail-deadlines.ts).
 //!
 //! The clock is fixed (`--now`) and a wait on it ends at once, so a send's undo window
 //! (`--undo-window`, 10 seconds unless given) and its confirm window (`--confirm-window`,
@@ -48,12 +51,13 @@ use letterbox_core::adapter::{AdapterFactory, LocalFuture};
 use letterbox_core::clock::ClockHand;
 use letterbox_core::clock::FixedEnvironment;
 #[cfg(unix)]
-use letterbox_gmail::{GmailConfig, Loopback, Timeouts, gmail_factory};
+use letterbox_gmail::{GOOGLE_TIMEOUTS, GmailConfig, Loopback, Timeouts, gmail_factory};
 use letterbox_host::{Parts, run_stdio};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 
 const USAGE: &str = "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] \
-                     [--now <time>] [--undo-window <seconds>] [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]";
+                     [--gmail-timeouts <call>,<transfer>,<stall>] [--now <time>] [--undo-window <seconds>] \
+                     [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]";
 
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
@@ -78,17 +82,6 @@ const WAIT_BEGUN: &str = "core-sim: gmail rate-limit wait of";
 #[cfg(unix)]
 const IDLE_BEGUN: &str = "core-sim: idle wait of";
 
-/// Every request's budget at the fake. Its calls answer in milliseconds, so a scenario that
-/// stalls an answer sees the call fail inside the harness's 5 s wait for it. The transfer
-/// budget is longer than that wait, so a stalled download ends there only by `stall`. Real
-/// time, but only a stalled answer ever reaches it.
-#[cfg(unix)]
-const FAKE_GMAIL_TIMEOUTS: Timeouts = Timeouts {
-    call: Duration::from_secs(3),
-    transfer: Duration::from_secs(60),
-    stall: Duration::from_secs(3),
-};
-
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 #[cfg(unix)]
 const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
@@ -96,7 +89,8 @@ const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
 struct Args {
     data: PathBuf,
     sim: Option<PathBuf>,
-    gmail: Option<(String, PathBuf)>,
+    /// The fake's URL, the redirects folder, and the request budgets `--gmail-timeouts` gave.
+    gmail: Option<(String, PathBuf, Option<[u64; 3]>)>,
     now: String,
     undo_window: Duration,
     confirm_window: Duration,
@@ -109,6 +103,7 @@ fn parse_args() -> Option<Args> {
     let mut sim = None;
     let mut gmail = None;
     let mut redirects = None;
+    let mut timeouts = None;
     let mut now = "2026-01-01T00:00:00.000Z".to_owned();
     let mut undo_window = Duration::from_secs(10);
     let mut confirm_window = Duration::from_secs(60);
@@ -126,6 +121,10 @@ fn parse_args() -> Option<Args> {
             "--sim" => sim = Some(PathBuf::from(value)),
             "--gmail" => gmail = Some(value),
             "--gmail-redirects" => redirects = Some(PathBuf::from(value)),
+            "--gmail-timeouts" => {
+                let seconds: Vec<u64> = value.split(',').map(str::parse).collect::<Result<_, _>>().ok()?;
+                timeouts = Some(<[u64; 3]>::try_from(seconds).ok()?);
+            }
             "--now" => now = value,
             "--undo-window" => undo_window = Duration::from_secs(value.parse().ok()?),
             "--confirm-window" => confirm_window = Duration::from_secs(value.parse().ok()?),
@@ -134,8 +133,8 @@ fn parse_args() -> Option<Args> {
         }
     }
     let gmail = match (gmail, redirects) {
-        (Some(url), Some(redirects)) => Some((url, redirects)),
-        (None, None) => None,
+        (Some(url), Some(redirects)) => Some((url, redirects, timeouts)),
+        (None, None) if timeouts.is_none() => None,
         _ => return None,
     };
     (sim.is_some() || gmail.is_some()).then_some(Args {
@@ -178,10 +177,11 @@ fn follow_clock(socket: &PathBuf, hand: ClockHand) -> std::io::Result<()> {
 
 /// The Gmail option, pointed at the fake server. Nothing here is a real client: the fake
 /// accepts any client id, as long as the code exchange names the one consent did. No wait
-/// takes real time but a request's budget (FAKE_GMAIL_TIMEOUTS), which only an answer a
-/// scenario stalls runs out, so a run repeats and its transcript holds nothing about time.
+/// takes real time but a request's budget, Google's unless `timeouts` gives seconds for its
+/// call, transfer and stall budgets. Only an answer a scenario stalls runs one out, so a run
+/// repeats and its transcript holds nothing about time.
 #[cfg(unix)]
-fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
+fn fake_gmail(url: String, redirects: PathBuf, timeouts: Option<[u64; 3]>) -> Rc<dyn AdapterFactory> {
     // Each draw is 32 copies of the next number, so every attempt has its own verifier and state.
     let draws = Cell::new(0u8);
     // The fake listens on 127.0.0.1. Its name also gets ::1, where nothing listens, as
@@ -214,7 +214,11 @@ fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
             [draws.get(); 32]
         }),
         pause: Rc::new(pause),
-        timeouts: FAKE_GMAIL_TIMEOUTS,
+        timeouts: timeouts.map_or(GOOGLE_TIMEOUTS, |[call, transfer, stall]| Timeouts {
+            call: Duration::from_secs(call),
+            transfer: Duration::from_secs(transfer),
+            stall: Duration::from_secs(stall),
+        }),
     })
 }
 
@@ -286,7 +290,10 @@ fn main() -> ExitCode {
         .unwrap_or_default()
         .into_iter();
     #[cfg(unix)]
-    let factories = factories.chain(args.gmail.map(|(url, redirects)| fake_gmail(url, redirects)));
+    let factories = factories.chain(
+        args.gmail
+            .map(|(url, redirects, timeouts)| fake_gmail(url, redirects, timeouts)),
+    );
     let factories = factories.collect();
     // run_stdio turns time on for the Gmail adapter's HTTP client (see GmailFactory::new).
     // Nothing in the core or the adapters waits on a timer but a request's budget, which only a
