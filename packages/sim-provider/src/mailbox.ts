@@ -455,8 +455,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         else applyDamage = null
         reply(result, damage)
       }
-      const unheld = call.method === 'changes' || call.method === 'find' || call.method === 'attachment'
-      const hold = unheld || offline ? null : holds[call.method]
+      const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
       if (!hold?.keep(answerNow)) answerNow()
     },
   }
