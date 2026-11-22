@@ -190,6 +190,7 @@ impl Senders {
                             })
                     })
                     .collect(),
+                unsubscribe: sender.unsubscribe.clone(),
             })
         });
         SenderPage {

@@ -229,6 +229,8 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
                 list_id: false,
                 precedence: String::new(),
                 auto_submitted: String::new(),
+                list_unsubscribe_value: String::new(),
+                list_unsubscribe_post: String::new(),
             },
             bulk: None,
         },

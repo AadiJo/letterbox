@@ -196,9 +196,10 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await page.evaluate(() => {
     window.addEventListener('message', (event) => document.body.setAttribute('data-got-message', String(event.data)))
   })
-  // Every remote URL the body names. Each must be refused before it reaches the network.
-  const remoteLoads = [...htmlMessage.html.matchAll(/(?:<link [^>]*href="|src="|url\()(https:[^")]+)/g)].flatMap(
-    (match) => (match[1] ? [match[1]] : []),
+  // Every remote stylesheet and font the body names. Each must be refused before it reaches the
+  // network. The core's body pipeline takes the tracking pixel out first, so it never reaches the frame.
+  const remoteLoads = [...htmlMessage.html.matchAll(/(?:<link [^>]*href="|url\()(https:[^")]+)/g)].flatMap((match) =>
+    match[1] ? [match[1]] : [],
   )
   const refused = Promise.all(
     remoteLoads.map((load) => page.waitForEvent('requestfailed', (request) => request.url() === load)),
@@ -218,7 +219,8 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     'the body frame is sandboxed without scripts',
   )
   await refused
-  equal(blocked.toSorted(), remoteLoads.toSorted(), "the body frame's policy blocked its stylesheet, font and pixel")
+  equal(blocked.toSorted(), remoteLoads.toSorted(), "the body frame's policy blocked its stylesheet and font")
+  equal(await frame.locator('img[width="1"]').count(), 0, 'the tracking pixel never reached the frame')
   equal(remote, [], 'the page never reached past 127.0.0.1')
   await page.screenshot({ path: join(ARTIFACTS, 'html-body.png') })
 

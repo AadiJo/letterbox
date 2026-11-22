@@ -1,5 +1,4 @@
-// Self-check for the sim provider. Run from the repo root:
-//   node packages/sim-provider/src/selfcheck.ts
+// Self-check for the sim provider. Run from the repo root: node packages/sim-provider/src/selfcheck.ts
 //
 // Every way this sim provider could be wrong. Each line has one check below with the same id.
 // A "B" line runs once per dialect.
@@ -632,7 +631,8 @@ await both('B03 headers, hasAttachments and flag defaults', async (dialect) => {
   const { messages } = await snapshotFrom(adapter, null)
   const [a, b, c] = ['a', 'b', 'c'].map((key) => find(messages, key))
   assert(a && b && c)
-  assert.deepEqual(a.headers, { listUnsubscribe: true, listId: false, precedence: 'bulk', autoSubmitted: '' })
+  const stock = { listUnsubscribeValue: '<mailto:unsubscribe@list.example>' }
+  assert.deepEqual(a.headers, { listUnsubscribe: true, listId: false, precedence: 'bulk', autoSubmitted: '', ...stock })
   assert.deepEqual(b.headers, { listUnsubscribe: false, listId: true, precedence: '', autoSubmitted: 'auto-replied' })
   assert.deepEqual(c.headers, { listUnsubscribe: false, listId: false, precedence: '', autoSubmitted: '' })
   assert.deepEqual([a.hasAttachments, b.hasAttachments, c.hasAttachments], [true, false, false])

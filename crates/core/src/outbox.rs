@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
 use crate::adapter::{AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, SendResult};
+use crate::body::Reading;
 use crate::clock::{iso, parse};
 use crate::draft::prepare;
 use crate::effect::Effect;
@@ -147,6 +148,7 @@ impl Inner {
                         facts: prepared.facts,
                         server: prepared.server,
                         body: Some(BodyResult::Body { body: prepared.body }),
+                        reading: Reading::default(),
                         round: 0,
                     },
                 );

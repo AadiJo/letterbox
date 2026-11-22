@@ -48,6 +48,9 @@ pub struct AccountRecord {
     pub last_synced_at: Option<Time>,
     /// How the last sync pass ended.
     pub health: Health,
+    /// The addresses, lowercase, whose remote images the user always shows (see body/mod.rs).
+    #[serde(default)]
+    pub images_from: Vec<String>,
 }
 
 /// How far a snapshot has got.
@@ -126,6 +129,9 @@ pub struct MessageRecord {
     pub server: MessageState,
     /// None until someone opens the message.
     pub body: Option<BodyResult>,
+    /// What the body pipeline made of `body`, and the user's choice for its images (body/mod.rs).
+    #[serde(default, skip_serializing_if = "crate::body::Reading::is_unset")]
+    pub reading: crate::body::Reading,
     /// The latest snapshot that listed it (see `AccountRecord::round`). 0 when only `changes` has.
     #[serde(default)]
     pub round: u64,

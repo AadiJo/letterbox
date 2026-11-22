@@ -168,13 +168,17 @@ scenario('a body loads when a conversation is opened, once', async (t) => {
   t.check(message?.body.state === 'ready', 'the body arrives')
   if (message?.body.state !== 'ready') return
   t.equal(
-    [message.body.text, message.body.hasRemoteContent],
-    ['Here are the photos from the trip.', true],
-    'it carries the text and flags the remote image',
+    [message.body.text, message.body.images],
+    [
+      'Here are the photos from the trip.',
+      { shown: 'blocked', remote: [], trackers: [{ host: 'tracker.example', reason: 'beacon' }] },
+    ],
+    'it carries the text, and its one remote image is a tracking pixel the core took out',
   )
-  t.check(
-    message.body.html?.includes('tracker.example') === true,
-    'the html is passed on untouched for the UI to sandbox',
+  t.equal(
+    message.body.html,
+    '<p>Here are the photos.</p>',
+    'the html, still for the UI to sandbox, has no tracker in it',
   )
   t.equal(
     message.attachments.map((attachment) => attachment.name),

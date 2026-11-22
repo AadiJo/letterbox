@@ -28,6 +28,7 @@
 mod accounts;
 pub mod adapter;
 mod attachments;
+mod body;
 mod changes;
 pub mod clock;
 mod confirm;

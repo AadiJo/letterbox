@@ -167,6 +167,13 @@ pub struct RemoteHeaders {
     pub list_id: bool,
     pub precedence: String,
     pub auto_submitted: String,
+    /// List-Unsubscribe's value (RFC 2369), which body/unsubscribe.rs reads. Messages stored
+    /// before it was kept have only `list_unsubscribe`.
+    #[serde(default)]
+    pub list_unsubscribe_value: String,
+    /// List-Unsubscribe-Post's value (RFC 8058).
+    #[serde(default)]
+    pub list_unsubscribe_post: String,
 }
 
 /// A whole message as the provider lists it: its state and its facts side by side in one JSON object.
@@ -181,7 +188,7 @@ pub struct RemoteMessage {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteBody {
     pub text: String,
-    /// Untrusted. The core passes it on unchanged and the UI sandboxes it.
+    /// Untrusted. The core keeps it as it came, and passes on what body/mod.rs makes of it.
     pub html: Option<String>,
     pub attachments: Vec<RemoteAttachment>,
 }

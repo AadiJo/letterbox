@@ -100,20 +100,117 @@ export type ThreadDetail = { messages: Array<Message>, id: ThreadId, accountId: 
  */
 pending: boolean, };
 
-export type Message = { id: MessageId, from: Person, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, attachments: Array<Attachment>, 
+export type Message = { id: MessageId, from: Person, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, 
+/**
+ * From the List-Unsubscribe header, or else a link in the body once it has loaded.
+ */
+unsubscribe: Unsubscribe | null, attachments: Array<Attachment>, 
 /**
  * Set only on a message the user sent that the provider does not hold yet, or refused.
  */
 delivery: Delivery | null, };
 
 /**
- * Bodies download on demand, so one can be missing while offline.
- * `html` is hostile input. The UI must render it sandboxed, with scripts and
- * network off. The core never fetches remote content named in a message.
+ * Bodies download on demand, so one can be missing while offline. A body that has arrived
+ * stays `loading` until the pipeline has run on it.
+ *
+ * `html` is still hostile input. The UI must render it sandboxed, with scripts off and the
+ * network off. Only while `images.shown` is not `blocked` may it let images load, and only
+ * over https (`img-src https:`). The core never fetches remote content named in a message.
  */
-export type Body = { "state": "ready", text: string, html: string | null, hasRemoteContent: boolean, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
+export type Body = { "state": "ready", 
+/**
+ * The plain text, as the message has it.
+ */
+text: string, 
+/**
+ * The HTML for the state `images.shown` is in. Trackers are gone from it in every
+ * state. While images are blocked, each remote image is a placeholder (see `Images`)
+ * and no `url()` in its CSS names a remote image.
+ */
+html: string | null, images: Images, quote: Quote, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
 
 export type Unavailable = "offline" | "too-large" | "gone";
+
+/**
+ * A message's remote images, and the trackers the core took out.
+ */
+export type Images = { 
+/**
+ * Whether the user shows them. Set with the `set-images` command.
+ */
+shown: ShowImages, 
+/**
+ * Every remote image URL left after trackers are taken out, once each, in the order the
+ * HTML names them. While blocked, an element that loaded one no longer names it and
+ * carries `data-letterbox-image` with the URL's index here instead: an `<img>` (its `src`
+ * and `srcset` gone), an image `<input>`, a `<video>`'s poster or an SVG `<image>`. One
+ * whose `background` attribute named one carries `data-letterbox-background`. Empty means
+ * showing images changes nothing.
+ */
+remote: Array<string>, 
+/**
+ * The trackers taken out, in the order the HTML named them. None of them is in `html`
+ * in any state, so none loads, even once images are shown.
+ */
+trackers: Array<Tracker>, };
+
+/**
+ * Whose choice shows a message's remote images. The `set-images` command takes one of these
+ * for a message, and the message then reports it.
+ */
+export type ShowImages = "blocked" | "message" | "sender";
+
+/**
+ * One remote image the core took out as a tracker.
+ */
+export type Tracker = { 
+/**
+ * The host it would have loaded from, for example "list-manage.com".
+ */
+host: string, reason: TrackerReason, };
+
+/**
+ * Why the core judged an image a tracker. The rules are in crates/core/src/body/trackers.rs.
+ */
+export type TrackerReason = "known-host" | "tiny" | "hidden" | "beacon";
+
+/**
+ * Where the quoted history at the end of a body starts, so a UI can fold it behind "…".
+ * Each is an offset in UTF-16 code units, what JavaScript's `slice` counts: the new part is
+ * `body.text.slice(0, quote.text)`, and the quote is the rest. The body itself stays whole.
+ */
+export type Quote = { 
+/**
+ * Into `text`. None when the text ends in no quote.
+ */
+text: number | null, 
+/**
+ * Into `html`, in the state `images.shown` is in. None when the HTML ends in no quote.
+ * The new part, `body.html.slice(0, quote.html)`, is a prefix a browser closes by itself.
+ */
+html: number | null, };
+
+/**
+ * How to unsubscribe from the list a message came from. The core only reads it: acting on it
+ * sends mail or a request to the sender, which confirms the address is read.
+ */
+export type Unsubscribe = { "kind": "header", 
+/**
+ * A `mailto:` URI, with any subject and body it names.
+ */
+mailto: string | null, web: UnsubscribeWeb | null, } | { "kind": "link", url: string, };
+
+/**
+ * An https URL from the List-Unsubscribe header.
+ */
+export type UnsubscribeWeb = { url: string, 
+/**
+ * True when List-Unsubscribe-Post says `List-Unsubscribe=One-Click` (RFC 8058): a POST of
+ * that body to `url` unsubscribes with no page to visit. RFC 8058 also asks that a DKIM
+ * signature cover both headers, which the core does not check.
+ */
+oneClick: boolean, };
 
 export type Attachment = { blobId: BlobId, name: string, mime: string, size: number, inline: boolean, };
 
@@ -184,7 +281,12 @@ subject: string, lastMessageAt: string,
  * last entry today. Days are the user's, in the query's `zone`, on the core's clock, which
  * moves them on at the zone's midnight.
  */
-days: Array<SenderDay>, };
+days: Array<SenderDay>, 
+/**
+ * How to unsubscribe, from the message the row's name and address come from: its
+ * List-Unsubscribe header, or else a link in its body if that has loaded.
+ */
+unsubscribe: Unsubscribe | null, };
 
 /**
  * One day of a sender's mail in Updates: how many messages were sent that day, and how many
@@ -224,10 +326,10 @@ export type Recipient = { name: string | null, address: string, lastAt: string, 
 export type ChangeHolder = { threadId: ThreadId | null, };
 
 /**
- * A user intent. Every command acts on whole threads.
- * Only set-turn works with read-only access, because it never leaves the device.
+ * A user intent. Every command but set-images acts on whole threads.
+ * Only set-turn and set-images work with read-only access, because they never leave the device.
  */
-export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "undo", change: ChangeId, };
+export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "undo", change: ChangeId, };
 
 /**
  * The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.

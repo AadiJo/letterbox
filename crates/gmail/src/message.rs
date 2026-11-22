@@ -13,7 +13,7 @@ use crate::labels;
 use crate::wire::{Message, Part};
 
 /// The headers `format=metadata` is asked for. Gmail returns only these.
-pub const METADATA_HEADERS: [&str; 13] = [
+pub const METADATA_HEADERS: [&str; 14] = [
     "From",
     "To",
     "Cc",
@@ -23,6 +23,7 @@ pub const METADATA_HEADERS: [&str; 13] = [
     "In-Reply-To",
     "References",
     "List-Unsubscribe",
+    "List-Unsubscribe-Post",
     "List-Id",
     "Precedence",
     "Auto-Submitted",
@@ -206,6 +207,8 @@ pub fn remote_message(message: &Message) -> RemoteMessage {
                 list_id: has("List-Id"),
                 precedence: value("Precedence"),
                 auto_submitted: value("Auto-Submitted"),
+                list_unsubscribe_value: value("List-Unsubscribe"),
+                list_unsubscribe_post: value("List-Unsubscribe-Post"),
             },
             bulk: labels::bulk(&message.label_ids),
         },

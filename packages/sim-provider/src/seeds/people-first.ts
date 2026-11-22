@@ -191,7 +191,8 @@ const automated = (index: number, sentAt: string): SeedMessage => {
 /**
  * An HTML newsletter that tries what hostile mail tries: a script, an inline handler, a
  * tracking pixel, a remote stylesheet, a remote font and a link to a remote page. The `probe` paragraph keeps its
- * text only if none of it ran, and the dev host's UI check reads it.
+ * text only if none of it ran, and the dev host's UI check reads it. The core takes the pixel out, blocks the
+ * cover image until the user shows images, and reads the one-click unsubscribe from its headers.
  */
 const htmlNewsletter: SeedMessage = {
   key: 'html-newsletter',
@@ -204,16 +205,23 @@ const htmlNewsletter: SeedMessage = {
     '<link rel="stylesheet" href="https://styles.longread.example/mail.css">',
     '<style>@font-face{font-family:Remote;src:url(https://fonts.longread.example/serif.woff2)}h1{font-family:Remote,Georgia,serif}</style>',
     '<h1>Five essays for the weekend</h1>',
+    '<img src="https://images.longread.example/cover.jpg" width="560" height="280" alt="This week\'s cover">',
     '<p id="probe">Nothing in this message ran.</p>',
     '<p>On slow mornings, small gardens and the quiet web.</p>',
     '<p><a id="out" href="https://read.longread.example/essays">Read in your browser</a></p>',
+    '<p><a href="https://longread.example/unsubscribe?u=1">Unsubscribe</a></p>',
     '<img src="https://pixel.longread.example/open.gif" width="1" height="1" alt="">',
     '<img src="missing.png" alt="" onerror="document.getElementById(\'probe\').textContent=\'A handler ran.\'">',
     "<script>document.getElementById('probe').textContent='A script ran.';top.postMessage('script ran','*')</script>",
   ].join(''),
   sentAt: ago(40 * 60_000),
   unread: true,
-  headers: { listUnsubscribe: true, listId: true, precedence: 'bulk' },
+  headers: {
+    listUnsubscribe: '<mailto:leave@longread.example>, <https://longread.example/unsubscribe?u=1>',
+    listUnsubscribePost: 'List-Unsubscribe=One-Click',
+    listId: true,
+    precedence: 'bulk',
+  },
   bulk: true,
 }
 

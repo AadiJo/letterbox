@@ -12,12 +12,18 @@ chrono.workspace = true
 chrono-tz.workspace = true
 foldhash.workspace = true
 indexmap.workspace = true
+# The body pipeline's HTML parser and rewriter (see src/body/mod.rs for why this one).
+lol_html = "3.0.3"
+# The HTML standard's full table of character references, to read attribute values as a browser does.
+html-escape = "0.3.1"
 regex.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tokio-util.workspace = true
+# WHATWG URL parsing, as browsers do it, for the hosts of remote images and unsubscribe targets.
+url = "2.5.8"
 
 [lints]
 workspace = true

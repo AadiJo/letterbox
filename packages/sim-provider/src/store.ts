@@ -136,6 +136,13 @@ export const previewOf = (text: string): string =>
     .trim()
     .slice(0, 200)
 
+/** The List-Unsubscribe value a seed message carries: its own, a stock mailto target for `true`, or none. */
+const listUnsubscribeOf = (seed: SeedMessage): string => {
+  const given = seed.headers?.listUnsubscribe ?? false
+  if (typeof given === 'string') return given
+  return given ? '<mailto:unsubscribe@list.example>' : ''
+}
+
 /** The facts a seed message reports. `references` and `bulk` come from the caller, which knows the dialect. */
 export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean | null): RemoteFacts => ({
   messageId: bareMessageId(seed),
@@ -149,10 +156,12 @@ export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean |
   size: Buffer.byteLength(seed.text) + Buffer.byteLength(seed.html ?? ''),
   hasAttachments: attachmentsOf(seed).length > 0,
   headers: {
-    listUnsubscribe: seed.headers?.listUnsubscribe ?? false,
+    listUnsubscribe: listUnsubscribeOf(seed) !== '',
     listId: seed.headers?.listId ?? false,
     precedence: seed.headers?.precedence ?? '',
     autoSubmitted: seed.headers?.autoSubmitted ?? '',
+    ...(listUnsubscribeOf(seed) !== '' && { listUnsubscribeValue: listUnsubscribeOf(seed) }),
+    ...(seed.headers?.listUnsubscribePost !== undefined && { listUnsubscribePost: seed.headers.listUnsubscribePost }),
   },
   bulk,
 })

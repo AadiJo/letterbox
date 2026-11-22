@@ -86,6 +86,12 @@ const summaryFields = {
   pending: 'boolean',
 } as const
 
+const unsubscribe = type({
+  kind: "'header'",
+  mailto: 'string | null',
+  web: type({ url: 'string', oneClick: 'boolean' }).or('null'),
+}).or({ kind: "'link'", url: 'string' })
+
 const sender = type({
   id: 'string',
   accountId: 'string',
@@ -97,9 +103,22 @@ const sender = type({
   subject: 'string',
   lastMessageAt: 'string',
   days: type({ messages: 'number', unread: 'number' }).array(),
+  unsubscribe: unsubscribe.or('null'),
 })
 
-const body = type({ state: "'ready'", text: 'string', html: 'string | null', hasRemoteContent: 'boolean' })
+const images = type({
+  shown: "'blocked' | 'message' | 'sender'",
+  remote: 'string[]',
+  trackers: type({ host: 'string', reason: "'known-host' | 'tiny' | 'hidden' | 'beacon'" }).array(),
+})
+
+const body = type({
+  state: "'ready'",
+  text: 'string',
+  html: 'string | null',
+  images,
+  quote: { text: 'number | null', html: 'number | null' },
+})
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })
 
@@ -115,6 +134,7 @@ const message = type({
   sentAt: 'string',
   unread: 'boolean',
   body,
+  unsubscribe: unsubscribe.or('null'),
   attachments: type({ blobId: 'string', name: 'string', mime: 'string', size: 'number', inline: 'boolean' }).array(),
   delivery: delivery.or('null'),
 })
