@@ -5,7 +5,8 @@ import type { Delivery, Message, ThreadDetail } from '@letterbox/protocol'
 import { CircleAlert, Clock, TriangleAlert } from 'lucide-react'
 import { useEffect } from 'react'
 import { useSecondsUntil } from './clock.ts'
-import { adopt, editAndSendAgain, REFUSALS } from './sending.ts'
+import { REFUSALS } from './refusals.ts'
+import { adopt, editAndSendAgain } from './sending.ts'
 
 type MarkProps = { thread: ThreadDetail; delivery: Exclude<Delivery, { state: 'failed' }> }
 

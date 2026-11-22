@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    Account, AccountId, Mailbox, MailboxId, Recipient, SenderPage, SignInOption, ThreadDetail, ThreadFilter, ThreadId,
-    ThreadSummary, present,
+    Account, AccountId, ChangeHolder, ChangeId, Mailbox, MailboxId, Recipient, SenderPage, SignInOption, ThreadDetail,
+    ThreadFilter, ThreadId, ThreadSummary, present,
 };
 
 /// Every live view. Add a variant here and a matching one to `Update`.
@@ -52,6 +52,9 @@ pub enum Query {
         prefix: String,
         limit: NonZeroU64,
     },
+    Change {
+        change: ChangeId,
+    },
 }
 
 /// The answer to a query. A threads update replaces the whole window.
@@ -65,6 +68,7 @@ pub enum Update {
     Thread { data: Option<ThreadDetail> },
     Senders { data: SenderPage },
     Recipients { data: Vec<Recipient> },
+    Change { data: ChangeHolder },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

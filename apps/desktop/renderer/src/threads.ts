@@ -143,16 +143,6 @@ export function watchThreadDetail(id: ThreadId, listener: (detail: ThreadDetail 
 }
 
 /**
- * The conversations whose subject, preview or people contain `text`, asked once. For finding
- * where a message went when the core merged its conversation into another (sending.ts).
- */
-export async function threadsMatching(text: string) {
-  const page = await client.query({ view: 'threads', filter: { text }, offset: 0, limit: 50 })
-  remember(page)
-  return page.threads.map((thread) => thread.id)
-}
-
-/**
  * The first `limit` conversations of a list, asked once and remembered as rows, for one
  * command on all of them: Updates acts on every conversation of a sender this way.
  */

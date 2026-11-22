@@ -1,11 +1,26 @@
 // What every list screen shares: the list pane's head and sync strip, the reader pane, and
 // the selection with its keyboard. PeopleScreen, LetGoScreen and MailScreen fill in the list.
-// UpdatesScreen lists senders, not conversations, so it takes only the list pane.
+// UpdatesScreen lists senders, not conversations, so it takes only the list pane. The compose
+// page (ComposePage.tsx) takes the reader pane while it is up. Meanwhile the list shows the
+// conversation a forward comes from selected, and for a new message, none.
 
 import type { Account, ChangeId, Command, MailboxId, ThreadId, ThreadSummary } from '@letterbox/protocol'
-import { PanelLeft } from 'lucide-react'
+import { PanelLeft, SquarePen } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
-import { type Action, actionForKey, canReply, type Mail, markRead, REPLY_KEY, run } from './actions.ts'
+import {
+  type Action,
+  actionForKey,
+  canReply,
+  COMPOSE_KEY,
+  FORWARD_KEY,
+  type Mail,
+  markRead,
+  REPLY_KEY,
+  run,
+} from './actions.ts'
+import { ComposePage } from './ComposePage.tsx'
+import { forwardable } from './Composer.tsx'
+import { COMPOSE, composeForward, composeNew, showPage, useComposer, usePageUp } from './drafts.ts'
 import { lostReason } from './core.ts'
 import { LostCore } from './LostCore.tsx'
 import { leave, release, shake } from './motion.ts'
@@ -13,6 +28,7 @@ import { Reader } from './Reader.tsx'
 import { threadDetail, threadRecord, useThread } from './threads.ts'
 import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
+import { Tooltip } from './Tooltip.tsx'
 import { startReply, undoSend } from './sending.ts'
 import { hasNotice, type Names, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
 
@@ -32,8 +48,10 @@ export const typing = (target: EventTarget | null) =>
 
 /**
  * The selection in a list whose rows, top to bottom, are `order`. Arrow keys and j/k move,
- * actions.ts's keys act on the open conversation, r opens a reply (Shift+R, Reply all), and z
- * undoes what the toast shows.
+ * actions.ts's keys act on the open conversation, r opens a reply (Shift+R, Reply all), f
+ * forwards, c starts a new message, and z undoes what the toast shows. While the compose page
+ * is up, the row a forward comes from shows selected, or none for a new message, and only
+ * moving, which puts the page away, and z act.
  * `leaves` says whether a command takes a conversation out of this list. When it does, the
  * row slides out and the next one opens in its place. `say` shows what an accepted action
  * did in the toast: undo.ts's `notify`, unless the screen names it its own way.
@@ -46,6 +64,9 @@ export function useSelection(
     notify(action, thread.id, change),
 ) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
+  const page = usePageUp()
+  // The conversation the page's forward comes from. A new message comes from none.
+  const source = useComposer(COMPOSE)?.reply.forward?.threadId ?? null
   // Rises on every selection, on every z and when the screen goes, so an action that resumes
   // after a wait can tell whether anything moved on meanwhile.
   const generation = useRef(0)
@@ -63,6 +84,8 @@ export function useSelection(
 
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
+    // Opening a conversation puts the compose page away. Its draft stays.
+    showPage(false)
     generation.current += 1
     setSelected(id)
     const thread = id === null ? undefined : threadRecord(id)
@@ -105,6 +128,25 @@ export function useSelection(
     if (thread && detail && canReply(thread, mail)) startReply(detail, all)
   }
 
+  /** Forwards the open conversation's newest message on the compose page. */
+  const forward = () => {
+    if (lostReason() !== null) return
+    const thread = selected ? threadRecord(selected) : undefined
+    const detail = selected ? threadDetail(selected) : undefined
+    const original = detail && forwardable(detail)
+    if (thread && detail && original && canReply(thread, mail)) composeForward(detail, original)
+  }
+
+  /** A new message on the compose page, from the open conversation's account, or else the first that can send. */
+  const compose = () => {
+    if (lostReason() !== null) return
+    const open = selected ? threadRecord(selected) : undefined
+    const account =
+      (open && canReply(open, mail) && open.accountId) ||
+      mail.accounts.find((candidate) => candidate.can.send && candidate.can.modify)?.id
+    if (account) composeNew(account)
+  }
+
   /**
    * Undoes what the toast shows: the last action's notice, or else the reply in its undo
    * window. Once the core accepts, its conversation is back and opens again. z counts as
@@ -129,13 +171,21 @@ export function useSelection(
       event.preventDefault()
       return
     }
-    if (event.key.toLowerCase() === REPLY_KEY) {
-      reply(event.shiftKey)
+    if (event.key === UNDO_KEY) {
+      void undoLast()
       event.preventDefault()
       return
     }
-    if (event.key === UNDO_KEY) {
-      void undoLast()
+    // The conversation is out of view while the page is up, so nothing else acts on it.
+    if (page) return
+    if (event.key === COMPOSE_KEY || event.key === FORWARD_KEY) {
+      if (event.key === COMPOSE_KEY) compose()
+      else forward()
+      event.preventDefault()
+      return
+    }
+    if (event.key.toLowerCase() === REPLY_KEY) {
+      reply(event.shiftKey)
       event.preventDefault()
       return
     }
@@ -150,7 +200,7 @@ export function useSelection(
     return () => window.removeEventListener('keydown', listener)
   }, [])
 
-  return { selected, select, act, reply, undo: undoLast }
+  return { selected: page ? source : selected, select, act, reply, compose, undo: undoLast }
 }
 
 /** How a refusal to undo names a conversation's provider and a mailbox (undo.ts). */
@@ -172,9 +222,11 @@ type ListPaneProps = {
   accounts: readonly Account[]
   /** The scrolling list. */
   children: ReactNode
+  /** A control at the head's end, such as New message. */
+  action?: ReactNode
 }
 
-type ScreenProps = ListPaneProps & {
+type ScreenProps = Omit<ListPaneProps, 'action'> & {
   selection: ReturnType<typeof useSelection>
   /** Let go?: Let go takes Done's place in the toolbar, and the reader says how long the turn waited. */
   letGo?: boolean
@@ -187,28 +239,57 @@ type ScreenProps = ListPaneProps & {
 export function Screen({ selection, letGo = false, ...list }: ScreenProps) {
   const { chrome } = list
   const thread = useThread(selection.selected)
+  const draft = useComposer(COMPOSE)
+  const page = usePageUp() && draft !== undefined && draft.state !== 'collapsed' ? draft : null
   return (
     <>
-      <ListPane {...list} />
+      <ListPane
+        {...list}
+        action={
+          <Tooltip label="New message" shortcut={COMPOSE_KEY}>
+            {(describedBy) => (
+              <button
+                type="button"
+                aria-label="New message"
+                aria-describedby={describedBy}
+                aria-keyshortcuts={COMPOSE_KEY}
+                aria-pressed={page !== null}
+                data-field="compose"
+                onClick={selection.compose}
+                // Lit while the compose page is up.
+                className={`inline-flex size-[30px] flex-none items-center justify-center rounded-lg hover:bg-hover hover:text-fg ${page ? 'bg-hover text-fg' : 'text-muted'}`}
+              >
+                <SquarePen className="size-4" strokeWidth={1.75} aria-hidden />
+              </button>
+            )}
+          </Tooltip>
+        }
+      />
       <section aria-label="Reader" className="relative flex min-w-0 flex-1 flex-col bg-reader">
         {/* First in tree order and shown last: LostCore says why. */}
         <LostCore />
-        <Toolbar
-          thread={thread}
-          mail={chrome.mail}
-          onAct={selection.act}
-          search={chrome.search}
-          lead={letGo ? 'let-go' : 'done'}
-        />
-        <Reader id={selection.selected} mail={chrome.mail} waited={letGo} />
+        {page ? (
+          <ComposePage composer={page} search={chrome.search} />
+        ) : (
+          <>
+            <Toolbar
+              thread={thread}
+              mail={chrome.mail}
+              onAct={selection.act}
+              search={chrome.search}
+              lead={letGo ? 'let-go' : 'done'}
+            />
+            <Reader id={selection.selected} mail={chrome.mail} waited={letGo} />
+          </>
+        )}
         <Toast onUndo={selection.undo} />
       </section>
     </>
   )
 }
 
-/** The list pane: its head, the sync strip, then the list. */
-export function ListPane({ title, subtitle, chrome, accounts, children }: ListPaneProps) {
+/** The list pane: its head, with `action` at its end, the sync strip, then the list. */
+export function ListPane({ title, subtitle, chrome, accounts, children, action }: ListPaneProps) {
   return (
     <section
       aria-label={title}
@@ -239,6 +320,7 @@ export function ListPane({ title, subtitle, chrome, accounts, children }: ListPa
             )}
           </p>
         </div>
+        {action}
       </header>
       <SyncStrip accounts={accounts} />
       {children}

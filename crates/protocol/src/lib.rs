@@ -25,6 +25,7 @@
 
 mod answer;
 mod command;
+mod holder;
 mod ids;
 mod lists;
 mod outcome;
@@ -34,6 +35,7 @@ mod subscribe;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use command::{Command, TurnChoice};
+pub use holder::ChangeHolder;
 pub use ids::{
     AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SenderId, SignInOptionId, SubscriptionId, ThreadId,
 };

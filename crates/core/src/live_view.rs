@@ -13,9 +13,12 @@ use std::collections::BTreeSet;
 use std::collections::btree_set::Range;
 
 use chrono::TimeDelta;
-use letterbox_protocol::{AccountId, Body, Query, Recipient, ThreadFilter, ThreadId, ThreadSummary, Time, Update};
+use letterbox_protocol::{
+    AccountId, Body, ChangeHolder, ChangeId, Query, Recipient, ThreadFilter, ThreadId, ThreadSummary, Time, Update,
+};
 
 use crate::clock::{iso, parse};
+use crate::effect::Effect;
 use crate::rows::{Refresh, Rows};
 use crate::senders::{Senders, zone_of};
 use crate::suggestions::People;
@@ -58,6 +61,23 @@ pub enum LiveView {
         /// The answer, ranked when it could have changed, and each person's key in `People`.
         shown: Vec<(String, Recipient)>,
     },
+    Change {
+        change: ChangeId,
+        /// The conversation that held the send's message at the last catch-up.
+        holder: Option<ThreadId>,
+    },
+}
+
+/// The conversation holding the message send `change` wrote, or None: two lookups, whatever
+/// the size of the mailbox.
+fn holder_of(world: &World, change: &ChangeId) -> Option<ThreadId> {
+    let Effect::Send(outbound) = &world.changes.get(change)?.effect else {
+        return None;
+    };
+    world
+        .messages
+        .get(&outbound.message_id)
+        .map(|record| record.thread_id.clone())
 }
 
 pub fn place(summary: &ThreadSummary) -> Place {
@@ -163,6 +183,10 @@ impl LiveView {
                 limit: limit.get(),
                 shown: people.suggest(account_id, prefix, limit.get(), meter),
             },
+            Query::Change { change } => LiveView::Change {
+                change: change.clone(),
+                holder: holder_of(world, change),
+            },
         }
     }
 
@@ -241,6 +265,13 @@ impl LiveView {
                 }
                 stale
             }
+            // A merge moves the message and an undo removes it. Looking again costs two lookups.
+            LiveView::Change { change, holder } => {
+                let now = holder_of(world, change);
+                let moved = now != *holder;
+                *holder = now;
+                moved
+            }
         }
     }
 
@@ -308,6 +339,11 @@ impl LiveView {
             },
             LiveView::Recipients { shown, .. } => Update::Recipients {
                 data: shown.iter().map(|(_, recipient)| recipient.clone()).collect(),
+            },
+            LiveView::Change { holder, .. } => Update::Change {
+                data: ChangeHolder {
+                    thread_id: holder.clone(),
+                },
             },
         }
     }

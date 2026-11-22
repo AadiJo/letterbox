@@ -37,12 +37,11 @@ use letterbox_protocol::{
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
-use crate::adapter::{
-    AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, RemoteAttachment, SendResult,
-};
+use crate::adapter::{AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, SendResult};
 use crate::clock::{iso, parse};
 use crate::draft::prepare;
 use crate::effect::Effect;
+use crate::forward::Forward;
 use crate::mime::{File, attach};
 use crate::reconcile::{remove_with_thread, thread_for};
 use crate::sync::PassResult;
@@ -68,20 +67,9 @@ pub struct Outbound {
     pub forward: Option<Forward>,
 }
 
-/// What a forward carries of its original beyond the text draft.rs wrote into it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Forward {
-    /// The message it forwards.
-    pub of: MessageId,
-    /// The original's attachments in the order its body lists them, so each one's place is
-    /// the index `Adapter::attachment` takes.
-    pub files: Vec<RemoteAttachment>,
-}
-
 /// What a forward's files come to when it is about to go.
 enum Contents {
-    /// Their content, in order. Empty for a send with no files.
+    /// The content of the files it carries, in order. Empty for a send with no files.
     Ready(Vec<Vec<u8>>),
     /// The original is a send of the user's that the provider does not hold yet. The forward
     /// stays due until it does.
@@ -357,7 +345,11 @@ impl Inner {
     /// The content of a forward's files, fetched from the provider's copy of the original.
     /// Empty for any other send. A failure here means nothing was sent.
     async fn contents(&self, linked: &Linked, outbound: &Outbound) -> Result<Contents, AdapterFailure> {
-        let Some(forward) = outbound.forward.as_ref().filter(|forward| !forward.files.is_empty()) else {
+        let Some(forward) = outbound
+            .forward
+            .as_ref()
+            .filter(|forward| forward.carried().next().is_some())
+        else {
             return Ok(Contents::Ready(Vec::new()));
         };
         let r#ref = {
@@ -375,7 +367,7 @@ impl Inner {
             }
         };
         let mut contents = Vec::with_capacity(forward.files.len());
-        for index in 0..forward.files.len() {
+        for (index, _) in forward.carried() {
             match linked.adapter.attachment(r#ref.clone(), index).await? {
                 AttachmentResult::Bytes(bytes) => contents.push(bytes),
                 AttachmentResult::Gone => return Ok(Contents::Gone),
@@ -404,10 +396,10 @@ impl Inner {
                 return Ok(());
             }
         };
-        let files = outbound.forward.iter().flat_map(|forward| &forward.files);
+        let files = outbound.forward.iter().flat_map(Forward::carried);
         let files: Vec<File<'_>> = files
             .zip(&contents)
-            .map(|(file, bytes)| File {
+            .map(|((_, file), bytes)| File {
                 name: &file.name,
                 mime: &file.mime,
                 inline: file.inline,
