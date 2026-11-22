@@ -11,8 +11,6 @@ letterbox-core.workspace = true
 # The default `v1` feature picks Keychain Services on macOS, Credential Manager on Windows,
 # and Secret Service over zbus (pure Rust) elsewhere on unix, so a Linux build needs no system library.
 keyring = "4.2"
-# Makes each store's id (src/lib.rs).
-getrandom = "0.3"
 
 # examples/keychain-round-trip.rs stops macOS from prompting while it checks a locked keychain.
 # The keyring crate already builds this one.

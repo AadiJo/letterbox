@@ -146,7 +146,7 @@ jobs:
   # above. Here each OS builds the two core programs and runs what does not need unix sockets:
   #   - a real round trip through the system keychain (Credential Manager, Keychain Services)
   #     with SystemKeychain, under a throwaway account named for this run: two stores apart,
-  #     an old entry moved, and on macOS a locked keychain, which must give errors, not a
+  #     an old entry left unread, and on macOS a locked keychain, which must give errors, not a
   #     panic (crates/keychain/examples/keychain-round-trip.rs);
   #   - the app host check: letterbox-core starts, answers hello, lists Gmail, and exits;
   #   - the Electron check: the shell on the sim core, over a named pipe on Windows, with each

@@ -2,6 +2,11 @@
 //! in a table named for its kind. The core holds all records in memory and
 //! writes every change through here in a transaction, so what is on disk is
 //! always a state the core was really in.
+//!
+//! Each store also has an id of its own, 32 random hex digits that SQLite makes the first
+//! time the store opens. It lives in the database, so a copy or a restore of the store keeps
+//! it, and two cores that open one store at once both read the one that was saved. The host
+//! names keychain entries with it (`store_id`, crates/keychain).
 
 use std::cell::Cell;
 use std::fmt;
@@ -69,6 +74,13 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+/// The id of the store in `data_path`, opening it first, so a new store gets its id here. The
+/// host reads it before `Core::new`, since the core reads the keychain while it opens.
+pub fn store_id(data_path: &Path) -> Result<String, StoreError> {
+    let store = Store::open(data_path)?;
+    Ok(store.db.query_row("select id from identity", [], |row| row.get(0))?)
+}
+
 pub struct Store {
     db: Connection,
     rev: Cell<Rev>,
@@ -88,7 +100,9 @@ impl Store {
         db.execute_batch(
             "pragma journal_mode = wal;
              pragma synchronous = normal;
-             create table if not exists meta (key text primary key, value integer not null) strict;",
+             create table if not exists meta (key text primary key, value integer not null) strict;
+             create table if not exists identity (one integer primary key check (one = 1), id text not null) strict;
+             insert into identity (one, id) values (1, lower(hex(randomblob(16)))) on conflict do nothing;",
         )?;
         for table in TABLES {
             db.execute_batch(&format!(

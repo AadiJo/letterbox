@@ -5,14 +5,15 @@
 //!   cargo run -p letterbox-keychain --example keychain-round-trip -- <account>
 //!   cargo run -p letterbox-keychain --example keychain-round-trip -- <account> --locked <keychain>
 //!
-//! The first form uses three throwaway stores, each a data folder in the temp folder, and
-//! checks in order:
+//! The first form uses three throwaway stores, each a data folder in the temp folder whose
+//! store id comes from `letterbox_core::store_id`, as the app host's does. Each new process
+//! opens the store again, so it reads the id the store saved. It checks in order:
 //!   - store A: a missing entry reads None, and deleting it is fine; a written session reads
 //!     back in a new process, as after a restart;
 //!   - store B, with the same account id: it reads None, then its own session, while A still
 //!     reads A's, each in a new process. Deleting A's leaves B's;
-//!   - store C: an entry from before store ids, named by the account id alone, reads back and
-//!     moves under C's name, so the old entry is gone and a new process still reads it.
+//!   - store C: an entry from before store ids, named by the account id alone, is not read,
+//!     and stays as it was. Then the check removes the entry it planted.
 //!
 //! `--locked` is for macOS, where CI has made the throwaway keychain at `<keychain>` the
 //! default. It writes a session, locks that keychain (`security lock-keychain <keychain>`),
@@ -81,12 +82,12 @@ fn main() -> ExitCode {
     let account = AccountId::minted(account.clone());
     let stores = std::env::temp_dir().join(account.as_str());
     match mode {
-        Mode::Read(store) => match SystemKeychain::for_store(&store).read(&account) {
+        Mode::Read(store) => match here(&store, &account) {
             Ok(session) => {
                 println!("{}", session.as_deref().unwrap_or("<none>"));
                 ExitCode::SUCCESS
             }
-            Err(error) => refuse(&format!("read failed: {}", error.0)),
+            Err(error) => refuse(&format!("read failed: {error}")),
         },
         Mode::RoundTrip => {
             let _ = std::fs::remove_dir_all(&stores);
@@ -151,9 +152,16 @@ fn done(result: Result<(), SecretsError>) -> Step {
         .map_err(|error| format!("failed: {}", error.0))
 }
 
+/// The keychain of the store in the data folder `store`, under the id that store holds.
+fn keychain(store: &Path) -> Result<SystemKeychain, String> {
+    letterbox_core::store_id(store)
+        .map(SystemKeychain::for_store)
+        .map_err(|error| error.to_string())
+}
+
 /// Reads the entry of `store` in this process.
 fn here(store: &Path, account: &AccountId) -> Result<Option<String>, String> {
-    SystemKeychain::for_store(store).read(account).map_err(|error| error.0)
+    keychain(store)?.read(account).map_err(|error| error.0)
 }
 
 /// Reads the entry of `store` in a new process of this program, as the app's core does after a restart.
@@ -177,14 +185,17 @@ fn old_entry(account: &AccountId) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, account.as_str()).map_err(|error| error.to_string())
 }
 
-/// Runs the steps in order. Each one runs only after the one before it has, which matters:
-/// store A reading a missing entry would move an old entry planted any earlier.
+/// Runs the steps in order. Each one runs only after the one before it has.
 fn round_trip(account: &AccountId, stores: &Path) -> Vec<(&'static str, Step)> {
     let (a, b, c) = (stores.join("a"), stores.join("b"), stores.join("c"));
-    let store_a = SystemKeychain::for_store(&a);
-    let store_b = SystemKeychain::for_store(&b);
-    let store_c = SystemKeychain::for_store(&c);
     let mut steps = Vec::new();
+    let (store_a, store_b) = match (keychain(&a), keychain(&b)) {
+        (Ok(store_a), Ok(store_b)) => (store_a, store_b),
+        (Err(error), _) | (_, Err(error)) => {
+            steps.push(("open stores A and B", Err(error)));
+            return steps;
+        }
+    };
     let mut step = |what: &'static str, saw: Step| steps.push((what, saw));
     step("A: a missing entry reads None", reads(here(&a, account), None));
     step("A: deleting a missing entry is fine", done(store_a.delete(account)));
@@ -218,22 +229,18 @@ fn round_trip(account: &AccountId, stores: &Path) -> Vec<(&'static str, Step)> {
         "plant an entry from before store ids",
         planted.map(|()| "done".to_owned()),
     );
-    step("C: reads the old entry", reads(here(&c, account), Some(FIRST)));
+    step(
+        "C: an entry named by the account id alone is not read",
+        reads(here(&c, account), None),
+    );
     let old_left = old_entry(account).and_then(|old| match old.get_password() {
         Ok(session) => Ok(Some(session)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error.to_string()),
     });
-    step("C: the old entry is gone, moved", reads(old_left, None));
-    step(
-        "C: a new process reads it under C's name",
-        reads(in_new_process(&c, account), Some(FIRST)),
-    );
-    step("C: delete it", done(store_c.delete(account)));
-    step(
-        "C: after the delete it reads None",
-        reads(in_new_process(&c, account), None),
-    );
+    step("C: the old entry stays as it was", reads(old_left, Some(FIRST)));
+    let removed = old_entry(account).and_then(|old| old.delete_credential().map_err(|error| error.to_string()));
+    step("remove the planted entry", removed.map(|()| "done".to_owned()));
     steps
 }
 
@@ -250,7 +257,10 @@ fn refused<T: std::fmt::Debug>(result: Result<T, SecretsError>) -> Step {
 /// unlock it. macOS only.
 #[cfg(target_os = "macos")]
 fn locked(account: &AccountId, store: &Path, keychain: &Path) -> Vec<(&'static str, Step)> {
-    let secrets = SystemKeychain::for_store(store);
+    let secrets = match keychain(store) {
+        Ok(secrets) => secrets,
+        Err(error) => return vec![("open the store", Err(error))],
+    };
     let mut steps = vec![("write a session", done(secrets.write(account, FIRST)))];
     let lock = Command::new("/usr/bin/security")
         .arg("lock-keychain")

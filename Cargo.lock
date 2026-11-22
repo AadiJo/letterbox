@@ -1084,7 +1084,6 @@ dependencies = [
 name = "letterbox-keychain"
 version = "0.0.0"
 dependencies = [
- "getrandom 0.3.4",
  "keyring",
  "letterbox-core",
  "letterbox-protocol",
