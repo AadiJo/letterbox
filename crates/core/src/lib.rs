@@ -180,7 +180,7 @@ impl Core {
             })
             .collect();
 
-        let catching_up = crate::notify::catching_up(&world);
+        let catching_up = crate::notify::CatchUp::starting(&world, options.env.now());
         let core = Core {
             inner: Rc::new(Inner {
                 store,
@@ -292,8 +292,8 @@ struct State {
     pushing: HashSet<ChangeId>,
     /// Undos that wait for a change a pass is carrying (see undo.rs).
     held_undos: Vec<crate::undo::HeldUndo>,
-    /// Accounts that started with a saved cursor and have not pulled since (see notify.rs).
-    catching_up: HashSet<AccountId>,
+    /// When the core started, and the accounts that started with a saved cursor and have not pulled since (see notify.rs).
+    catching_up: crate::notify::CatchUp,
     /// When the booked wake for a list that splits on age runs (see `book_wake` in subscriptions.rs).
     wake_at: Option<letterbox_protocol::Time>,
     /// The time the lists that split on age go by. Empty until one opens (see subscriptions.rs).

@@ -158,6 +158,26 @@ scenario(
   },
 )
 
+// core-sim starts its clock at 2026-01-01T00:00:00.000Z unless told otherwise (crates/sim-client/src/main.rs).
+scenario('a restart tells a reply sent after the start, in the same sync as the mail it catches up on', async (t) => {
+  const { core: first, box } = await start(t)
+  await first.stop()
+  box.deliver(fromAna('away', 'While you were away', '2025-12-05T09:00:00.000Z'))
+  // Sent after the restart below, as when the first change set comes once the network is back.
+  box.deliver(fromBen('just-now', 'Are you free now?', '2026-01-01T01:00:00.000Z'))
+  const core = t.startCore()
+  await core.hello()
+  await sync(core)
+  t.equal((await thread(core, 'While you were away')).turn.holder, 'mine', 'the catch-up mail is my turn')
+  const told = await core.take('your-turn')
+  t.equal(
+    told.threadId,
+    (await thread(core, 'Are you free now?')).id,
+    'the first thing told is the reply sent after the start, not the catch-up mail',
+  )
+  await sentinel(t, { core, box }, 'nothing else was told')
+})
+
 // Done holds until the conversation moves (turns.rs): their reply makes it my turn again, which is told.
 scenario('a reply to a conversation marked done makes it my turn again, and is told', async (t) => {
   const signedIn = await start(t)

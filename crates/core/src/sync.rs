@@ -114,9 +114,7 @@ impl Inner {
             if let Some(arrived) = arrived {
                 self.announce(arrived, rev);
             }
-            if let Some(arrivals) = arrivals {
-                self.tell_your_turns(account_id, arrivals);
-            }
+            self.tell_your_turns(account_id, arrivals);
             return Ok(Pulled::Done);
         }
         if !self.still_current(account_id, linked) {
