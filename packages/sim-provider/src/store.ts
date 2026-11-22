@@ -160,8 +160,9 @@ export const bodyOf = (seed: SeedMessage): RemoteBody => ({
   attachments: attachmentsOf(seed).map(({ name, mime, size }) => ({ name, mime, size, inline: false })),
 })
 
-/** What a seed attachment holds: its name and a line end, over and over, to its size. */
-export const placeholderContent = ({ name, size }: SeedAttachment): Buffer => Buffer.alloc(size, `${name}\n`)
+/** What a seed attachment holds: its name and a line end, over and over, to its size, or to `served` when it has one. */
+export const placeholderContent = ({ name, size, served }: SeedAttachment): Buffer =>
+  Buffer.alloc(served ?? size, `${name}\n`)
 
 /** The content of each of a seed message's attachments, as `bodyOf` lists them. */
 export const contentsOf = (seed: SeedMessage): Buffer[] => attachmentsOf(seed).map(placeholderContent)
