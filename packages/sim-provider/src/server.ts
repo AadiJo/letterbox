@@ -1,11 +1,13 @@
 // The sim provider's server. It runs inside the test process, owns every
-// mailbox's ground truth, and answers adapters over a unix socket: the core's in
-// crates/sim-client, and the self-check's in client.ts.
+// mailbox's ground truth, and answers adapters over a local socket (socket.ts): a unix
+// socket, or a named pipe on Windows. The adapters are the core's in crates/sim-client,
+// and the self-check's in client.ts.
 
 import { rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import type { Socket } from 'node:net'
 import type { AnswerDamage, SimProvider, StartSimProvider } from './contract.ts'
+import { isPipe } from './socket.ts'
 import { createMailboxEntry } from './mailbox.ts'
 import type { MailboxEntry } from './mailbox.ts'
 import { encode, failedCall, isRequest, lineReader } from './wire.ts'
@@ -37,7 +39,7 @@ const collectOpaque = (value: unknown, into: Set<string>, opaque = false): void 
 const signInTo = (entry: MailboxEntry): SignInResult =>
   entry.isOffline() ? { ok: false, failure: 'offline' } : { ok: true, session: entry.session }
 
-/** Starts the provider on a new socket at `socketPath`. Rejects if the socket cannot be made. */
+/** Starts the provider on a new socket at `socketPath` (see socket.ts). Rejects if the socket cannot be made. */
 export const startSimProvider: StartSimProvider = (socketPath) => {
   const mailboxes = new Map<string, MailboxEntry>()
   const sockets = new Set<Socket>()
@@ -144,7 +146,7 @@ export const startSimProvider: StartSimProvider = (socketPath) => {
       closing ??= new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy()
         server.close(() => {
-          rmSync(socketPath, { force: true })
+          if (!isPipe(socketPath)) rmSync(socketPath, { force: true })
           resolve()
         })
       })

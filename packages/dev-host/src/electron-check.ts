@@ -2,11 +2,12 @@
 //
 // Builds the shell and a renderer, signs the people-first seed in at the sim provider, and
 // launches the app with Playwright's Electron driver. Main starts core-sim itself, as it
-// starts letterbox-core in the app. Seven runs, each a fresh app over the same store:
+// starts letterbox-core in the app. Nine runs, each a fresh app over the same store but oauth's:
 //   built     the built renderer on app://. The first row paints, the core's messages go
 //             over the MessagePort and nothing opens a WebSocket, the page runs in the OS
 //             sandbox with no switch turning it off, and its policy blocks inline script.
-//             Quitting lets the idle core finish.
+//             Quitting lets the idle core finish. How the sandbox is proven depends on the
+//             OS: see sandboxGaps in electron-app.ts.
 //   busy      the Vite renderer, as `pnpm dev:desktop` runs it. Two reloads while main stops
 //             a busy core leave the newest page with a live core of its own. Then the app
 //             quits while its core waits on the provider: main waits STOP_MS, then kills it.
@@ -17,10 +18,15 @@
 //             dialogs and its OS open call stubbed (electron-attachments.ts).
 //   notify    the Vite renderer, as new mail syncs in, with main's notifications and badge
 //             stubbed (electron-notify.ts).
+//   oauth     the dev Gmail launch's sign-in against the fake Gmail: the page starts OAuth,
+//             main opens the consent page, and a restart resumes (electron-oauth.ts). Not on Windows.
 //   gmail     real mode with no client file, and with one that does not exist. Main exits
-//             with 1 and says what to set, before any window or core.
+//             with 1 and says what to set, before any window or core. Linux only (see gmailRun).
 // It also checks that the dev host refuses a --state that would empty the real core's store.
 // Every core main started must be gone once its app has quit.
+//
+// It runs on Linux, macOS and Windows (CI runs all three, .github/workflows/check.yml). On
+// Windows the sim provider is a named pipe, and a killed core exits with code 1, not a signal.
 //
 // Writes electron.json (the checks and the cold start, from launch to the first painted
 // row), screenshots, a Playwright trace per app run (electron-app.ts) and the shell's log to
@@ -29,12 +35,14 @@
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/build'
 import { STOP_MS } from '@letterbox/desktop-shell/core'
 import { exited, killChildrenNow, logChildrenTo, startChild, stopChildren } from './children.ts'
 import { attachmentsRun } from './electron-attachments.ts'
 import { notifyRun } from './electron-notify.ts'
+import { oauthRun } from './electron-oauth.ts'
 import {
   ARTIFACTS,
   CheckFailure,
@@ -199,12 +207,14 @@ const crashRun = (renderer: string) =>
     const [pid] = corePids(run.lines())
     if (pid === undefined) throw new Error('main logged no core PID')
     process.kill(pid, 'SIGKILL')
+    // Windows has no signals: the kill ends the core with exit code 1.
+    const how = process.platform === 'win32' ? 'with code 1' : 'on SIGKILL'
     const alert = run.page.getByRole('alert')
     await alert.waitFor({ timeout: WAIT_MS })
     // The strip says it plainly. Main's own words, with the signal, stay in its tooltip.
     const reason = alert.locator('[data-field="lost-reason"]')
     equal(
-      [await reason.textContent(), (await reason.getAttribute('title'))?.startsWith('the core exited on SIGKILL')],
+      [await reason.textContent(), (await reason.getAttribute('title'))?.startsWith(`the core exited ${how}`)],
       ['Lost the core: the core exited.', true],
       "crash: the page shows that the core exited, with main's reason in the tooltip",
     )
@@ -221,13 +231,23 @@ const crashRun = (renderer: string) =>
 /**
  * Builds the renderer for app://, with ages measured from the seed's time. It runs in a
  * process of its own: a build sets NODE_ENV to production for the process it runs in, and
- * the busy run's dev server must stay in development.
+ * the busy run's dev server must stay in development. Vite's own script runs on this Node,
+ * since the shim in node_modules/.bin is a shell script, which Windows cannot start.
  */
 async function buildRenderer(outDir: string) {
   const folder = join(root, 'apps/desktop/renderer')
   const env = { ...process.env, VITE_LETTERBOX_NOW: seed.now }
-  const args = ['build', '--outDir', outDir, '--emptyOutDir', '--logLevel', 'warn']
-  const vite = startChild(join(folder, 'node_modules/.bin/vite'), args, folder, env)
+  const vitePackage = createRequire(join(folder, 'package.json')).resolve('vite/package.json')
+  const args = [
+    join(dirname(vitePackage), 'bin/vite.js'),
+    'build',
+    '--outDir',
+    outDir,
+    '--emptyOutDir',
+    '--logLevel',
+    'warn',
+  ]
+  const vite = startChild(process.execPath, args, folder, env)
   let output = ''
   for (const stream of [vite.stdout, vite.stderr])
     stream.on('data', (chunk: Buffer) => void (output += chunk.toString()))
@@ -324,8 +344,13 @@ function stateRun() {
   }
 }
 
-/** Real mode without a usable client file: main exits with 1 and says what to set, before any core. */
+/**
+ * Real mode without a usable client file: main exits with 1 and says what to set, before any
+ * core. Linux only: on macOS and Windows main shows the problems in a dialog first, which
+ * waits for a click no check can give.
+ */
 function gmailRun(renderer: string) {
+  if (process.platform !== 'linux') return console.log(`skip gmail: main shows a dialog on ${process.platform}`)
   const cases = [
     { client: undefined, says: 'LETTERBOX_GMAIL_CLIENT is not set' },
     { client: join(STATE, 'no-such-client.json'), says: 'no-such-client.json, which does not exist' },
@@ -394,6 +419,7 @@ if (failure === null) {
   })
   await part(async () => sim && server && (await attachmentsRun(sim, server)))
   await part(async () => sim && server && (await notifyRun(sim, server)))
+  await part(async () => server && (await oauthRun(server)))
   await part(() => crashRun(renderer))
   await part(redirectRun)
   await part(insecureRun)

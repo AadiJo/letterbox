@@ -4,7 +4,8 @@
 # `pnpm check`, the same command a person runs locally, split into parallel jobs: the
 # `checks` job runs everything but the break test, and the `breaks` jobs share out the break
 # test, which alone takes most of the time. The `changes` job skips the break test for a change
-# that cannot alter its result. The `check` job passes only when they all pass.
+# that cannot alter its result. The `desktop` jobs build and run the app on Windows and macOS.
+# The `check` job passes only when they all pass.
 # The runner's preinstalled Rust toolchain builds the core. The pull request title has its own
 # workflow, title.yml.
 
@@ -141,10 +142,91 @@ jobs:
 
       - run: pnpm scenarios:selftest --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
+  # The desktop app on Windows and macOS, where the owner runs it. Linux runs the full check
+  # above. Here each OS builds the two core programs and runs what does not need unix sockets:
+  #   - a real round trip through the system keychain (Credential Manager, Keychain Services)
+  #     with SystemKeychain, under a throwaway account named for this run: two stores apart,
+  #     an old entry left unread, and on macOS a locked keychain, which must give errors, not a
+  #     panic (crates/keychain/examples/keychain-round-trip.rs);
+  #   - the app host check: letterbox-core starts, answers hello, lists Gmail, and exits;
+  #   - the Electron check: the shell on the sim core, over a named pipe on Windows, with each
+  #     run but the gmail one, whose error dialog waits for a click (electron-check.ts).
+  # The scenarios and the break test sign in to the fake Gmail over unix sockets, and the UI
+  # check and the lints do not depend on the OS, so they stay on Linux.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Unique to this run and OS, so no two runs share a keychain entry.
+      KEYCHAIN_ACCOUNT: letterbox-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop
+
+      - run: pnpm install --frozen-lockfile
+
+      # Both programs in one command. The keychain step's `cargo run` builds its example.
+      - run: cargo build --bin core-sim --bin letterbox-core
+
+      # Credential Manager of the runner's user.
+      - name: keychain round trip
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT"
+
+      # Both macOS cases in one throwaway keychain, made, unlocked and made the default here,
+      # since the runner's login keychain may be locked. The trap puts the default back and
+      # removes the keychain however the step ends, and is set before the default changes.
+      # The locked case turns keychain prompts off first, standing in for a person pressing
+      # Cancel, so a locked read or write must fail at once. It gives up after 60 s and names
+      # the call that still waits. The step's timeout is only a guard behind that.
+      - name: keychain round trip and locked keychain
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: |
+          keychain="$RUNNER_TEMP/letterbox-ci.keychain-db"
+          login=$(security default-keychain -d user | xargs)
+          security create-keychain -p letterbox-ci "$keychain"
+          trap 'security default-keychain -d user -s "$login"; security delete-keychain "$keychain"' EXIT
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p letterbox-ci "$keychain"
+          security default-keychain -d user -s "$keychain"
+          cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT"
+          cargo run --quiet --package letterbox-keychain --example keychain-round-trip -- "$KEYCHAIN_ACCOUNT-locked" --locked "$keychain"
+
+      - run: pnpm check:app-host
+
+      - run: pnpm check:electron
+
+      # The Electron check's screenshots, traces and logs, and the app host transcript.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: artifacts-${{ matrix.os }}
+          path: artifacts
+          if-no-files-found: warn
+
   # The status the main branch's ruleset requires. It passes only when every job above passed,
   # and the break test either passed or was skipped because `changes` said it could not fail.
   check:
-    needs: [changes, checks, breaks]
+    needs: [changes, checks, breaks, desktop]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -153,10 +235,12 @@ jobs:
           NEEDS_BREAKS: ${{ needs.changes.outputs.breaks }}
           CHECKS: ${{ needs.checks.result }}
           BREAKS: ${{ needs.breaks.result }}
+          DESKTOP: ${{ needs.desktop.result }}
         run: |
-          echo "changes: $CHANGES (break test needed: $NEEDS_BREAKS), checks: $CHECKS, breaks: $BREAKS"
+          echo "changes: $CHANGES (break test needed: $NEEDS_BREAKS), checks: $CHECKS, breaks: $BREAKS, desktop: $DESKTOP"
           # One test per line: under `bash -e`, a failing test that is not the last of an `&&`
           # list does not stop the script, so a later line could pass the gate.
           test "$CHANGES" = success
           test "$CHECKS" = success
+          test "$DESKTOP" = success
           if [ "$NEEDS_BREAKS" = true ]; then test "$BREAKS" = success; else test "$BREAKS" = skipped; fi

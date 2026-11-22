@@ -1087,6 +1087,7 @@ dependencies = [
  "keyring",
  "letterbox-core",
  "letterbox-protocol",
+ "security-framework",
 ]
 
 [[package]]

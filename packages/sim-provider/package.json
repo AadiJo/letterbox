@@ -5,6 +5,7 @@
   "exports": {
     "./contract": "./src/contract.ts",
     "./server": "./src/server.ts",
+    "./socket": "./src/socket.ts",
     "./gmail": "./src/gmail/server.ts",
     "./seeds": "./src/seeds.ts",
     "./sent": "./src/sent.ts",

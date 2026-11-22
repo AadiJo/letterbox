@@ -62,7 +62,10 @@ export async function stopChildren(graceMs = 10_000) {
   await Promise.all([...running.values()].map((child) => stopChild(child, graceMs)))
 }
 
-/** Sends SIGTERM to one child, if it still runs, and waits for it to exit. SIGKILL after `graceMs`. */
+/**
+ * Sends SIGTERM to one child, if it still runs, and waits for it to exit. SIGKILL after `graceMs`.
+ * Windows has no signals, so there Node ends the child at once, with exit code 1.
+ */
 export async function stopChild(child: Child, graceMs = 10_000) {
   const { pid } = child
   if (pid === undefined || !running.has(pid)) return
