@@ -24,11 +24,13 @@
 //!      `response`. A client that has the answer has already seen the effects.
 
 mod answer;
+mod attachment;
 mod command;
 mod holder;
 mod ids;
 mod lists;
 mod outcome;
+mod position;
 mod recipients;
 mod send;
 mod sign_in;
@@ -36,6 +38,7 @@ mod subscribe;
 mod your_turn;
 
 pub use answer::{Answer, Empty, False, Never, True};
+pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
 pub use command::{Command, TurnChoice};
 pub use holder::ChangeHolder;
 pub use ids::{
@@ -43,6 +46,7 @@ pub use ids::{
 };
 pub use lists::{SenderDay, SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
+pub use position::Position;
 pub use recipients::Recipient;
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -279,6 +283,10 @@ pub enum Request {
     },
     /// A local URL the core serves for one attachment or inline image.
     Blob { blob_id: BlobId },
+    /// One attachment's bytes, fetched from the provider. They come in `chunk` messages, in order, then the response.
+    Attachment { blob_id: BlobId },
+    /// Where a conversation sits in the list `filter` gives right now (position.rs). Answers at once.
+    Position { filter: ThreadFilter, thread_id: ThreadId },
 }
 
 /// The answer to one request, by method.
@@ -289,27 +297,14 @@ pub enum Response {
     SignOut(Answer<Empty, Never>),
     SyncNow(Answer<Empty, SyncNowError>),
     Blob(Answer<BlobUrl, BlobError>),
+    Attachment(Answer<AttachmentFile, AttachmentError>),
+    Position(Answer<Position, Never>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum SyncNowError {
     Offline,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
-pub struct BlobUrl {
-    pub url: String,
-    pub mime: String,
-    pub size: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum BlobError {
-    Offline,
-    Gone,
-    NotSupported,
 }
 
 // ---------------------------------------------------------------- envelope
@@ -380,6 +375,11 @@ pub enum CoreMessage {
     OpenUrl {
         id: RequestId,
         url: String,
+    },
+    /// The next bytes of the file an `attachment` request asked for: at most 64 KiB, as base64.
+    Chunk {
+        id: RequestId,
+        data: String,
     },
     /// New mail from a person made it the user's turn in a conversation. See `YourTurn`.
     YourTurn(YourTurn),

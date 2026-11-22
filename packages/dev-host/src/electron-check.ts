@@ -13,6 +13,8 @@
 //   crash     the built renderer. The core is killed under the app, and the page says so.
 //   redirect  a dev URL that redirects to another origin. Main blocks it.
 //   insecure  a plain http page that is not loopback, so not a secure context, still gets the bridge.
+//   attachments  the Vite renderer saves and opens files through the bridge, with main's
+//             dialogs and its OS open call stubbed (electron-attachments.ts).
 //   notify    the Vite renderer, as new mail syncs in, with main's notifications and badge
 //             stubbed (electron-notify.ts).
 //   gmail     real mode with no client file, and with one that does not exist. Main exits
@@ -31,6 +33,7 @@ import { join } from 'node:path'
 import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/build'
 import { STOP_MS } from '@letterbox/desktop-shell/core'
 import { exited, killChildrenNow, logChildrenTo, startChild, stopChildren } from './children.ts'
+import { attachmentsRun } from './electron-attachments.ts'
 import { notifyRun } from './electron-notify.ts'
 import {
   ARTIFACTS,
@@ -88,7 +91,7 @@ const builtRun = (renderer: string) =>
         node: [typeof Reflect.get(window, 'require'), typeof Reflect.get(window, 'process')],
       })),
       {
-        bridge: ['connect', 'onOpenConversation', 'platform'],
+        bridge: ['connect', 'onOpenConversation', 'openAttachment', 'platform', 'saveAttachment'],
         platform: process.platform,
         node: ['undefined', 'undefined'],
       },
@@ -291,7 +294,7 @@ async function insecureRun() {
             secure: isSecureContext,
             bridge: Object.keys(window.letterbox ?? {}).toSorted(),
           })),
-          { secure: false, bridge: ['connect', 'onOpenConversation', 'platform'] },
+          { secure: false, bridge: ['connect', 'onOpenConversation', 'openAttachment', 'platform', 'saveAttachment'] },
           'insecure: on plain http that is not loopback, the page still gets the bridge',
         )
         checkQuit('insecure', run, await quit(run))
@@ -389,6 +392,7 @@ if (failure === null) {
     server = await startServer({ paths, port: 0, relay: false, sim: sim.sim })
     await busyRun(sim, server)
   })
+  await part(async () => sim && server && (await attachmentsRun(sim, server)))
   await part(async () => sim && server && (await notifyRun(sim, server)))
   await part(() => crashRun(renderer))
   await part(redirectRun)

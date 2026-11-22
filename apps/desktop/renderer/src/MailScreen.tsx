@@ -3,13 +3,13 @@
 // core's threads view, so a mailbox of any size costs the same. Spacers above and below the
 // rendered rows stand in for the rest, so a row that leaves can fold and the rows below follow.
 
-import type { Account, ThreadFilter } from '@letterbox/protocol'
-import { useEffect, useRef, useState } from 'react'
+import type { Account, ThreadFilter, ThreadId } from '@letterbox/protocol'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { leavesMailbox } from './actions.ts'
 import { useHeld } from './motion.ts'
 import { Row, ROW_HEIGHT } from './Row.tsx'
-import { type Chrome, Screen, useSelection } from './Screen.tsx'
-import { type Range, type Slice, useThreadWindow } from './threads.ts'
+import { type Chrome, type Opening, Screen, useSelection } from './Screen.tsx'
+import { positionOf, type Range, type Slice, useThreadWindow } from './threads.ts'
 
 /** Rows rendered above and below the screen. */
 export const OVERSCAN = 6
@@ -47,19 +47,29 @@ export function MailScreen({ title, filter, chrome, accounts }: Props) {
       selection={selection}
     >
       {/* A new filter starts a new list at the top. */}
-      <WindowedList key={JSON.stringify(filter)} label={title} slice={slice} show={show} selection={selection} />
+      <WindowedList
+        key={JSON.stringify(filter)}
+        label={title}
+        filter={filter}
+        opening={chrome.opening}
+        slice={slice}
+        show={show}
+        selection={selection}
+      />
     </Screen>
   )
 }
 
 type ListProps = {
   label: string
+  filter: ThreadFilter
+  opening: Opening
   slice: Slice | undefined
   show: (range: Range) => void
   selection: ReturnType<typeof useSelection>
 }
 
-function WindowedList({ label, slice, show, selection }: ListProps) {
+function WindowedList({ label, filter, opening, slice, show, selection }: ListProps) {
   const list = useRef<HTMLDivElement>(null)
   // The first row on screen, and how many rows fit.
   const [first, setFirst] = useState(0)
@@ -94,6 +104,30 @@ function WindowedList({ label, slice, show, selection }: ListProps) {
     else if (top + ROW_HEIGHT > element.scrollTop + element.clientHeight)
       element.scrollTop = top + ROW_HEIGHT - element.clientHeight
   }, [selectedIndex])
+
+  // A conversation App opened, as from a notification, may sit outside the window: once the
+  // list has its length, the core says where, and the list scrolls there, its row a third of
+  // the way down. Once per open, so a later scroll of the person's own stays where they put it,
+  // and not at all once the person has opened something else while the core answered.
+  const placed = useRef<Opening>(null)
+  const ready = slice !== undefined
+  // The list is keyed by its filter, so the filter is the same for as long as it is up.
+  const find = useEffectEvent((id: ThreadId) => positionOf(filter, id))
+  const stillOpen = useEffectEvent((id: ThreadId) => selection.selected === id)
+  useEffect(() => {
+    if (!opening || !ready || placed.current === opening) return
+    let current = true
+    void find(opening.id).then((offset) => {
+      const element = list.current
+      if (!current || !element) return
+      placed.current = opening
+      if (offset !== null && stillOpen(opening.id))
+        element.scrollTop = Math.max(0, offset * ROW_HEIGHT - element.clientHeight / 3)
+    })
+    return () => {
+      current = false
+    }
+  }, [opening, ready])
 
   const total = slice?.total ?? 0
   const start = Math.max(0, first - OVERSCAN)

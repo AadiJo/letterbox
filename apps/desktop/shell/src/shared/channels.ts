@@ -7,7 +7,9 @@
  *   core:connect       preload to main, once per page load: the page wants a core.
  *   core:port          main to preload: the page's end of a MessageChannelMain to that core,
  *                      for the document with that id only.
+ *   attachment:save    preload to main, invoked with a blob id. Answers an AttachmentOutcome.
+ *   attachment:open    the same, to open the file instead.
  *   conversation:open  main to preload, with a thread id: the person chose the notification
  *                      for that conversation, so the page should open it.
  */
-export type Channel = 'core:connect' | 'core:port' | 'conversation:open'
+export type Channel = 'core:connect' | 'core:port' | 'attachment:save' | 'attachment:open' | 'conversation:open'

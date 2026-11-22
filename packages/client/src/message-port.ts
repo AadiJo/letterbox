@@ -5,7 +5,7 @@
 //
 // Nothing here reads a global until it is called, so the module loads in Hermes too.
 
-import type { CoreMessage, ThreadId } from '@letterbox/protocol'
+import type { AttachmentError, BlobId, CoreMessage, ThreadId } from '@letterbox/protocol'
 import type { Listener, Transport } from './client.ts'
 
 /** What the host posts on the port: a line the core wrote, or why the core is gone. */
@@ -14,12 +14,26 @@ export type HostFrame = string | { ended: string }
 /** The window message that carries the port from the shell's preload to the page. */
 export const PORT_MESSAGE = 'letterbox:core-port'
 
+/**
+ * What saving or opening an attachment came to. Besides the core's own reasons:
+ *   cancelled  the person closed the save dialog
+ *   declined   the person chose not to open a file that can run code
+ *   failed     the file could not be written or opened, or the core went away
+ */
+export type AttachmentOutcome =
+  | { ok: true }
+  | { ok: false; reason: AttachmentError | 'cancelled' | 'declined' | 'failed' }
+
 /** What the desktop shell's preload puts on `window.letterbox`. A plain browser tab has none. */
 export type ShellBridge = {
   /** The OS as Node names it, such as 'darwin', for styling that differs by platform. */
   platform: string
   /** Asks the shell for a port to a core. The port arrives as a PORT_MESSAGE window message. */
   connect(): void
+  /** Asks where to save one attachment with the native dialog, and saves it there. */
+  saveAttachment(blobId: BlobId): Promise<AttachmentOutcome>
+  /** Opens one attachment with the app the OS picks for its type, after a warning for one that can run code. */
+  openAttachment(blobId: BlobId): Promise<AttachmentOutcome>
   /**
    * Calls `listener` with the conversation each time the person chooses a notification for it,
    * after the shell has brought the window forward. A conversation chosen before the page

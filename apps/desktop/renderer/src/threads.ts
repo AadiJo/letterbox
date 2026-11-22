@@ -152,6 +152,15 @@ export async function threadsOf(filter: ThreadFilter, limit: number) {
   return page.threads
 }
 
+/**
+ * Where conversation `id` sits in the list over `filter` right now, as the core counts it, or
+ * null when the list does not hold it or the core cannot say.
+ */
+export async function positionOf(filter: ThreadFilter, id: ThreadId): Promise<number | null> {
+  const answer = await client.request({ method: 'position', filter, threadId: id }).catch(() => null)
+  return answer?.ok ? answer.result.offset : null
+}
+
 // Pagers: one live list each, over one filter, showing one range at a time.
 
 type Open = { range: Range; subscription: Subscription<'threads'>; stop: () => void }

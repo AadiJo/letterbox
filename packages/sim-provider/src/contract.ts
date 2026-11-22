@@ -68,7 +68,13 @@ export type SeedMessage = {
 }
 
 /** One attachment a seed names, as a mail client would show it. */
-export type SeedAttachment = { name: string; mime: string; size: number }
+export type SeedAttachment = {
+  name: string
+  mime: string
+  size: number
+  /** How many bytes the provider serves, when it differs from the `size` it lists. Defaults to `size`. */
+  served?: number
+}
 
 export type Seed = {
   /** The address the mailbox belongs to. Also the sign-in username. */
@@ -189,6 +195,8 @@ export interface SimMailbox {
   calls(): CallCounts
   /** Every message the core sent, in the order the provider delivered them. */
   sent(): SentCopy[]
+  /** The content the provider holds for the attachment at `index` in a message's body. */
+  attachmentBytes(key: string, index: number): Buffer
 }
 
 /** A pending sim oauth attempt, named by the url the core was told to open. */

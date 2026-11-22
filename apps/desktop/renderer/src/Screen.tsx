@@ -39,7 +39,12 @@ export type Chrome = {
   onToggleSidebar: () => void
   /** The search field or, in a narrow window, its icon. */
   search: ReactNode
+  /** A conversation to open, as when the person chose its notification. */
+  opening: Opening
 }
+
+/** A conversation App asks the screen to open. A new object for each ask, so the same one can be asked again. */
+export type Opening = { id: ThreadId } | null
 
 /** True when focus is in a text field, where letters are typing, not shortcuts. */
 export const typing = (target: EventTarget | null) =>
@@ -82,6 +87,11 @@ export function useSelection(
     }
   }, [])
 
+  // The selection whose conversation opened before its summary was here, as one a
+  // notification opened from outside every list's window. It is marked read once, as the
+  // reader brings the summary, unless anything was selected meanwhile.
+  const unmarked = useRef<number | null>(null)
+
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
     // Opening a conversation puts the compose page away. Its draft stays.
@@ -90,7 +100,15 @@ export function useSelection(
     setSelected(id)
     const thread = id === null ? undefined : threadRecord(id)
     if (thread) markRead(thread, mail)
+    unmarked.current = id !== null && !thread ? generation.current : null
   }
+  const summary = useThread(selected)
+  const markLate = useEffectEvent(() => {
+    if (!summary || unmarked.current !== generation.current) return
+    unmarked.current = null
+    markRead(summary, mail)
+  })
+  useEffect(() => markLate(), [summary])
 
   /**
    * Runs `action` on the open conversation, unless the screen goes before the core answers.
@@ -239,6 +257,12 @@ type ScreenProps = Omit<ListPaneProps, 'action'> & {
 export function Screen({ selection, letGo = false, ...list }: ScreenProps) {
   const { chrome } = list
   const thread = useThread(selection.selected)
+  // Opens what App asks for once this screen is up, whether it just came or was already here.
+  const open = useEffectEvent((id: ThreadId) => selection.select(id))
+  const { opening } = chrome
+  useEffect(() => {
+    if (opening) open(opening.id)
+  }, [opening])
   const draft = useComposer(COMPOSE)
   const page = usePageUp() && draft !== undefined && draft.state !== 'collapsed' ? draft : null
   return (

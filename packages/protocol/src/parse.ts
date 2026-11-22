@@ -146,6 +146,10 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
   .or({ method: "'sync-now'", ok: 'false', error: "'offline'" })
   .or({ method: "'blob'", ok: 'true', result: { url: 'string', mime: 'string', size: 'number' } })
   .or({ method: "'blob'", ok: 'false', error: "'offline' | 'gone' | 'not-supported'" })
+  .or({ method: "'attachment'", ok: 'true', result: { name: 'string', mime: 'string', size: 'number' } })
+  .or({ method: "'attachment'", ok: 'false', error: "'offline' | 'gone' | 'too-large'" })
+  .or({ method: "'position'", ok: 'true', result: { offset: 'number | null' } })
+  .or({ method: "'position'", ok: 'false', error: 'never' })
 
 const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' })
   .or(type({ kind: "'update'", sub: 'string', rev: 'number' }).and(update))
@@ -154,6 +158,7 @@ const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' 
   .or({ kind: "'settled'", change: 'string', rev: 'number', result: type("'done' | 'undone'").or({ failed: refusal }) })
   .or(type({ kind: "'response'", id: 'string' }).and(response))
   .or({ kind: "'open-url'", id: 'string', url: 'string' })
+  .or({ kind: "'chunk'", id: 'string', data: 'string' })
   .or({ kind: "'your-turn'", threadId: 'string', from: person, subject: 'string' })
   .or({ kind: "'protocol-error'", reason: "'version-mismatch' | 'malformed'", detail: 'string' })
 

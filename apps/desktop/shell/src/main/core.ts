@@ -1,21 +1,36 @@
 // One core process and the page port it talks through. Main stays a byte pipe: each line
 // the core writes goes to the port as a string, and each string from the port goes to the
 // core's input as one line. No line is parsed, except one that may be an `open-url` or a
-// `your-turn`, which still go to the page, and the updates of main's own subscription.
+// `your-turn`, which still go to the page, the updates of main's own subscription, and the
+// answers to main's own requests.
 //
 // Main keeps the dock or taskbar badge itself: at start it subscribes to the conversations
-// that are the user's turn and unread, and not yet moved to Let go, under a random id the page cannot guess, and those
-// updates go to main only.
+// that are the user's turn and unread, and not yet moved to Let go, under a random id the
+// page cannot guess, and those updates go to main only.
+//
+// Main asks the core for an attachment's bytes itself (`attachment`), so the page never holds
+// a file or a path. Its requests carry random ids the page cannot guess, and their chunks and
+// response go to main only. A line with any other id goes to the page as before.
 //
 // Main logs one line per start, stop and exit, with the core's PID (log.ts), so a check can
 // confirm that no core outlives the app.
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { closeSync, openSync, writeSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import type { MessagePortMain } from 'electron'
 import type { HostFrame } from '@letterbox/client/message-port'
-import type { ClientMessage, CoreMessage, SubscriptionId, YourTurn } from '@letterbox/protocol'
+import type {
+  AttachmentError,
+  AttachmentFile,
+  BlobId,
+  ClientMessage,
+  CoreMessage,
+  RequestId,
+  SubscriptionId,
+  YourTurn,
+} from '@letterbox/protocol'
 import type { CoreCommand } from './config.ts'
 import { log } from './log.ts'
 
@@ -24,9 +39,23 @@ export const STOP_MS = 3000
 /** How many lines of the core's stderr an `ended` frame quotes. */
 const TAIL = 6
 
+/**
+ * What main's request for an attachment came to: the core's answer, `ended` when the core
+ * exited before it answered, or `unwritable` when the bytes could not be written to the file.
+ */
+export type Fetched =
+  | { ok: true; file: AttachmentFile }
+  | { ok: false; error: AttachmentError | 'ended' | 'unwritable' }
+
 export type CoreSession = {
   /** Connects the page's end of the pipe. Frames from before the page connected go first. */
   connect(port: MessagePortMain): void
+  /**
+   * Asks the core for one attachment and writes its bytes to a new file at `path`, readable by
+   * this user only, chunk by chunk as they arrive. Resolves once the core answers. The caller
+   * removes the file whatever the answer.
+   */
+  attachment(blobId: BlobId, path: string): Promise<Fetched>
   /** Closes the core's input, waits up to STOP_MS for it to finish its work, then kills it by PID. */
   stop(): Promise<void>
 }
@@ -55,6 +84,36 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
   let exited = false
   let toPage = 0
   let fromPage = 0
+  /**
+   * Main's own attachment requests by id: the file each one writes, how to finish it, and
+   * whether a write failed. A failed one stays until its response, so its later chunks are
+   * still main's and never reach the page.
+   */
+  const fetching = new Map<string, { fd: number; done: (fetched: Fetched) => void; failed: boolean }>()
+
+  /** Ends main's request `id` with `fetched`: closes its file and resolves its promise. */
+  const finish = (id: string, fetched: Fetched) => {
+    const request = fetching.get(id)
+    if (!request) return
+    fetching.delete(id)
+    closeSync(request.fd)
+    request.done(request.failed ? { ok: false, error: 'unwritable' } : fetched)
+  }
+
+  /** Takes a line that answers one of main's own requests, and says whether it did. */
+  const ownLine = (line: string): boolean => {
+    // serde writes `kind` first and `id` next, so only these lines can be main's.
+    if (!line.startsWith('{"kind":"chunk","id":"shell-') && !line.startsWith('{"kind":"response","id":"shell-'))
+      return false
+    // The core writes only protocol messages, which the scenarios check against the schema.
+    const message: CoreMessage = JSON.parse(line)
+    const request = (message.kind === 'chunk' || message.kind === 'response') && fetching.get(message.id)
+    if (!request) return false
+    if (message.kind === 'chunk') write(request, message.data)
+    else if (message.kind === 'response' && message.method === 'attachment')
+      finish(message.id, message.ok ? { ok: true, file: message.result } : { ok: false, error: message.error })
+    return true
+  }
 
   const post = (frame: HostFrame) => (port ? port.postMessage(frame) : unsent.push(frame))
 
@@ -67,6 +126,7 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
     child.on('close', (code, signal) => {
       log(`core ${pid ?? '-'} exited (${signal ?? `code ${code}`}); ${toPage} lines to the page, ${fromPage} from it`)
       exited = true
+      for (const id of fetching.keys()) finish(id, { ok: false, error: 'ended' })
       if (!stopping) post({ ended: endReason(code, signal, stderr) })
       resolve()
     })
@@ -77,6 +137,7 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
   const badgeLine = `{"kind":"update","sub":"shell-badge-`
   const badge = `shell-badge-${randomUUID()}` as SubscriptionId
   createInterface({ input: child.stdout }).on('line', (line) => {
+    if (ownLine(line)) return
     if (line.startsWith(badgeLine)) {
       const total = badgeIn(line, badge)
       if (total !== undefined) return hooks.badge(total)
@@ -116,6 +177,16 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- a MessagePort has no origin to name; only window.postMessage takes one
       for (const frame of unsent.splice(0)) given.postMessage(frame)
     },
+    attachment: (blobId, path) => {
+      if (exited || !child.stdin.writable) return Promise.resolve({ ok: false, error: 'ended' })
+      const id = `shell-${randomUUID()}` as RequestId
+      // 'wx' refuses a file that is already there, and 0o600 keeps it this user's, never executable.
+      const fd = openSync(path, 'wx', 0o600)
+      const asked = new Promise<Fetched>((done) => fetching.set(id, { fd, done, failed: false }))
+      const request: ClientMessage = { kind: 'request', id, request: { method: 'attachment', blobId } }
+      child.stdin.write(`${JSON.stringify(request)}\n`)
+      return asked
+    },
     stop: async () => {
       const gone = exited
       stopping = true
@@ -131,6 +202,17 @@ export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
       const how = gone ? 'had already exited' : killed ? `killed after ${STOP_MS} ms` : 'finished its work'
       log(`core ${pid ?? '-'} stopped: ${how}`)
     },
+  }
+}
+
+/** Writes one chunk of main's request to its file. A full disk fails the request, not main. */
+function write(request: { fd: number; failed: boolean }, data: string) {
+  if (request.failed) return
+  try {
+    writeSync(request.fd, Buffer.from(data, 'base64'))
+  } catch (error) {
+    log(`could not write an attachment: ${String(error)}`)
+    request.failed = true
   }
 }
 

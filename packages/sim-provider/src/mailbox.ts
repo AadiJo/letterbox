@@ -297,6 +297,11 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       })),
     calls: () => ({ ...counts }),
     sent: () => sentCopies.map((copy) => ({ ...copy, recipients: [...copy.recipients] })),
+    attachmentBytes: (key, index) => {
+      const content = messageOf(key).contents[index]
+      if (content === undefined) throw new Error(`sim provider: "${key}" has no attachment ${index}`)
+      return content
+    },
   }
 
   /**

@@ -1,8 +1,10 @@
 // The main window: the sidebar, then the list pane and the reader pane of the place it shows.
 // Below 1100 px wide the sidebar folds away behind a toggle in the list's head. With the core
-// lost, the reader pane says so at its foot (LostCore.tsx).
+// lost, the reader pane says so at its foot (LostCore.tsx). Choosing a notification opens its
+// conversation where it lives (chosen.ts).
 
 import { useState } from 'react'
+import { type Chosen, useChosen } from './chosen.ts'
 import { useView } from './core.ts'
 import { MailboxesProvider } from './Label.tsx'
 import { LetGoScreen } from './LetGoScreen.tsx'
@@ -14,22 +16,48 @@ import { type Place, Sidebar } from './Sidebar.tsx'
 import { updatesInbox, UpdatesScreen } from './UpdatesScreen.tsx'
 
 export function App() {
-  const accounts = useView({ view: 'accounts' }) ?? []
+  const knownAccounts = useView({ view: 'accounts' })
+  const accounts = knownAccounts ?? []
   const mailboxes = useView({ view: 'mailboxes' }) ?? []
   const people = usePeople()
   const [place, setPlace] = useState<Place>({ kind: 'people' })
   const [query, setQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // The choice of conversation App has acted on, and the one the screen is to open.
+  const chosen = useChosen()
+  const [handled, setHandled] = useState<Chosen | null>(null)
+  const [opening, setOpening] = useState<Chosen | null>(null)
 
   const goTo = (next: Place) => {
     setPlace(next)
     setQuery('')
     setSidebarOpen(false)
+    setOpening(null)
+  }
+  // A new choice opens in People when it is there, else in All mail, which holds every
+  // conversation, and a gone one opens to the reader saying so. It waits for People and the
+  // accounts to load, as a choice that opened this window arrives first: People to decide
+  // where, the accounts so the open can mark the conversation read.
+  if (chosen !== handled && people !== undefined && knownAccounts !== undefined) {
+    setHandled(chosen)
+    if (chosen) {
+      goTo(people.mine.includes(chosen.id) || people.theirs.includes(chosen.id) ? { kind: 'people' } : { kind: 'all' })
+      setOpening(chosen)
+    }
   }
   const chrome: Chrome = {
     mail: { accounts, mailboxes },
     onToggleSidebar: () => setSidebarOpen(!sidebarOpen),
-    search: <Search query={query} onSearch={setQuery} />,
+    search: (
+      <Search
+        query={query}
+        onSearch={(text) => {
+          setQuery(text)
+          setOpening(null)
+        }}
+      />
+    ),
+    opening,
   }
 
   const screen = () => {

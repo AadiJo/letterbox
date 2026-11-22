@@ -43,7 +43,12 @@ function Conversation({ id, mail, waited }: { id: ThreadId; mail: Mail; waited: 
   const scroller = useRef<HTMLDivElement>(null)
   useStickToEnd(scroller, docked)
   if (thread === undefined) return null
-  if (thread === null) return <p className="m-auto text-row text-faint">This conversation is gone</p>
+  if (thread === null)
+    return (
+      <p data-thread={id} className="m-auto text-row text-faint">
+        This conversation is gone
+      </p>
+    )
 
   const count = `${thread.messageCount} ${thread.messageCount === 1 ? 'message' : 'messages'}`
   const newest = thread.messages.at(-1)?.id
