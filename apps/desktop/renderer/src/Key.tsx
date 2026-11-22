@@ -9,6 +9,9 @@ const MAC = window.letterbox?.platform === 'darwin' || navigator.userAgent.inclu
 /** A shortcut with the platform's command key: "⌘K" on macOS, "Ctrl K" on Windows and Linux. */
 export const chord = (key: string) => (MAC ? `⌘${key}` : `Ctrl ${key}`)
 
+/** A shortcut with Shift: "⇧R" on macOS, "Shift R" on Windows and Linux. */
+export const shifted = (key: string) => (MAC ? `⇧${key}` : `Shift ${key}`)
+
 const TONES = {
   /** On the reader, the list and the toast. */
   plain: cx('border border-keycap text-faint'),

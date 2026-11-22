@@ -21,6 +21,12 @@ import { dock, ME, open, seed, toast, yourTurn } from './reply-page.ts'
 const STATE = join(root, '.letterbox/ui-check-lost-core')
 const strip = (page: Page) => page.locator('[data-field="lost-core"]')
 
+/** Resolves after two frames, so effects and microtasks a click scheduled have run. */
+const settled = (page: Page) =>
+  page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  )
+
 /** What the strip says, and the raw reason its tooltip keeps. */
 const reasonShown = (page: Page) =>
   strip(page)
@@ -227,6 +233,25 @@ export async function checkLostCore(browser: Browser) {
     await capture(page, 'lost-core')
     // The notice lasts 5 s. Every picture above must show it.
     equal(await toast(page).filter({ hasText: NOT_UNDONE }).count(), 1, 'the toast was up for every picture')
+
+    // Another screen while lost: People's views close and All mail's open on the closed connection.
+    // Nothing throws, and All mail shows, with the strip and no rows.
+    const logged = appErrors(errors, { lostCore: true }).length
+    await page
+      .getByRole('navigation', { name: 'Sidebar' })
+      .getByRole('button', { name: /^All mail/ })
+      .click()
+    await page.locator('[data-field="list-title"]', { hasText: 'All mail' }).waitFor()
+    await strip(page).waitFor()
+    await settled(page)
+    equal(
+      [
+        appErrors(errors, { lostCore: true }).slice(logged),
+        await page.locator('[data-list="mail"] [data-field="subject"]').count(),
+      ],
+      [[], 0],
+      'with the core lost, another screen opens with the strip and no rows, and nothing throws',
+    )
 
     await Promise.all([page.waitForEvent('load'), strip(page).getByRole('button', { name: 'Reload' }).click()])
     await yourTurn(page).first().waitFor()
