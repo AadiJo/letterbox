@@ -205,6 +205,7 @@ impl Core {
                     subscriptions: IndexMap::default(),
                     syncing: HashSet::default(),
                     pulls: HashMap::default(),
+                    pulled_well: HashMap::default(),
                     loading_bodies: HashSet::default(),
                     unreachable_bodies: HashSet::default(),
                     attempts: Attempts::default(),
@@ -306,6 +307,8 @@ struct State {
     syncing: HashSet<AccountId>,
     /// How many passes that pull are queued or running for each account (see `enqueue_pull`).
     pulls: HashMap<AccountId, usize>,
+    /// How many pulls have ended well for each account (see `count_pull` in sync.rs).
+    pulled_well: HashMap<AccountId, u64>,
     loading_bodies: HashSet<MessageId>,
     unreachable_bodies: HashSet<MessageId>,
     attempts: Attempts,

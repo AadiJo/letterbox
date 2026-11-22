@@ -86,8 +86,8 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: "a scheduled pull queued before a sign-out runs on the next sign-in's adapter",
     file: core('schedule.rs'),
-    find: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) {',
-    replace: 'if false {',
+    find: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) || pulled_since {',
+    replace: 'if pulled_since {',
     scenarios: 'before a sign-out',
   },
   {
@@ -125,11 +125,11 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
     scenarios: 'routine pulls',
   },
   {
-    name: 'a gmail call has no deadline, so an answer that stalls holds the account for good',
+    name: 'a gmail call has no total deadline, so an answer that trickles holds the account for good',
     file: 'crates/gmail/src/api.rs',
     find: '        let build = |http: &reqwest::Client| build(http).timeout(budget);',
-    replace: '        let build = |http: &reqwest::Client| build(http).timeout(Duration::MAX.min(budget * 1_000_000));',
-    scenarios: 'answer stalls',
+    replace: '        let build = |http: &reqwest::Client| build(http).timeout(Duration::from_secs(86_400));',
+    scenarios: 'trickles forever',
   },
   {
     name: 'a gmail answer its deadline cut off reads as a provider error, not offline',
@@ -144,5 +144,26 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
     find: '            Err(_) if healthy => {',
     replace: '            Err(_) if healthy && false => {',
     scenarios: 'queued push clears',
+  },
+  {
+    name: 'a scheduled pull runs though a push queued ahead of it already pulled',
+    file: core('schedule.rs'),
+    find: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) || pulled_since {',
+    replace: 'if link.stop.is_cancelled() || !core.still_current(&id, &link) {',
+    scenarios: 'push queued ahead of it',
+  },
+  {
+    name: 'a gmail refusal whose reason the deadline cut off is read as refused, though the call may have landed',
+    file: 'crates/gmail/src/api.rs',
+    find: '            Err(error) if error.is_timeout() => return CallError::Lost,\n',
+    replace: '',
+    scenarios: 'refusal stalls',
+  },
+  {
+    name: 'a gmail download that stops moving holds the account for its whole transfer budget',
+    file: 'crates/gmail/src/factory.rs',
+    find: '            .read_timeout(config.timeouts.stall)\n',
+    replace: '',
+    scenarios: 'stops moving',
   },
 ]

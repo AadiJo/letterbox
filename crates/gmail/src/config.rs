@@ -56,15 +56,21 @@ pub struct Timeouts {
     pub call: Duration,
     /// A call that moves a file: an attachment's download, or a send's upload.
     pub transfer: Duration,
+    /// How long any request may go without a byte arriving. A download that stopped moving
+    /// then frees the account's queue long before its transfer budget runs out, while one that
+    /// is slow but moving finishes.
+    pub stall: Duration,
 }
 
 /// Google's budgets. A metadata call answers in well under a second, and a page of a list in a
 /// few, so a minute is generous on a slow link and still frees a stalled queue within a minute.
 /// A file can be 25 MB, about 34 MB as the base64 Gmail sends and takes. Ten minutes moves that
-/// at about half a megabit a second.
+/// at about half a megabit a second. A link that drops packets can pause a few seconds while
+/// TCP resends, so half a minute without a byte means the connection is dead.
 pub const GOOGLE_TIMEOUTS: Timeouts = Timeouts {
     call: Duration::from_secs(60),
     transfer: Duration::from_secs(600),
+    stall: Duration::from_secs(30),
 };
 
 /// Where the browser lands after consent. The guide says to listen on 127.0.0.1 at a

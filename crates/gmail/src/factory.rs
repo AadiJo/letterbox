@@ -48,6 +48,8 @@ impl GmailFactory {
             })
             // Every request's budget unless it sets its own: a transfer does (see api.rs).
             .timeout(config.timeouts.call)
+            // Reset by every read, so it ends only a request whose answer stopped coming.
+            .read_timeout(config.timeouts.stall)
             .build()
             .expect("an HTTP client with rustls builds");
         GmailFactory {

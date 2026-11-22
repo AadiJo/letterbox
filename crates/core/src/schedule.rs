@@ -132,21 +132,33 @@ impl Inner {
     }
 
     /// Queues one quiet pull, and hands back how it ended once it has, a backfill it starts
-    /// included. None when the link stopped first. The pass checks its link as it starts, so a
-    /// pass queued before the link stopped does not reach the provider after.
+    /// included. None when the link stopped first, even while the pull waits in the queue.
+    ///
+    /// The pass checks again as it reaches the head of the queue, and does not pull when the
+    /// link stopped, or when a pull ended well since the tick: a job queued ahead of it can turn
+    /// into one, as a push does that pulls first to settle a change whose answer was lost.
     async fn scheduled_pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> Option<PassResult> {
         let core = Rc::clone(self);
         let (id, link) = (account_id.clone(), linked.clone());
+        let ticked = self.pulls_ended_well(account_id);
         let pass = self.enqueue_pull(account_id, async move {
-            if link.stop.is_cancelled() || !core.still_current(&id, &link) {
+            let pulled_since = core.pulls_ended_well(&id) != ticked;
+            if link.stop.is_cancelled() || !core.still_current(&id, &link) || pulled_since {
                 return None;
             }
             Some(core.sync_pass(id, Pull::Quiet).await)
         });
-        let joined = pass
-            .await
-            .expect("a queued pass runs to its end, since a panic ends the program")?;
-        self.ended(joined, linked).await
+        let ran = tokio::select! {
+            biased;
+            () = linked.stop.cancelled() => return None,
+            ran = pass => ran.expect("a queued pass runs to its end, since a panic ends the program"),
+        };
+        match ran {
+            Some(joined) => self.ended(joined, linked).await,
+            // It did not pull: another pull did the work, or the link stopped, which the
+            // schedule sees as it waits next.
+            None => Some(Ok(())),
+        }
     }
 
     /// How a pull ended: its backfill's end when it left one, else its own. None when the link

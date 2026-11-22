@@ -4,8 +4,8 @@
 // on one already queued or running (a sync-now's, a backfill page's, or a push's pull to
 // settle a change whose answer was lost), a first wait timed from before a slow first sync, an
 // offline provider asked every minute, a recovery that waits out the backoff, a UI told it is
-// syncing every minute, a close held up by a wait for the next pull, and on Gmail, a call whose
-// answer stalls holding everything up for good.
+// syncing every minute, and a close held up by a wait for the next pull. A Gmail call whose
+// answer stalls is in 28-gmail-deadlines.ts.
 //
 // The fixed clock holds every idle wait until the scenario moves it (`advanceClock`), and
 // `idleWaits` says when the schedule began its next wait, which it does once its pull has
@@ -209,6 +209,31 @@ scenario('the schedule starts no pull while a backfill page or a push that pulls
   t.check(true, 'both changes settle once the pull ends')
 })
 
+scenario('a scheduled pull skips when a push queued ahead of it pulled to settle a lost change', async (t) => {
+  const { core, box } = await start(t)
+  await core.idleWaits(1)
+  const target = await thread(core, 'Can you review the draft?')
+  const other = await thread(core, 'Lunch on Friday?')
+  // A change whose push is held, and whose answer will be lost.
+  box.damageNextApplyAnswer('disconnect')
+  box.holdApplies()
+  const lost = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  await box.applyHeld()
+  // A second change queues a push, and its undo leaves that push nothing to carry. It pulls
+  // first all the same once the first change's answer is lost, as the core is then unsure.
+  const next = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
+  await core.command({ kind: 'undo', change: next.change })
+  // The tick finds no pull queued or running, so it queues one behind that push. A round trip
+  // gives the move time to land first.
+  core.advanceClock(60)
+  await core.query({ view: 'accounts' })
+  const pulls = box.calls().changes
+  box.releaseApplies()
+  await core.settled(lost.change)
+  t.equal(await core.idleWaits(2), [60, 60], 'the schedule waits a minute more')
+  t.equal(box.calls().changes, pulls + 1, "only the push's pull reached the provider")
+})
+
 scenario("a pull the schedule queued before a sign-out does not run on the next sign-in's link", async (t) => {
   const { core, box, accountId } = await start(t)
   await core.idleWaits(1)
@@ -289,21 +314,3 @@ scenario('routine pulls leave the accounts view idle, and a first sync or a resy
   await core.idleWaits(5)
   t.equal(states, ['syncing', 'idle', 'syncing', 'idle'], 'a pull that lists the mailbox again shows syncing')
 })
-
-scenario(
-  'on gmail, a call whose answer stalls fails as offline once its time is up, and the next sync goes through',
-  async (t) => {
-    const gmail = t.gmail
-    if (!gmail) throw new Error('this scenario runs as gmail only')
-    const { core, box } = await start(t)
-    box.deliver(fromBen('fresh', 'Fresh news', '2025-12-09T09:00:00.000Z'))
-    const accounts = core.subscribe({ view: 'accounts' })
-    gmail.stallNextAnswer()
-    const stalled = await core.request({ method: 'sync-now' })
-    t.equal(stalled.ok ? null : stalled.error, 'offline', 'the sync gives up on the stalled call and says offline')
-    await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
-    t.check((await core.request({ method: 'sync-now' })).ok, 'the next sync goes through')
-    t.check((await thread(core, 'Fresh news')).subject === 'Fresh news', 'and brings the new mail')
-  },
-  ['gmail'],
-)

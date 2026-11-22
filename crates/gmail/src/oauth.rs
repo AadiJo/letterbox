@@ -103,7 +103,12 @@ async fn token_request(
     if status.is_server_error() {
         return Err(TokenFailure::Other);
     }
-    let body: TokenError = response.json().await.unwrap_or_default();
+    // An error body the request's budget cut off never fully came, as above.
+    let body: TokenError = match response.json().await {
+        Ok(body) => body,
+        Err(error) if error.is_timeout() => return Err(TokenFailure::Unreachable),
+        Err(_) => TokenError::default(),
+    };
     Err(if body.error == "invalid_grant" {
         TokenFailure::InvalidGrant
     } else {

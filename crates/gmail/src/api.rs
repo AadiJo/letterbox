@@ -201,10 +201,16 @@ impl Api {
         Ok(response)
     }
 
-    /// Reads an error answer's status and its first reason.
+    /// Reads an error answer's status and its first reason. An error body the request's budget
+    /// cut off is `Lost`: without its reason the status says nothing sure, and the call may
+    /// have landed. Any other body that cannot be read leaves the status with no reason.
     async fn error_of(response: Response) -> CallError {
         let status = response.status();
-        let body: ApiError = response.json().await.unwrap_or_default();
+        let body: ApiError = match response.json().await {
+            Ok(body) => body,
+            Err(error) if error.is_timeout() => return CallError::Lost,
+            Err(_) => ApiError::default(),
+        };
         let reason = body
             .error
             .errors

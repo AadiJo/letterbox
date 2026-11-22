@@ -176,7 +176,10 @@ impl Inner {
             // A pass that only pushes was not counted as a pull when it was queued. It is one now.
             let _pulling = self.pulling(&account_id);
             match self.pull(&account_id, &linked, pull).await {
-                Ok(done) => pulled = Some(done),
+                Ok(done) => {
+                    self.count_pull(&account_id);
+                    pulled = Some(done);
+                }
                 Err(failure) => result = Err(failure),
             }
         }
@@ -192,6 +195,7 @@ impl Inner {
         // last page. A pass that pulled first pulls no more: a snapshot's next page is queued.
         let mut synced = false;
         if result.is_ok() && with_pull {
+            let pulled_now = pulled.is_none();
             let done = match pulled {
                 Some(done) => Ok(done),
                 None => self.pull(&account_id, &linked, pull).await.inspect(|done| {
@@ -201,7 +205,13 @@ impl Inner {
                 }),
             };
             match done {
-                Ok(done) => synced = matches!(done, Pulled::Done),
+                Ok(done) => {
+                    // A pull that ran here, not the one the pass made before its push.
+                    if pulled_now {
+                        self.count_pull(&account_id);
+                    }
+                    synced = matches!(done, Pulled::Done);
+                }
                 Err(failure) => result = Err(failure),
             }
         }
@@ -217,6 +227,27 @@ impl Inner {
 
         self.record_outcome(&account_id, result, synced, with_pull);
         Some(result)
+    }
+
+    /// Counts a pull that ended well for the account (`pulled_well`). The schedule skips its
+    /// own pull when one did since its tick (schedule.rs).
+    fn count_pull(&self, account_id: &AccountId) {
+        *self
+            .state
+            .borrow_mut()
+            .pulled_well
+            .entry(account_id.clone())
+            .or_default() += 1;
+    }
+
+    /// How many pulls have ended well for the account since the core started.
+    pub(crate) fn pulls_ended_well(&self, account_id: &AccountId) -> u64 {
+        self.state
+            .borrow()
+            .pulled_well
+            .get(account_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Records how a pass or an outbox check (confirm.rs) that still serves the account ended:
