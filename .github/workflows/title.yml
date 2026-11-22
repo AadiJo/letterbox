@@ -9,10 +9,10 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
 
-# A newer title replaces the one being checked.
-concurrency:
-  group: title-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# No concurrency group: a push and an edit often land together, and a run that a group cancels
+# still reports `title` as cancelled. GitHub reads the required status from the newest run, so
+# a cancelled one there blocks the merge. Every run finishes in seconds instead, and the newest
+# event's run, which checks the newest title, is the one the ruleset reads.
 
 permissions:
   contents: read
