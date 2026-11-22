@@ -38,7 +38,6 @@ use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
 use crate::adapter::{AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, SendResult};
-use crate::body::Reading;
 use crate::clock::{iso, parse};
 use crate::draft::prepare;
 use crate::effect::Effect;
@@ -132,6 +131,8 @@ impl Inner {
         };
         let window = TimeDelta::from_std(self.undo_window).unwrap_or(TimeDelta::MAX);
         let until = iso(parse(&now).checked_add_signed(window).unwrap_or(parse(&now)));
+        // Processed before it is stored, so the reply shows whole in the same update that shows it.
+        let reading = self.processed_now(&prepared.body);
         self.commit_then(
             |world, tx, at| {
                 // The message id is minted before the thread id, as reconcile does.
@@ -148,7 +149,7 @@ impl Inner {
                         facts: prepared.facts,
                         server: prepared.server,
                         body: Some(BodyResult::Body { body: prepared.body }),
-                        reading: Reading::default(),
+                        reading,
                         round: 0,
                     },
                 );

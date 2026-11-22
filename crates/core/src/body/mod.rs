@@ -8,7 +8,8 @@
 //!
 //! `flush` (subscriptions.rs) runs the pipeline on the stored bodies of the conversations
 //! someone has open whose reading is missing or from an older VERSION, in one commit, before
-//! it returns. So a body fetched in the background is processed in that background task, a
+//! it returns. A message the user sends is processed as the outbox stores it (`processed_now`),
+//! so a reply shows whole at once: it is the user's own draft, and small. So a body fetched in the background is processed in that background task, a
 //! change to the rules reprocesses each body lazily when it is next opened, and a message
 //! shows `loading` until then. Raising VERSION is how a rules change reaches stored bodies.
 //!
@@ -178,6 +179,15 @@ pub fn unsubscribe_of(record: &MessageRecord) -> Option<Unsubscribe> {
 }
 
 impl Inner {
+    /// The reading of a body processed now. The outbox stores a sent message with it.
+    pub(crate) fn processed_now(&self, body: &RemoteBody) -> Reading {
+        self.meter.processed();
+        Reading {
+            processed: Some(process(body)),
+            show_images: false,
+        }
+    }
+
     /// Runs the pipeline on these messages' bodies and keeps what it makes, in one commit.
     /// `flush` calls it with the unprocessed bodies of the open conversations.
     pub(crate) fn process_bodies(self: &Rc<Self>, ids: &[MessageId]) {
