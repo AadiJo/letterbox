@@ -9,8 +9,13 @@
 //     answers ok, with the session in core-sim's stand-in keychain;
 //   - a second launch over the same store resumes the account from that keychain, and the
 //     page starts no sign-in and main opens nothing.
-// Each launch first loads the page without the parameter, puts the stub in main, then adds
-// the parameter and reloads, so no sign-in can start before the stub is there.
+// Each launch first loads the page without the parameter, waits until that page's core
+// answers, puts the stub in main, then adds the parameter and reloads, so no sign-in can start
+// before the stub is there. Main starts a core before any page asks, and a reload that comes
+// before the first page has taken it gets that core instead, so the wait is what makes it one
+// core per page load. The first page
+// never starts a sign-in, even when its dev hooks load after the URL changed: they read the
+// URL the page loaded from (apps/desktop/renderer/src/dev.ts).
 // Not on Windows: core-sim's fake Gmail redirects over unix sockets (crates/sim-client).
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -36,6 +41,11 @@ const KEYCHAIN = join(DATA, 'sim-keychain.json')
 
 /** Stubs main's shell.openExternal, then reloads the page with `?sign-in=oauth`. Resolves with what the page's sign-in came to. */
 async function signInFromPage(run: Launched) {
+  await run.page.waitForFunction(() => window.letterboxDev !== undefined, null, { timeout: WAIT_MS })
+  await within(
+    run.page.evaluate(() => window.letterboxDev?.settle()),
+    "the first page's core answering",
+  )
   await run.app.evaluate(({ shell }) => {
     const urls: string[] = []
     const first = new Promise<string>((resolve) => {

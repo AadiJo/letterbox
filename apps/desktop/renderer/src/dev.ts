@@ -58,10 +58,17 @@ async function startOauth(client: Client): Promise<OauthStart> {
   return signedIn.ok ? { kind: 'signed-in' } : { kind: 'failed', error: signedIn.error }
 }
 
-/** Puts the hooks on `window.letterboxDev`, and starts the OAuth sign-in if the page URL asks for it. */
+/**
+ * The URL this document loaded from. Not `location`: it follows history.replaceState, and the
+ * hooks load after the page starts, so a URL changed in between would start a sign-in that
+ * this page load never asked for.
+ */
+const loadedFrom = () => new URL(performance.getEntriesByType('navigation')[0]?.name ?? location.href)
+
+/** Puts the hooks on `window.letterboxDev`, and starts the OAuth sign-in if the page loaded with `?sign-in=oauth`. */
 export function installDevHooks(client: Client) {
   const oauth =
-    new URLSearchParams(location.search).get(SIGN_IN_PARAM) === 'oauth'
+    loadedFrom().searchParams.get(SIGN_IN_PARAM) === 'oauth'
       ? startOauth(client).then((start) => {
           console.info('[dev] oauth sign-in:', start)
           return start
