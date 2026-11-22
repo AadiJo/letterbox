@@ -8,7 +8,8 @@
 // Builds the Rust core first, so the scenarios always run the source as it is.
 // Writes one transcript per run and a summary to artifacts/scenarios/. When the second copy's
 // transcript differs, it goes next to the first as `<scenario>.<dialect>.again.jsonl`.
-// Exits 1 if any scenario fails or drifts outside drift-allowed.txt, and 2 if the core does not build.
+// Exits 1 if any scenario fails or drifts outside drift-allowed.txt, 2 if the core does not compile, and 3
+// if its build broke for another reason, such as the compiler being killed (see `buildCore`).
 //
 // The second copy runs the same list starting halfway down, so each run shares the machine
 // with a different scenario. The load moves timing about, as a busy CI machine does, which
@@ -22,7 +23,7 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { buildCore, CORE_DID_NOT_BUILD } from './client.ts'
+import { BUILD_BROKE, buildCore, CORE_DID_NOT_BUILD } from './client.ts'
 import { allowedDrift, drift, DRIFT_ALLOWED } from './drift.ts'
 import { lifecycleChart } from './invariants.ts'
 import { ARTIFACTS, definitions, type Result, runOne } from './scenario.ts'
@@ -33,9 +34,14 @@ const { values, positionals } = parseArgs({
 })
 const only = positionals[0]
 
-if (!buildCore()) {
+const build = buildCore()
+if (build.kind === 'does-not-compile') {
   console.log('The core did not build, so no scenario ran.')
   process.exit(CORE_DID_NOT_BUILD)
+}
+if (build.kind === 'broke') {
+  console.log(`The core did not build because ${build.why}. That is this machine, not the source. No scenario ran.`)
+  process.exit(BUILD_BROKE)
 }
 
 const scenarioFolder = fileURLToPath(new URL('../scenarios/', import.meta.url))
