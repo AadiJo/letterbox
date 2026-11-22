@@ -1,11 +1,11 @@
-// The open conversation, in the reading column: the subject, one line for whose turn it is,
-// its labels and how many messages, then the messages. Earlier messages fold to one line each
-// and the newest is open, as is any reply of the user's still on its way or not sent. Bodies
-// load through the core's thread view. The reply bar ends it; while the user writes, the editor
-// docks below and the subject stays pinned above.
+// The open conversation, in the reading column: the subject, one line for whose turn it is
+// (in Let go?, how long it waited), its labels and how many messages, then the messages.
+// Earlier messages fold to one line each and the newest is open, as is any reply of the user's
+// still on its way or not sent. Bodies load through the core's thread view. The reply bar ends
+// it; while the user writes, the editor docks below and the subject stays pinned above.
 
 import type { Message, MessageId, Person, ThreadDetail, ThreadId, TurnState } from '@letterbox/protocol'
-import { ChevronRight, Hourglass, Reply } from 'lucide-react'
+import { ChevronRight, Hourglass, Reply, Wind } from 'lucide-react'
 import { Fragment, type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
 import { canReply, type Mail } from './actions.ts'
 import { Attachments } from './Attachments.tsx'
@@ -20,14 +20,15 @@ import { LabelChip, useLabels } from './Label.tsx'
 import { useShownPending, useUndone } from './sending.ts'
 import { otherPerson, personName } from './Row.tsx'
 import { useThreadDetail } from './threads.ts'
-import { isLate, messageTime } from './time.ts'
+import { age, isLate, listTime, messageTime } from './time.ts'
 
-export function Reader({ id, mail }: { id: ThreadId | null; mail: Mail }) {
+/** `waited`: the conversation is in Let go?, so its line says how long my turn has waited. */
+export function Reader({ id, mail, waited = false }: { id: ThreadId | null; mail: Mail; waited?: boolean }) {
   if (!id) return <p className="m-auto text-row text-faint">No conversation selected</p>
-  return <Conversation key={id} id={id} mail={mail} />
+  return <Conversation key={id} id={id} mail={mail} waited={waited} />
 }
 
-function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
+function Conversation({ id, mail, waited }: { id: ThreadId; mail: Mail; waited: boolean }) {
   const thread = useThreadDetail(id)
   const now = useNow()
   const composer = useComposer(id)
@@ -52,7 +53,9 @@ function Conversation({ id, mail }: { id: ThreadId; mail: Mail }) {
   const count = `${thread.messageCount} ${thread.messageCount === 1 ? 'message' : 'messages'}`
   const newest = thread.messages.at(-1)?.id
   const turn =
-    thread.turn.holder === 'none' ? null : (
+    thread.turn.holder === 'none' ? null : waited ? (
+      <Waited thread={thread} now={now} />
+    ) : (
       <Turn turn={thread.turn} late={isLate(thread.lastMessageAt, now)} why={reasonText(thread)} />
     )
   return (
@@ -188,6 +191,24 @@ function Turn({ turn, late, why }: { turn: TurnState; late: boolean; why: string
       {turn.holder === 'mine' ? <Reply {...icon} /> : <Hourglass {...icon} />}
       {turnLabel(turn)}
     </b>
+  )
+}
+
+/** In Let go?: "Waited 39d", then, in a wide window, who asked and when: "Ben asked on Oct 9". */
+function Waited({ thread, now }: { thread: ThreadDetail; now: number }) {
+  return (
+    <>
+      <b className="inline-flex items-center gap-1.5 font-medium text-fg" data-field="waited">
+        <Wind className="size-3.5" strokeWidth={1.75} aria-hidden />
+        Waited {age(thread.lastMessageAt, now)}
+      </b>
+      <span aria-hidden className="hidden text-sep wide:inline">
+        ·
+      </span>
+      <span className="hidden wide:inline" data-field="asked">
+        {firstName(otherPerson(thread))} asked on {listTime(thread.lastMessageAt, now)}
+      </span>
+    </>
   )
 }
 

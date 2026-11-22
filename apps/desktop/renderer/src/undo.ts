@@ -1,5 +1,5 @@
 // What the last action did, in a toast for 5 s: "Marked done", "Archived" or "Moved to Trash",
-// with Undo (or z). A new action replaces it. With no notice up, the toast offers Undo for a
+// "Let go" with the subject let go of, or what Updates did to a whole sender, with Undo (or z). A new action replaces it. With no notice up, the toast offers Undo for a
 // reply in its undo window instead (sending.ts), and z acts on whichever the toast shows.
 //
 // Undo is the core's: `undo` names the change the action made, and the core takes back exactly
@@ -25,18 +25,20 @@ const UNANSWERED = 'Lost the connection. The undo may or may not have gone throu
 const NOT_UNDONE = "Lost the connection, so this wasn't undone"
 
 /**
- * The toast's content: what was done, and the change Undo takes back, or null for a toast
- * that says why there is nothing to undo. `undoing` is true from z until the core answers the
- * undo. `icon` says what kind of word it is: done, waiting on the provider, or a refusal.
+ * The toast's content: what was done, what it was done to (`note`, quieter), and the change
+ * Undo takes back, or null for a toast that says why there is nothing to undo. `undoing` is
+ * true from z until the core answers the undo. `icon` says what kind of word it is: done, let
+ * go (which is not finishing, so it is not the check), waiting on the provider, or a refusal.
  * `serial` rises with each one, so a new toast replays its entrance.
  */
 export type Notice = {
   serial: number
   threadId: ThreadId
   label: string
+  note: string | null
   change: ChangeId | null
   undoing: boolean
-  icon: 'done' | 'clock' | 'info'
+  icon: 'done' | 'wind' | 'clock' | 'info'
 }
 
 /** How a refusal names the provider of a conversation, and a mailbox. */
@@ -75,13 +77,36 @@ export function notify(action: Action, threadId: ThreadId, change: ChangeId) {
   const label = labelFor(action)
   if (!label) return
   serial += 1
-  setNotice({ serial, threadId, label, change, undoing: false, icon: 'done' })
+  setNotice({ serial, threadId, label, note: null, change, undoing: false, icon: 'done' })
+}
+
+/** Shows that Let go handed the turn of `threadId`, whose subject is `subject`, to nobody (`change`). */
+export function notifyLetGo(threadId: ThreadId, subject: string, change: ChangeId) {
+  serial += 1
+  setNotice({ serial, threadId, label: 'Let go', note: subject, change, undoing: false, icon: 'wind' })
+}
+
+/**
+ * Shows what Updates did to all of the sender `name`'s conversations in one change. `threadId`
+ * is one of them, so the toast goes if the core takes the change back (`withdrawFor`).
+ */
+export function notifySender(label: 'Marked read' | 'Archived', name: string, threadId: ThreadId, change: ChangeId) {
+  serial += 1
+  setNotice({ serial, threadId, label, note: name, change, undoing: false, icon: 'done' })
 }
 
 /** Says, for a while, that a reply's undo window ended before its undo reached the core (sending.ts). */
 export function sayTooLate(threadId: ThreadId) {
   serial += 1
-  setNotice({ serial, threadId, label: "Too late to undo. It's sending.", change: null, undoing: false, icon: 'clock' })
+  setNotice({
+    serial,
+    threadId,
+    label: "Too late to undo. It's sending.",
+    note: null,
+    change: null,
+    undoing: false,
+    icon: 'clock',
+  })
 }
 
 /** Whether the toast shows a notice. While it does, z and Undo act on it, not on a reply in its undo window (sending.ts). */
@@ -138,7 +163,15 @@ export async function undo(names: Names) {
   if (!taken?.change || taken.undoing) return null
   if (lostReason() !== null) {
     serial += 1
-    setNotice({ serial, threadId: taken.threadId, label: NOT_UNDONE, change: null, undoing: false, icon: 'info' })
+    setNotice({
+      serial,
+      threadId: taken.threadId,
+      label: NOT_UNDONE,
+      note: null,
+      change: null,
+      undoing: false,
+      icon: 'info',
+    })
     return null
   }
   const undoing: Notice = { ...taken, label: 'Undoing…', undoing: true, icon: 'clock' }
@@ -154,13 +187,21 @@ export async function undo(names: Names) {
   serial += 1
   if (answer === 'unanswered') {
     // The core may have applied the undo before its answer was lost, so nothing is promised.
-    setNotice({ serial, threadId: taken.threadId, label: UNANSWERED, change: null, undoing: false, icon: 'info' })
+    setNotice({
+      serial,
+      threadId: taken.threadId,
+      label: UNANSWERED,
+      note: null,
+      change: null,
+      undoing: false,
+      icon: 'info',
+    })
     return null
   }
   const { conflict } = answer
   const label = refusal(conflict, names, taken.threadId)
   const icon = conflict?.kind === 'outcome-unknown' ? 'clock' : 'info'
-  setNotice({ serial, threadId: taken.threadId, label, change: null, undoing: false, icon })
+  setNotice({ serial, threadId: taken.threadId, label, note: null, change: null, undoing: false, icon })
   return null
 }
 

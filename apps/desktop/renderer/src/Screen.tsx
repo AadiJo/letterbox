@@ -1,9 +1,10 @@
 // What every list screen shares: the list pane's head and sync strip, the reader pane, and
-// the selection with its keyboard. PeopleScreen and MailScreen fill in the list. The compose
+// the selection with its keyboard. PeopleScreen, LetGoScreen and MailScreen fill in the list.
+// UpdatesScreen lists senders, not conversations, so it takes only the list pane. The compose
 // page (ComposePage.tsx) takes the reader pane while it is up. Meanwhile the list shows the
 // conversation a forward comes from selected, and for a new message, none.
 
-import type { Account, Command, MailboxId, ThreadId } from '@letterbox/protocol'
+import type { Account, ChangeId, Command, MailboxId, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { PanelLeft, SquarePen } from 'lucide-react'
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import {
@@ -29,7 +30,7 @@ import { Toast } from './Toast.tsx'
 import { Toolbar } from './Toolbar.tsx'
 import { Tooltip } from './Tooltip.tsx'
 import { startReply, undoSend } from './sending.ts'
-import { hasNotice, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
+import { hasNotice, type Names, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
 
 /** What App hands every screen. */
 export type Chrome = {
@@ -46,7 +47,7 @@ export type Chrome = {
 export type Opening = { id: ThreadId } | null
 
 /** True when focus is in a text field, where letters are typing, not shortcuts. */
-const typing = (target: EventTarget | null) =>
+export const typing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
@@ -57,9 +58,16 @@ const typing = (target: EventTarget | null) =>
  * is up, the row a forward comes from shows selected, or none for a new message, and only
  * moving, which puts the page away, and z act.
  * `leaves` says whether a command takes a conversation out of this list. When it does, the
- * row slides out and the next one opens in its place.
+ * row slides out and the next one opens in its place. `say` shows what an accepted action
+ * did in the toast: undo.ts's `notify`, unless the screen names it its own way.
  */
-export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (command: Command) => boolean) {
+export function useSelection(
+  order: readonly ThreadId[],
+  mail: Mail,
+  leaves: (command: Command) => boolean,
+  say: (action: Action, thread: ThreadSummary, change: ChangeId) => void = (action, thread, change) =>
+    notify(action, thread.id, change),
+) {
   const [selected, setSelected] = useState<ThreadId | null>(null)
   const page = usePageUp()
   // The conversation the page's forward comes from. A new message comes from none.
@@ -121,7 +129,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
     const accepted = await run(action, thread, mail)
     if (!live.current) return
     if (!accepted) return shake(thread.id)
-    notify(action, thread.id, accepted.change)
+    say(action, thread, accepted.change)
     if (!leaves(accepted.command)) return
     await leave(thread.id)
     if (generation.current === started) select(next)
@@ -165,14 +173,7 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   const undoLast = async () => {
     generation.current += 1
     const started = generation.current
-    const names = {
-      provider: (threadId: ThreadId) => {
-        const accountId = threadRecord(threadId)?.accountId
-        return mail.accounts.find((account) => account.id === accountId)?.providerLabel ?? 'the provider'
-      },
-      mailbox: (mailboxId: MailboxId) => mail.mailboxes.find((mailbox) => mailbox.id === mailboxId)?.name,
-    }
-    const id = hasNotice() ? await undo(names) : await undoSend()
+    const id = hasNotice() ? await undo(namesIn(mail)) : await undoSend()
     if (!id || !live.current) return
     release(id)
     if (generation.current === started) select(id)
@@ -220,24 +221,41 @@ export function useSelection(order: readonly ThreadId[], mail: Mail, leaves: (co
   return { selected: page ? source : selected, select, act, reply, compose, undo: undoLast }
 }
 
+/** How a refusal to undo names a conversation's provider and a mailbox (undo.ts). */
+export const namesIn = (mail: Mail): Names => ({
+  provider: (threadId: ThreadId) => {
+    const accountId = threadRecord(threadId)?.accountId
+    return mail.accounts.find((account) => account.id === accountId)?.providerLabel ?? 'the provider'
+  },
+  mailbox: (mailboxId: MailboxId) => mail.mailboxes.find((mailbox) => mailbox.id === mailboxId)?.name,
+})
+
 /** A list's subtitle. People has a shorter one for a narrow window. */
 export type Subtitle = string | { wide: string; narrow: string }
 
-type ScreenProps = {
+type ListPaneProps = {
   title: string
   subtitle: Subtitle
   chrome: Chrome
   accounts: readonly Account[]
-  selection: ReturnType<typeof useSelection>
   /** The scrolling list. */
   children: ReactNode
+  /** A control at the head's end, such as New message. */
+  action?: ReactNode
+}
+
+type ScreenProps = Omit<ListPaneProps, 'action'> & {
+  selection: ReturnType<typeof useSelection>
+  /** Let go?: Let go takes Done's place in the toolbar, and the reader says how long the turn waited. */
+  letGo?: boolean
 }
 
 /**
  * The list pane beside the reader pane. The toast floats over the reader, never over the rows.
  * With the core lost, a strip across the reader's foot says so (LostCore), and the list runs on past it.
  */
-export function Screen({ title, subtitle, chrome, accounts, selection, children }: ScreenProps) {
+export function Screen({ selection, letGo = false, ...list }: ScreenProps) {
+  const { chrome } = list
   const thread = useThread(selection.selected)
   // Opens what App asks for once this screen is up, whether it just came or was already here.
   const open = useEffectEvent((id: ThreadId) => selection.select(id))
@@ -249,35 +267,9 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
   const page = usePageUp() && draft !== undefined && draft.state !== 'collapsed' ? draft : null
   return (
     <>
-      <section
-        aria-label={title}
-        className="relative flex min-h-0 w-[340px] flex-none flex-col border-r border-line bg-list wide:w-[372px] full:w-[392px]"
-      >
-        {/* In a narrow window the sidebar's toggle sits in the margin, so the title lines up with the rows' text. */}
-        <header className="top-band relative pr-[18px] pl-[34px] wide:pl-5" data-field="list-head">
-          <button
-            type="button"
-            aria-label="Show the sidebar"
-            onClick={chrome.onToggleSidebar}
-            className="absolute top-[33px] left-0.5 inline-flex size-[30px] items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg wide:hidden"
-          >
-            <PanelLeft className="size-4" strokeWidth={1.75} aria-hidden />
-          </button>
-          <div className="min-w-0 flex-1">
-            <h2 className="cap-top text-head font-semibold tracking-[-0.01em]" data-field="list-title">
-              {title}
-            </h2>
-            <p className="mt-1 truncate text-meta text-muted" data-field="subtitle">
-              {typeof subtitle === 'string' ? (
-                subtitle
-              ) : (
-                <>
-                  <span className="wide:hidden">{subtitle.narrow}</span>
-                  <span className="hidden wide:inline">{subtitle.wide}</span>
-                </>
-              )}
-            </p>
-          </div>
+      <ListPane
+        {...list}
+        action={
           <Tooltip label="New message" shortcut={COMPOSE_KEY}>
             {(describedBy) => (
               <button
@@ -295,10 +287,8 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
               </button>
             )}
           </Tooltip>
-        </header>
-        <SyncStrip accounts={accounts} />
-        {children}
-      </section>
+        }
+      />
       <section aria-label="Reader" className="relative flex min-w-0 flex-1 flex-col bg-reader">
         {/* First in tree order and shown last: LostCore says why. */}
         <LostCore />
@@ -306,13 +296,59 @@ export function Screen({ title, subtitle, chrome, accounts, selection, children 
           <ComposePage composer={page} search={chrome.search} />
         ) : (
           <>
-            <Toolbar thread={thread} mail={chrome.mail} onAct={selection.act} search={chrome.search} />
-            <Reader id={selection.selected} mail={chrome.mail} />
+            <Toolbar
+              thread={thread}
+              mail={chrome.mail}
+              onAct={selection.act}
+              search={chrome.search}
+              lead={letGo ? 'let-go' : 'done'}
+            />
+            <Reader id={selection.selected} mail={chrome.mail} waited={letGo} />
           </>
         )}
         <Toast onUndo={selection.undo} />
       </section>
     </>
+  )
+}
+
+/** The list pane: its head, with `action` at its end, the sync strip, then the list. */
+export function ListPane({ title, subtitle, chrome, accounts, children, action }: ListPaneProps) {
+  return (
+    <section
+      aria-label={title}
+      className="relative flex min-h-0 w-[340px] flex-none flex-col border-r border-line bg-list wide:w-[372px] full:w-[392px]"
+    >
+      {/* In a narrow window the sidebar's toggle sits in the margin, so the title lines up with the rows' text. */}
+      <header className="top-band relative pr-[18px] pl-[34px] wide:pl-5" data-field="list-head">
+        <button
+          type="button"
+          aria-label="Show the sidebar"
+          onClick={chrome.onToggleSidebar}
+          className="absolute top-[33px] left-0.5 inline-flex size-[30px] items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-fg wide:hidden"
+        >
+          <PanelLeft className="size-4" strokeWidth={1.75} aria-hidden />
+        </button>
+        <div className="min-w-0 flex-1">
+          <h2 className="cap-top text-head font-semibold tracking-[-0.01em]" data-field="list-title">
+            {title}
+          </h2>
+          <p className="mt-1 truncate text-meta text-muted" data-field="subtitle">
+            {typeof subtitle === 'string' ? (
+              subtitle
+            ) : (
+              <>
+                <span className="wide:hidden">{subtitle.narrow}</span>
+                <span className="hidden wide:inline">{subtitle.wide}</span>
+              </>
+            )}
+          </p>
+        </div>
+        {action}
+      </header>
+      <SyncStrip accounts={accounts} />
+      {children}
+    </section>
   )
 }
 

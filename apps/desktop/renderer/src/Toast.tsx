@@ -1,11 +1,11 @@
 // The toast, raised over the bottom of the reader and never over the list's rows: what the
-// last action did, and Undo (z), or why there is nothing to undo. With the reply dock up it
+// last action did, to what, and Undo (z), or why there is nothing to undo. With the reply dock up it
 // sits 12 px above the dock (CSS anchor positioning, the dock is `--dock`), so it never covers
 // Send or Undo. undo.ts decides what it says and for how long. With no notice up, it says
 // "Undoing…" while the core has not answered an undo of a reply, and otherwise offers Undo for a
 // reply in its undo window, for exactly as long as the core holds it (sending.ts).
 
-import { CircleCheck, Clock, Info } from 'lucide-react'
+import { CircleCheck, Clock, Info, Wind } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useSecondsUntil } from './clock.ts'
 import { Key } from './Key.tsx'
@@ -22,6 +22,11 @@ export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
       <Frame key={notice.serial} undo={notice.change ? 'ready' : 'none'} onUndo={onUndo}>
         <NoticeIcon icon={notice.icon} />
         <span data-field="toast">{notice.label}</span>
+        {notice.note && (
+          <span className="-ml-1 max-w-[220px] truncate font-normal text-muted" data-field="toast-note">
+            {notice.note}
+          </span>
+        )}
       </Frame>
     )
   if (undoing)
@@ -49,11 +54,13 @@ export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
   )
 }
 
-/** What kind of word the notice is: done, waiting on the provider, or why there is nothing to undo. */
+/** What kind of word the notice is: done, let go, waiting on the provider, or why there is nothing to undo. */
 function NoticeIcon({ icon }: { icon: Notice['icon'] }) {
   switch (icon) {
     case 'done':
-      return <CircleCheck className="size-[17px] text-green" strokeWidth={2} aria-hidden />
+      return <CircleCheck className="size-[17px] text-green" strokeWidth={2} aria-hidden data-icon="done" />
+    case 'wind':
+      return <Wind className="size-[17px] text-fg2" strokeWidth={2} aria-hidden data-icon="wind" />
     case 'clock':
       return <Clock className="size-[17px] text-fg2" strokeWidth={2} aria-hidden />
     case 'info':

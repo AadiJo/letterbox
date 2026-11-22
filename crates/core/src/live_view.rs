@@ -20,7 +20,7 @@ use letterbox_protocol::{
 use crate::clock::{iso, parse};
 use crate::effect::Effect;
 use crate::rows::{Refresh, Rows};
-use crate::senders::Senders;
+use crate::senders::{Senders, zone_of};
 use crate::suggestions::People;
 use crate::views::{Live, accounts, mailboxes, matches, missing_bodies, page, thread};
 use crate::work::Meter;
@@ -183,6 +183,7 @@ impl LiveView {
             Query::Senders {
                 account_id,
                 mailbox_id,
+                zone,
                 offset,
                 limit,
             } => {
@@ -191,7 +192,14 @@ impl LiveView {
                     mailbox_id: mailbox_id.clone(),
                     ..ThreadFilter::default()
                 };
-                LiveView::Senders(Box::new(Senders::open(filter, *offset, limit.get(), rows, meter)))
+                LiveView::Senders(Box::new(Senders::open(
+                    filter,
+                    zone_of(zone.as_deref()),
+                    (*offset, limit.get()),
+                    rows,
+                    live,
+                    meter,
+                )))
             }
             Query::Recipients {
                 account_id,
@@ -271,7 +279,7 @@ impl LiveView {
                 *missing = now;
                 touched || loading_changed
             }
-            LiveView::Senders(senders) => senders.catch_up(refresh, rows, meter),
+            LiveView::Senders(senders) => senders.catch_up(refresh, rows, live, meter),
             LiveView::Recipients {
                 account_id,
                 prefix,
@@ -295,16 +303,22 @@ impl LiveView {
         }
     }
 
-    /// True for a query whose list splits on age, which reads the time (see subscriptions.rs).
+    /// True for a query whose answer moves with time alone, which reads the time (see
+    /// subscriptions.rs): a list that splits on age, and Updates, whose days move on at midnight.
     pub fn splits_on_age(query: &Query) -> bool {
         matches!(query, Query::Threads { filter, .. } if filter.retired.is_some())
+            || matches!(query, Query::Senders { .. })
     }
 
     /// When the next thread crosses this list's cut, for a list that filters `retired`: when
     /// the oldest thread on the newer side turns RETIRED_AFTER old. With nothing on that side,
     /// RETIRED_AFTER from the time the list goes by, so a wake is still booked and notices the
-    /// clock set back (see `book_wake` in subscriptions.rs). None for any other view.
+    /// clock set back (see `book_wake` in subscriptions.rs). For Updates, the next midnight in
+    /// the user's zone, when its days move on. None for any other view.
     pub fn wakes_at(&self, live: &dyn Live) -> Option<Time> {
+        if let LiveView::Senders(senders) = self {
+            return senders.wakes_at();
+        }
         let LiveView::Threads { filter, listed, .. } = self else {
             return None;
         };

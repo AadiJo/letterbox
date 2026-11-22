@@ -143,6 +143,16 @@ export function watchThreadDetail(id: ThreadId, listener: (detail: ThreadDetail 
 }
 
 /**
+ * The first `limit` conversations of a list, asked once and remembered as rows, for one
+ * command on all of them: Updates acts on every conversation of a sender this way.
+ */
+export async function threadsOf(filter: ThreadFilter, limit: number) {
+  const page = await client.query({ view: 'threads', filter, offset: 0, limit: Math.max(1, limit) })
+  remember(page)
+  return page.threads
+}
+
+/**
  * Where conversation `id` sits in the list over `filter` right now, as the core counts it, or
  * null when the list does not hold it or the core cannot say.
  */

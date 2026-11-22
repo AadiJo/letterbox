@@ -182,7 +182,7 @@ async function run(size: number): Promise<Phases> {
     await people.next()
     const letGo = core.subscribe({ view: 'threads', filter: { turn: 'mine', retired: true }, offset: 0, limit: 50 })
     await letGo.next()
-    const updates = core.subscribe({ view: 'senders', offset: 0, limit: 50 })
+    const updates = core.subscribe({ view: 'senders', zone: 'America/Chicago', offset: 0, limit: 50 })
     await updates.next()
 
     const options = await core.query({ view: 'sign-in-options' })

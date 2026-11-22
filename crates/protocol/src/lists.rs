@@ -58,11 +58,27 @@ pub struct SenderSummary {
     /// The newest conversation's subject, and when its last message came.
     pub subject: String,
     pub last_message_at: Time,
+    /// The messages in its conversations sent on each of the last 14 days, oldest first, the
+    /// last entry today. Days are the user's, in the query's `zone`, on the core's clock, which
+    /// moves them on at the zone's midnight.
+    pub days: Vec<SenderDay>,
 }
 
-/// One window of Updates, newest sender first. `total` counts every sender in it.
+/// One day of a sender's mail in Updates: how many messages were sent that day, and how many
+/// of them are unread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, TS)]
+pub struct SenderDay {
+    pub messages: u64,
+    pub unread: u64,
+}
+
+/// One window of Updates, newest sender first. `total` counts every sender in it,
+/// `unread_senders` those with unread mail, and `unread` their unread messages.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct SenderPage {
     pub total: u64,
+    pub unread_senders: u64,
+    pub unread: u64,
     pub senders: Vec<SenderSummary>,
 }
