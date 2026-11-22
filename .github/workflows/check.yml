@@ -194,6 +194,9 @@ jobs:
       # Both macOS cases in one throwaway keychain, made, unlocked and made the default here,
       # since the runner's login keychain may be locked. The trap puts the default back and
       # removes the keychain however the step ends, and is set before the default changes.
+      # The locked case turns keychain prompts off first, standing in for a person pressing
+      # Cancel, so a locked read or write must fail at once. It gives up after 60 s and names
+      # the call that still waits. The step's timeout is only a guard behind that.
       - name: keychain round trip and locked keychain
         if: runner.os == 'macOS'
         timeout-minutes: 5

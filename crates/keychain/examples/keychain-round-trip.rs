@@ -16,15 +16,19 @@
 //!     and stays as it was. Then the check removes the entry it planted.
 //!
 //! `--locked` is for macOS, where CI has made the throwaway keychain at `<keychain>` the
-//! default. It writes a session, locks that keychain (`security lock-keychain <keychain>`),
-//! and stops Keychain Services from asking the user to unlock it, which is what a person
-//! pressing Cancel comes to. Then a read and a write must each return an error, never panic
-//! or read None: the core answers that write's sign-in with `keychain`, and that read at
-//! start shows the account needs a sign-in.
+//! default. A locked keychain asks the user to unlock it, and the call waits for the answer.
+//! The runner has no one to answer, so first it turns prompts off for this process
+//! (`SecKeychainSetUserInteractionAllowed(false)`). A locked keychain then refuses at once,
+//! which stands in for a person pressing Cancel. It writes a session, locks the keychain
+//! (`security lock-keychain <keychain>`), and then a read and a write must each return an
+//! error, never panic, hang or read None: the core answers that write's sign-in with
+//! `keychain`, and that read at start shows the account needs a sign-in. The case runs on
+//! a thread of its own, and gives up after LOCKED_WITHIN, so a call that still waits on a
+//! prompt fails the run at once, after the last step it printed.
 //!
 //! It writes to the keychain of whoever runs it, so it runs only on a CI runner
 //! (GITHUB_ACTIONS=true) and only for an account named `letterbox-ci-...`. Each step prints
-//! one line, and the exit code is 0 only if every step held.
+//! one line as soon as it is done, and the exit code is 0 only if every step held.
 
 #![expect(
     clippy::disallowed_macros,
@@ -33,6 +37,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Duration;
 
 use letterbox_core::secrets::{Secrets, SecretsError};
 use letterbox_keychain::SystemKeychain;
@@ -51,6 +56,10 @@ const SECOND: &str = r#"{"address":"ci@example.invalid","refresh_token":"1//0gCI
 
 /// What one step saw, as one line.
 type Step = Result<String, String>;
+
+/// How long the locked case may take. With prompts off each call answers at once, so a case
+/// that runs longer has a call waiting on a prompt no one on a runner can answer.
+const LOCKED_WITHIN: Duration = Duration::from_secs(60);
 
 enum Mode {
     RoundTrip,
@@ -95,7 +104,18 @@ fn main() -> ExitCode {
             let _ = std::fs::remove_dir_all(&stores);
             code
         }
-        Mode::Locked(keychain) => report(&locked(&account, &stores.join("locked"), &keychain)),
+        Mode::Locked(keychain_path) => {
+            let store = stores.join("locked");
+            let (answer, answered) = std::sync::mpsc::channel();
+            std::thread::spawn(move || answer.send(locked(&account, &store, &keychain_path)));
+            match answered.recv_timeout(LOCKED_WITHIN) {
+                Ok(steps) => report(&steps),
+                Err(_) => refuse(&format!(
+                    "the locked case gave no answer within {} s: the call after the last step printed waits on a prompt",
+                    LOCKED_WITHIN.as_secs()
+                )),
+            }
+        }
     }
 }
 
@@ -104,18 +124,17 @@ fn refuse(why: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
-/// Prints each step and gives the exit code: 0 if every step held.
-fn report(steps: &[(&str, Step)]) -> ExitCode {
-    let mut failed = 0;
-    for (what, step) in steps {
-        match step {
-            Ok(saw) => println!("ok   {what}: {saw}"),
-            Err(saw) => {
-                failed += 1;
-                println!("FAIL {what}: {saw}");
-            }
-        }
+/// Prints one step as soon as it is done, so a run that stops shows where.
+fn print_step(what: &str, step: &Step) {
+    match step {
+        Ok(saw) => println!("ok   {what}: {saw}"),
+        Err(saw) => println!("FAIL {what}: {saw}"),
     }
+}
+
+/// Gives the exit code once every step has printed: 0 if every step held.
+fn report(steps: &[(&str, Step)]) -> ExitCode {
+    let failed = steps.iter().filter(|(_, step)| step.is_err()).count();
     println!("{} of {} keychain steps held", steps.len() - failed, steps.len());
     if failed == 0 {
         ExitCode::SUCCESS
@@ -192,11 +211,14 @@ fn round_trip(account: &AccountId, stores: &Path) -> Vec<(&'static str, Step)> {
     let (store_a, store_b) = match (keychain(&a), keychain(&b)) {
         (Ok(store_a), Ok(store_b)) => (store_a, store_b),
         (Err(error), _) | (_, Err(error)) => {
-            steps.push(("open stores A and B", Err(error)));
-            return steps;
+            print_step("open stores A and B", &Err(error.clone()));
+            return vec![("open stores A and B", Err(error))];
         }
     };
-    let mut step = |what: &'static str, saw: Step| steps.push((what, saw));
+    let mut step = |what: &'static str, saw: Step| {
+        print_step(what, &saw);
+        steps.push((what, saw));
+    };
     step("A: a missing entry reads None", reads(here(&a, account), None));
     step("A: deleting a missing entry is fine", done(store_a.delete(account)));
     step("A: write the first session", done(store_a.write(account, FIRST)));
@@ -253,50 +275,55 @@ fn refused<T: std::fmt::Debug>(result: Result<T, SecretsError>) -> Step {
     }
 }
 
-/// A session written, `keychain` locked, then a read and a write that may not ask the user to
-/// unlock it. macOS only.
+/// With prompts off: a session written, `keychain` locked, then a read and a write. macOS only.
 #[cfg(target_os = "macos")]
-fn locked(account: &AccountId, store: &Path, keychain: &Path) -> Vec<(&'static str, Step)> {
+fn locked(account: &AccountId, store: &Path, keychain_path: &Path) -> Vec<(&'static str, Step)> {
+    let fail = |what: &'static str, error: String| {
+        print_step(what, &Err(error.clone()));
+        vec![(what, Err(error))]
+    };
+    // A person can press Cancel. A runner cannot, so prompts go off before any keychain call.
+    let _no_prompts = match security_framework::os::macos::keychain::SecKeychain::disable_user_interaction() {
+        Ok(guard) => guard,
+        Err(error) => return fail("turn off keychain prompts", error.to_string()),
+    };
     let secrets = match keychain(store) {
         Ok(secrets) => secrets,
-        Err(error) => return vec![("open the store", Err(error))],
+        Err(error) => return fail("open the store", error),
     };
-    let mut steps = vec![("write a session", done(secrets.write(account, FIRST)))];
+    let mut steps = Vec::new();
+    let mut step = |what: &'static str, saw: Step| {
+        print_step(what, &saw);
+        steps.push((what, saw));
+    };
+    step("turn off keychain prompts", Ok("done".to_owned()));
+    step("write a session", done(secrets.write(account, FIRST)));
     let lock = Command::new("/usr/bin/security")
         .arg("lock-keychain")
-        .arg(keychain)
+        .arg(keychain_path)
         .status();
-    steps.push((
+    step(
         "lock the keychain",
         match lock {
-            Ok(status) if status.success() => Ok(keychain.display().to_string()),
+            Ok(status) if status.success() => Ok(keychain_path.display().to_string()),
             Ok(status) => Err(format!("security lock-keychain exited with {status}")),
             Err(error) => Err(error.to_string()),
         },
-    ));
-    // Without this a locked keychain asks the user to unlock it, and a CI runner has no one to answer.
-    let _no_prompts = match security_framework::os::macos::keychain::SecKeychain::disable_user_interaction() {
-        Ok(guard) => guard,
-        Err(error) => {
-            steps.push(("turn off keychain prompts", Err(error.to_string())));
-            return steps;
-        }
-    };
-    steps.push((
+    );
+    step(
         "a read from the locked keychain is an error",
         refused(secrets.read(account)),
-    ));
-    steps.push((
+    );
+    step(
         "a write to the locked keychain is an error",
         refused(secrets.write(account, SECOND)),
-    ));
+    );
     steps
 }
 
 #[cfg(not(target_os = "macos"))]
-fn locked(_account: &AccountId, _store: &Path, _keychain: &Path) -> Vec<(&'static str, Step)> {
-    vec![(
-        "--locked",
-        Err("runs on macOS only, where CI can lock the keychain".to_owned()),
-    )]
+fn locked(_account: &AccountId, _store: &Path, _keychain_path: &Path) -> Vec<(&'static str, Step)> {
+    let refusal: Step = Err("runs on macOS only, where CI can lock the keychain".to_owned());
+    print_step("--locked", &refusal);
+    vec![("--locked", refusal)]
 }
