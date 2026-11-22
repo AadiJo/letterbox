@@ -5,7 +5,7 @@
 //
 // Nothing here reads a global until it is called, so the module loads in Hermes too.
 
-import type { AttachmentError, BlobId, CoreMessage } from '@letterbox/protocol'
+import type { AttachmentError, BlobId, CoreMessage, ThreadId } from '@letterbox/protocol'
 import type { Listener, Transport } from './client.ts'
 
 /** What the host posts on the port: a line the core wrote, or why the core is gone. */
@@ -34,6 +34,13 @@ export type ShellBridge = {
   saveAttachment(blobId: BlobId): Promise<AttachmentOutcome>
   /** Opens one attachment with the app the OS picks for its type, after a warning for one that can run code. */
   openAttachment(blobId: BlobId): Promise<AttachmentOutcome>
+  /**
+   * Calls `listener` with the conversation each time the person chooses a notification for it,
+   * after the shell has brought the window forward. A conversation chosen before the page
+   * listened, as when the choice opened this window, goes to the first listener at once.
+   * Returns a function that stops listening.
+   */
+  onOpenConversation(listener: (threadId: ThreadId) => void): () => void
 }
 
 /**

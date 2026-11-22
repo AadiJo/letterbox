@@ -39,7 +39,7 @@ pub fn generate() -> String {
         Command, TurnChoice, Draft, Delivery, Refusal, ChangeResult, UndoConflict, UndoField,
         SignInOption, SignInMethod, Request, PasswordInput, Response, Answer<Empty, Never>, True, False, Empty, Never,
         SignedIn, SignInError, SyncNowError, BlobUrl, BlobError, AttachmentFile, AttachmentError,
-        ClientMessage, CoreMessage, ProtocolErrorReason,
+        ClientMessage, CoreMessage, YourTurn, ProtocolErrorReason,
     );
     out
 }
