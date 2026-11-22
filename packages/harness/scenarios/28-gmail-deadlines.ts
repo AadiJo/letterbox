@@ -62,7 +62,8 @@ scenario(
   'on gmail, a send whose refusal stalls before its reason is not taken as refused',
   async (t) => {
     const gmail = gmailOf(t)
-    const { core, accountId } = await startShort(t)
+    // A send has the transfer budget and no stall budget, so its transfer budget is short here.
+    const { core, accountId } = await startWith(t, { gmailTimeouts: [3, 3, 3] })
     // A new message, so the send is its first call: a reply looks its thread up first.
     const message = draft(accountId, null, { subject: 'New message' })
     // The rate limit refuses the send, and its answer stalls before the reason that says so.
