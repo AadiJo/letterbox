@@ -291,7 +291,44 @@ export const notifyRun = (sim: RunningSim, server: DevServer) =>
       [lunch, 'All mail', 0, []],
       'notify: a conversation gone before its notification opened a window opens All mail, whose reader says that one is gone, and nothing breaks',
     )
+    // The person opens another row while the core has not yet said where Ben's sits. Every new
+    // page from here holds its position request at its port until the check lets it go.
+    await app.context().addInitScript(() => {
+      const held: (() => void)[] = []
+      const send = MessagePort.prototype.postMessage
+      MessagePort.prototype.postMessage = function postMessage(this: MessagePort, ...args: [unknown]) {
+        const [line] = args
+        if (typeof line === 'string' && line.includes('"method":"position"'))
+          return void held.push(() => send.apply(this, args))
+        return send.apply(this, args)
+      }
+      Reflect.set(window, 'heldPositions', () => held.length)
+      Reflect.set(window, 'releasePositions', () => held.splice(0).forEach((go) => go()))
+    })
+    const fifth = await chooseWithWindowClosed(2)
+    await fifth.waitForFunction(() => Reflect.get(window, 'heldPositions')?.() === 1, null, { timeout: WAIT_MS })
+    const top = fifth.locator('[data-list="mail"] [role="option"]').first()
+    const other = await top.getAttribute('data-row')
+    await top.click()
+    await fifth.evaluate(async () => {
+      Reflect.get(window, 'releasePositions')?.()
+      await window.letterboxDev?.settle()
+      await window.letterboxDev?.settle()
+      await new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame)))
+    })
+    equal(
+      [
+        await fifth.locator('[data-list="mail"]').evaluate((element) => element.scrollTop),
+        await fifth.evaluate(
+          () => document.querySelector('[data-list="mail"] [aria-selected="true"]')?.getAttribute('data-row') ?? null,
+        ),
+        other === ben,
+      ],
+      [0, other, false],
+      "notify: a row opened while the core answers where the notification's sits keeps the list where it is",
+    )
+
     // Each new page asks for a core of its own. Quit once the last has one, not while main starts it.
-    await untilLogged(run, (lines) => corePids(lines).length === 4, "the last page's core starting")
-    checkQuit('notify', run, await quit(run), 4)
+    await untilLogged(run, (lines) => corePids(lines).length === 5, "the last page's core starting")
+    checkQuit('notify', run, await quit(run), 5)
   })

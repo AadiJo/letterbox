@@ -12,7 +12,7 @@ use letterbox_protocol::{
 use crate::Inner;
 use crate::changes::{Edit, mode_of, resolve, targets};
 use crate::effect::{Effect, MessageEffect, TurnEffect};
-use crate::live_view::position;
+use crate::live_view::{LiveView, position};
 use crate::turns::with_override;
 use crate::world::{ChangeOutcome, ChangeRecord, Op, put_change, put_thread};
 
@@ -189,15 +189,23 @@ impl Inner {
         }
     }
 
-    /// Answers `position` from the rows as they are now. A filter on `retired` reads the clock,
-    /// as a list that splits on age does when it opens (subscriptions.rs), so both cut alike.
+    /// Answers `position` from the rows as they are now, and changes nothing. A filter on
+    /// `retired` cuts where the open lists do: at the time they go by (`State::views_now`)
+    /// while a list that splits on age is open, which only a wake or a new such list moves.
+    /// With none open, it reads the clock for this answer alone.
     fn position(&self, id: RequestId, filter: &ThreadFilter, thread_id: &ThreadId) {
         let offset = {
-            let mut state = self.state.borrow_mut();
-            if filter.retired.is_some() {
-                state.views_now = self.env.now();
-            }
-            position(filter, thread_id, &state.rows, &state.views_now, &self.meter)
+            let state = self.state.borrow();
+            let open = state
+                .subscriptions
+                .values()
+                .any(|entry| LiveView::splits_on_age(&entry.query));
+            let now = if filter.retired.is_some() && !open {
+                self.env.now()
+            } else {
+                state.views_now.clone()
+            };
+            position(filter, thread_id, &state.rows, &now, &self.meter)
         };
         self.respond(id, Response::Position(Answer::from(Ok(Position { offset }))));
     }

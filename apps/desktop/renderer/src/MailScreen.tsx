@@ -107,11 +107,13 @@ function WindowedList({ label, filter, opening, slice, show, selection }: ListPr
 
   // A conversation App opened, as from a notification, may sit outside the window: once the
   // list has its length, the core says where, and the list scrolls there, its row a third of
-  // the way down. Once per open, so a later scroll of the person's own stays where they put it.
+  // the way down. Once per open, so a later scroll of the person's own stays where they put it,
+  // and not at all once the person has opened something else while the core answered.
   const placed = useRef<Opening>(null)
   const ready = slice !== undefined
   // The list is keyed by its filter, so the filter is the same for as long as it is up.
   const find = useEffectEvent((id: ThreadId) => positionOf(filter, id))
+  const stillOpen = useEffectEvent((id: ThreadId) => selection.selected === id)
   useEffect(() => {
     if (!opening || !ready || placed.current === opening) return
     let current = true
@@ -119,7 +121,8 @@ function WindowedList({ label, filter, opening, slice, show, selection }: ListPr
       const element = list.current
       if (!current || !element) return
       placed.current = opening
-      if (offset !== null) element.scrollTop = Math.max(0, offset * ROW_HEIGHT - element.clientHeight / 3)
+      if (offset !== null && stillOpen(opening.id))
+        element.scrollTop = Math.max(0, offset * ROW_HEIGHT - element.clientHeight / 3)
     })
     return () => {
       current = false
