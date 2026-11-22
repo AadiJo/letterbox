@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 
 use crate::adapter::AdapterFailure;
 use crate::reconcile::{Incoming, reconcile, remove_unlisted};
-use crate::sync::PassResult;
+use crate::sync::{PassResult, Pull};
 use crate::world::{AccountRecord, SnapshotProgress, put_account};
 use crate::{Inner, Linked};
 
@@ -133,7 +133,8 @@ impl Inner {
         Ok(Pulled::More)
     }
 
-    /// Queues the job for the account's next page, behind whatever is queued now. A closing
+    /// Queues the job for the account's next page, behind whatever is queued now. It counts
+    /// as pulling until it ends (`enqueue_pull`), though its backfill mark goes as it starts. A closing
     /// core queues no more: the saved progress resumes the snapshot on the next start's first pass.
     fn queue_next_page(self: &Rc<Self>, account_id: &AccountId) {
         if self.work.is_closed() {
@@ -143,7 +144,7 @@ impl Inner {
             .borrow_mut()
             .backfills
             .insert(account_id.clone(), Backfill::default());
-        self.background(account_id, Rc::clone(self).next_page(account_id.clone()));
+        drop(self.enqueue_pull(account_id, Rc::clone(self).next_page(account_id.clone())));
     }
 
     /// One page of a backfill, as its own queue job. It runs as a pass, so it records how
@@ -152,7 +153,7 @@ impl Inner {
     async fn next_page(self: Rc<Self>, account_id: AccountId) {
         let backfill = self.state.borrow_mut().backfills.remove(&account_id);
         let waiting = backfill.map(|backfill| backfill.waiting).unwrap_or_default();
-        let ran = Rc::clone(&self).pass(account_id.clone(), true).await;
+        let ran = Rc::clone(&self).pass(account_id.clone(), Pull::Shown).await;
         if let Some(next) = self.state.borrow_mut().backfills.get_mut(&account_id) {
             next.waiting.extend(waiting);
             return;

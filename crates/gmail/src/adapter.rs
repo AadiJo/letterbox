@@ -233,7 +233,7 @@ impl GmailAdapter {
             return Ok(AttachmentResult::Gone);
         };
         let path = format!("messages/{}/attachments/{id}", r#ref.as_str());
-        match self.api.get::<PartBody>(&path, &[]).await {
+        match self.api.get_transfer::<PartBody>(&path).await {
             Ok(body) => Ok(AttachmentResult::Bytes(decode_bytes(
                 body.data.as_deref().unwrap_or_default(),
             ))),

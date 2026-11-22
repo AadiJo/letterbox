@@ -80,6 +80,6 @@ impl GmailAdapter {
             raw: &raw,
             thread_id: thread_id.as_deref(),
         };
-        sent(self.api.post_for("messages/send", &body).await)
+        sent(self.api.post_transfer_for("messages/send", &body).await)
     }
 }

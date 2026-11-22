@@ -90,12 +90,25 @@ async fn token_request(
         .map_err(|_| TokenFailure::Unreachable)?;
     let status = response.status();
     if status.is_success() {
-        return response.json().await.map_err(|_| TokenFailure::Other);
+        // An answer cut off by the request's budget never fully came: the endpoint was not reached.
+        let unreadable = |error: reqwest::Error| {
+            if error.is_timeout() {
+                TokenFailure::Unreachable
+            } else {
+                TokenFailure::Other
+            }
+        };
+        return response.json().await.map_err(unreadable);
     }
     if status.is_server_error() {
         return Err(TokenFailure::Other);
     }
-    let body: TokenError = response.json().await.unwrap_or_default();
+    // An error body the request's budget cut off never fully came, as above.
+    let body: TokenError = match response.json().await {
+        Ok(body) => body,
+        Err(error) if error.is_timeout() => return Err(TokenFailure::Unreachable),
+        Err(_) => TokenError::default(),
+    };
     Err(if body.error == "invalid_grant" {
         TokenFailure::InvalidGrant
     } else {

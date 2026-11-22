@@ -44,7 +44,7 @@ use crate::effect::Effect;
 use crate::forward::Forward;
 use crate::mime::{File, attach};
 use crate::reconcile::{remove_with_thread, thread_for};
-use crate::sync::PassResult;
+use crate::sync::{PassResult, Pull};
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, Origin, World, put_change, put_message};
 use crate::{Inner, Linked};
 
@@ -228,7 +228,7 @@ impl Inner {
             })
         };
         if let Some((account_id, _)) = waiting {
-            self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
+            self.background(&account_id, Rc::clone(self).pass(account_id.clone(), Pull::No));
         }
     }
 
@@ -260,7 +260,7 @@ impl Inner {
             }
         }
         for account_id in due {
-            self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
+            self.background(&account_id, Rc::clone(self).pass(account_id.clone(), Pull::No));
         }
     }
 
@@ -288,7 +288,7 @@ impl Inner {
         };
         let account_id = record.account_id.clone();
         self.restage(record, &outbound, Stage::Due);
-        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
+        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), Pull::No));
     }
 
     /// Moves a send to `stage` in one commit, and returns its record as stored.
