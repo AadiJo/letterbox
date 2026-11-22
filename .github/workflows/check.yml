@@ -155,5 +155,8 @@ jobs:
           BREAKS: ${{ needs.breaks.result }}
         run: |
           echo "changes: $CHANGES (break test needed: $NEEDS_BREAKS), checks: $CHECKS, breaks: $BREAKS"
-          test "$CHANGES" = success && test "$CHECKS" = success
+          # One test per line: under `bash -e`, a failing test that is not the last of an `&&`
+          # list does not stop the script, so a later line could pass the gate.
+          test "$CHANGES" = success
+          test "$CHECKS" = success
           if [ "$NEEDS_BREAKS" = true ]; then test "$BREAKS" = success; else test "$BREAKS" = skipped; fi
