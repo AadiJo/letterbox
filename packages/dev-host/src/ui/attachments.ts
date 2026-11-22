@@ -265,7 +265,7 @@ async function checkRows(page: Page, felix: Scene) {
  * A fetch outlives its row: the conversation closes while the shell fetches and opens again,
  * and the row still says it is fetching, with nothing to click that would ask the shell twice.
  */
-async function checkFetchOutlivesRow(page: Page) {
+async function checkFetchOutlivesRow(page: Page, felix: Scene) {
   const before = (await asked(page)).length
   await open(page, 'Notes from Thursday')
   await open(page, SUBJECT)
@@ -276,6 +276,30 @@ async function checkFetchOutlivesRow(page: Page) {
     [await zip.getAttribute('data-state'), await zip.getByRole('button').count(), (await asked(page)).length - before],
     ['fetching', 0, 0],
     'a fetch the conversation closed on still shows when it opens again, and asks the shell nothing more',
+  )
+
+  // A failure does not outlive its rows: the file may be there on the next visit.
+  const buttons = (name: string) => row(page, name).getByRole('button').allTextContents()
+  equal(
+    [await buttons(PHOTO), await buttons(SHEET)],
+    [
+      ['Open', 'Save'],
+      ['Open', 'Save'],
+    ],
+    'files that failed before the conversation closed are back at rest, with Open and Save, when it opens again',
+  )
+  // Nor does one whose answer comes while the conversation is closed.
+  await button(page, 'Save', PHOTO).click()
+  await row(page, PHOTO).locator('[data-field="fetching"]').waitFor()
+  await open(page, 'Notes from Thursday')
+  const call = { action: 'save', blobId: felix.idOf(PHOTO) } as const
+  await page.evaluate((given) => window.fileStub?.answer(given, { ok: false, reason: 'gone' }), call)
+  await open(page, SUBJECT)
+  await row(page, PHOTO).waitFor()
+  equal(
+    await buttons(PHOTO),
+    ['Open', 'Save'],
+    'a failure that arrives while the conversation is closed leaves the file at rest for the next visit',
   )
 }
 
@@ -385,7 +409,7 @@ export async function checkAttachments(browser: Browser) {
     await open(page, SUBJECT)
     await row(page, PROGRAM).waitFor()
     await checkRows(page, felix)
-    await checkFetchOutlivesRow(page)
+    await checkFetchOutlivesRow(page, felix)
     await checkProgram(page, felix)
     await checkNarrowest(page, felix)
     await felix.answer(ZIP, 'save', { ok: true })
