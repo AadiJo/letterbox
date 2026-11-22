@@ -252,6 +252,19 @@ export const notifyRun = (sim: RunningSim, server: DevServer) =>
       .waitFor({ timeout: WAIT_MS })
     // A selected row always looks read. Off it, it shows what the core holds.
     await row.and(third.locator('[data-unread="false"]')).waitFor({ timeout: WAIT_MS })
+    // The person scrolls back to the top, past the loaded window. The list stays where they put it.
+    const list = third.locator('[data-list="mail"]')
+    await list.evaluate((element) => element.scrollTo({ top: 0 }))
+    await third.evaluate(async () => {
+      await window.letterboxDev?.settle()
+      await window.letterboxDev?.settle()
+      await new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame)))
+    })
+    equal(
+      await list.evaluate((element) => element.scrollTop),
+      0,
+      'notify: scrolled away after the open, All mail stays where the person put it',
+    )
     equal(
       [await placeOf(third), offset > 0, errorsOf.get(third) ?? ['no error list']],
       ['All mail', true, []],

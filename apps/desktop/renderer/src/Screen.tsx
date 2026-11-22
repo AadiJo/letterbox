@@ -38,9 +38,12 @@ export type Chrome = {
   onToggleSidebar: () => void
   /** The search field or, in a narrow window, its icon. */
   search: ReactNode
-  /** A conversation to open, as when the person chose its notification. A new object for each. */
-  opening: { id: ThreadId } | null
+  /** A conversation to open, as when the person chose its notification. */
+  opening: Opening
 }
+
+/** A conversation App asks the screen to open. A new object for each ask, so the same one can be asked again. */
+export type Opening = { id: ThreadId } | null
 
 /** True when focus is in a text field, where letters are typing, not shortcuts. */
 const typing = (target: EventTarget | null) =>

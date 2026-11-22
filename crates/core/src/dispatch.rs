@@ -5,13 +5,14 @@
 use std::rc::Rc;
 
 use letterbox_protocol::{
-    AccountId, Answer, BlobError, ChangeId, ChangeResult, ClientMessage, Command, CoreMessage, PROTOCOL,
-    ProtocolErrorReason, Refusal, Request, RequestId, Response, Rev, ThreadId, Turn,
+    AccountId, Answer, BlobError, ChangeId, ChangeResult, ClientMessage, Command, CoreMessage, PROTOCOL, Position,
+    ProtocolErrorReason, Refusal, Request, RequestId, Response, Rev, ThreadFilter, ThreadId, Turn,
 };
 
 use crate::Inner;
 use crate::changes::{Edit, mode_of, resolve, targets};
 use crate::effect::{Effect, MessageEffect, TurnEffect};
+use crate::live_view::position;
 use crate::turns::with_override;
 use crate::world::{ChangeOutcome, ChangeRecord, Op, put_change, put_thread};
 
@@ -184,7 +185,21 @@ impl Inner {
             Request::SyncNow { account_id } => self.sync_now(id, account_id),
             Request::Blob { .. } => self.respond(id, Response::Blob(Answer::from(Err(BlobError::NotSupported)))),
             Request::Attachment { blob_id } => self.attachment(id, blob_id),
+            Request::Position { filter, thread_id } => self.position(id, &filter, &thread_id),
         }
+    }
+
+    /// Answers `position` from the rows as they are now. A filter on `retired` reads the clock,
+    /// as a list that splits on age does when it opens (subscriptions.rs), so both cut alike.
+    fn position(&self, id: RequestId, filter: &ThreadFilter, thread_id: &ThreadId) {
+        let offset = {
+            let mut state = self.state.borrow_mut();
+            if filter.retired.is_some() {
+                state.views_now = self.env.now();
+            }
+            position(filter, thread_id, &state.rows, &state.views_now, &self.meter)
+        };
+        self.respond(id, Response::Position(Answer::from(Ok(Position { offset }))));
     }
 
     pub(crate) fn receive(self: &Rc<Self>, value: serde_json::Value) {

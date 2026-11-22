@@ -14,7 +14,8 @@ import { Search } from './Search.tsx'
 import { type Place, Sidebar } from './Sidebar.tsx'
 
 export function App() {
-  const accounts = useView({ view: 'accounts' }) ?? []
+  const knownAccounts = useView({ view: 'accounts' })
+  const accounts = knownAccounts ?? []
   const mailboxes = useView({ view: 'mailboxes' }) ?? []
   const people = usePeople()
   const [place, setPlace] = useState<Place>({ kind: 'people' })
@@ -32,9 +33,10 @@ export function App() {
     setOpening(null)
   }
   // A new choice opens in People when it is there, else in All mail, which holds every
-  // conversation, and a gone one opens to the reader saying so. It waits for People to load,
-  // as a choice that opened this window arrives first.
-  if (chosen !== handled && people !== undefined) {
+  // conversation, and a gone one opens to the reader saying so. It waits for People and the
+  // accounts to load, as a choice that opened this window arrives first: People to decide
+  // where, the accounts so the open can mark the conversation read.
+  if (chosen !== handled && people !== undefined && knownAccounts !== undefined) {
     setHandled(chosen)
     if (chosen) {
       goTo(people.mine.includes(chosen.id) || people.theirs.includes(chosen.id) ? { kind: 'people' } : { kind: 'all' })

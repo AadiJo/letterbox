@@ -30,6 +30,7 @@ mod holder;
 mod ids;
 mod lists;
 mod outcome;
+mod position;
 mod recipients;
 mod send;
 mod sign_in;
@@ -46,6 +47,7 @@ pub use ids::{
 };
 pub use lists::{SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
+pub use position::Position;
 pub use recipients::Recipient;
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -347,6 +349,8 @@ pub enum Request {
     Blob { blob_id: BlobId },
     /// One attachment's bytes, fetched from the provider. They come in `chunk` messages, in order, then the response.
     Attachment { blob_id: BlobId },
+    /// Where a conversation sits in the list `filter` gives right now (position.rs). Answers at once.
+    Position { filter: ThreadFilter, thread_id: ThreadId },
 }
 
 /// The answer to one request, by method.
@@ -358,6 +362,7 @@ pub enum Response {
     SyncNow(Answer<Empty, SyncNowError>),
     Blob(Answer<BlobUrl, BlobError>),
     Attachment(Answer<AttachmentFile, AttachmentError>),
+    Position(Answer<Position, Never>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
