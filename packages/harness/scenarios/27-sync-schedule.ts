@@ -227,11 +227,12 @@ scenario('a scheduled pull skips when a push queued ahead of it pulled to settle
   // A second change queues a push, and its undo leaves that push nothing to carry. It pulls
   // first all the same once the first change's answer is lost, as the core is then unsure.
   const next = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
-  await core.command({ kind: 'undo', change: next.change })
-  // The tick finds no pull queued or running, so it queues one behind that push. A round trip
-  // gives the move time to land first.
+  const undo = await core.command({ kind: 'undo', change: next.change })
+  // Settled at once, as the change it undoes never went out. Awaited, so it lands in the same place every run.
+  await core.settled(undo.change)
+  // The tick finds no pull queued or running, so it queues one behind that push.
   core.advanceClock(60)
-  await core.query({ view: 'accounts' })
+  await core.pullsQueued(1)
   const pulls = box.calls().changes
   box.releaseApplies()
   await core.settled(lost.change)
@@ -250,12 +251,14 @@ scenario("a push's pull that leaves a backfill stands for the scheduled pull, an
   const lost = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
   await box.applyHeld()
   const next = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
-  await core.command({ kind: 'undo', change: next.change })
+  const undo = await core.command({ kind: 'undo', change: next.change })
+  // Settled at once, as the change it undoes never went out. Awaited, so it lands in the same place every run.
+  await core.settled(undo.change)
   // Its pull lists the mailbox again, page by page, so its next page queues behind the tick's job.
   box.expireCursors()
   box.holdSnapshots()
   core.advanceClock(60)
-  await core.query({ view: 'accounts' })
+  await core.pullsQueued(1)
   box.releaseApplies()
   await box.snapshotHeld()
   box.releaseSnapshots()
@@ -284,7 +287,7 @@ scenario(
     await box.applyHeld()
     const second = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
     core.advanceClock(60)
-    await core.query({ view: 'accounts' })
+    await core.pullsQueued(1)
     const pulls = box.calls().changes
     // The first answer is lost. The second change's push pulls first, which settles the first,
     // then carries the second, whose answer is lost too.
@@ -312,10 +315,9 @@ scenario("a pull the schedule queued before a sign-out does not run on the next 
   box.holdApplies()
   const change = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
   await box.applyHeld()
-  // The scheduled pull queues behind the held push. A round trip gives the move time to land
-  // first. Should it land later, the sign-out ends the schedule before it queues anything.
+  // The scheduled pull queues behind the held push.
   core.advanceClock(60)
-  await core.query({ view: 'accounts' })
+  await core.pullsQueued(1)
   t.check((await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })).ok, 'the account signs out')
   await signIn(t, core, ME, PASSWORD)
   const pulls = box.calls().changes

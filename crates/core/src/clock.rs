@@ -29,6 +29,10 @@ pub trait Environment {
     /// when the test moves the clock (see `FixedEnvironment::moved_by`), so a run that never
     /// moves it never sees the core act on its own.
     fn idle(&self, wait: Duration) -> LocalFuture<'static, ()>;
+    /// Told each time the sync schedule queues a pull (schedule.rs). Nothing in the core waits
+    /// on it, and the real clock ignores it. The test clock passes it on, so a scenario knows
+    /// the pull is in the account's queue before it lets the work ahead of it go.
+    fn pull_queued(&self) {}
     /// A number another device is unlikely to draw. Each Message-ID the core writes holds one.
     fn random(&self) -> u64;
 }
@@ -119,6 +123,8 @@ pub struct FixedEnvironment {
     hold: Option<Duration>,
     /// The hand that moves the clock, when a test holds one (see `moved_by`).
     moves: Option<Moves>,
+    /// Told when the sync schedule queues a pull (see `on_pull_queued`).
+    queued: Option<Box<dyn Fn()>>,
 }
 
 /// How far a `ClockHand` has moved the clock, and how many times.
@@ -163,6 +169,7 @@ impl FixedEnvironment {
             draws: Cell::new(0),
             hold: None,
             moves: None,
+            queued: None,
         })
     }
 
@@ -178,6 +185,15 @@ impl FixedEnvironment {
                 applied: Cell::new(Moved::default()),
                 begun: Box::new(begun),
             }),
+            ..self
+        }
+    }
+
+    /// Calls `queued` each time the sync schedule queues a pull (`Environment::pull_queued`).
+    #[must_use]
+    pub fn on_pull_queued(self, queued: impl Fn() + 'static) -> Self {
+        Self {
+            queued: Some(Box::new(queued)),
             ..self
         }
     }
@@ -253,6 +269,12 @@ impl Environment for FixedEnvironment {
                 }
             }
         })
+    }
+
+    fn pull_queued(&self) {
+        if let Some(queued) = &self.queued {
+            queued();
+        }
     }
 
     fn random(&self) -> u64 {

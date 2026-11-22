@@ -185,6 +185,7 @@ impl Inner {
             }
             Some(core.sync_pass(id, Pull::Quiet).await)
         });
+        self.env.pull_queued();
         let ran = tokio::select! {
             biased;
             () = linked.stop.cancelled() => return None,

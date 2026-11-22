@@ -26,7 +26,8 @@
 //! number of seconds to move the clock forward, which ends the idle waits that have seen the
 //! clock move by their length (see `FixedEnvironment::moved_by`). Zero ends those due at once.
 //! As each idle wait begins, core-sim writes IDLE_BEGUN, its length, and how far the clock had
-//! been moved by then, to stderr. Only unix has `--clock`. The harness runs scenarios there.
+//! been moved by then, to stderr, and PULL_QUEUED as the schedule queues each pull. Only unix
+//! has `--clock`. The harness runs scenarios there.
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! The real app's program is `letterbox-core` in crates/host, which owns the stdio loop
@@ -83,6 +84,11 @@ const WAIT_BEGUN: &str = "core-sim: gmail rate-limit wait of";
 /// knows what the core waits for, and that it has finished what the last wait started.
 #[cfg(unix)]
 const IDLE_BEGUN: &str = "core-sim: idle wait of";
+
+/// Written to stderr each time the sync schedule queues a pull, so a scenario knows it is in
+/// the account's queue before it lets the work ahead of it go.
+#[cfg(unix)]
+const PULL_QUEUED: &str = "core-sim: scheduled pull queued";
 
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 #[cfg(unix)]
@@ -266,6 +272,7 @@ fn main() -> ExitCode {
         None => env,
         Some(socket) => {
             let hand = ClockHand::default();
+            let env = env.on_pull_queued(|| eprintln!("{PULL_QUEUED}"));
             let env = env.moved_by(&hand, |wait, moved| {
                 eprintln!(
                     "{IDLE_BEGUN} {} ms, after {} ms of moves",
