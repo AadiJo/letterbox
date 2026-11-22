@@ -15,6 +15,24 @@ use crate::adapter::LocalFuture;
 /// One queued task for an account.
 pub(crate) type Job = LocalFuture<'static, ()>;
 
+/// One pull counted in `pulls` (see `Inner::pulling`). Dropping it ends the count.
+pub(crate) struct Pulling {
+    core: Rc<Inner>,
+    account_id: AccountId,
+}
+
+impl Drop for Pulling {
+    fn drop(&mut self) {
+        let mut state = self.core.state.borrow_mut();
+        if let Some(count) = state.pulls.get_mut(&self.account_id) {
+            *count -= 1;
+            if *count == 0 {
+                state.pulls.remove(&self.account_id);
+            }
+        }
+    }
+}
+
 impl Inner {
     /// Runs `task` after everything already queued for this account, and hands back its result.
     pub(crate) fn enqueue<T: 'static>(
@@ -37,27 +55,29 @@ impl Inner {
         receiver
     }
 
-    /// Queues a pass that pulls, and counts it in `pulls` while it waits and runs, so the
-    /// schedule starts no pull beside it (schedule.rs).
+    /// Queues a pass that pulls, and counts it as pulling from now until it ends (`pulling`).
+    /// Every pull job goes through here: a sign-in's, a sync-now's, a backfill page's and the schedule's.
     pub(crate) fn enqueue_pull<T: 'static>(
         self: &Rc<Self>,
         account_id: &AccountId,
         task: impl Future<Output = T> + 'static,
     ) -> oneshot::Receiver<T> {
-        *self.state.borrow_mut().pulls.entry(account_id.clone()).or_default() += 1;
-        let core = Rc::clone(self);
-        let id = account_id.clone();
+        let pulling = self.pulling(account_id);
         self.enqueue(account_id, async move {
             let ended = task.await;
-            let mut state = core.state.borrow_mut();
-            if let Some(count) = state.pulls.get_mut(&id) {
-                *count -= 1;
-                if *count == 0 {
-                    state.pulls.remove(&id);
-                }
-            }
+            drop(pulling);
             ended
         })
+    }
+
+    /// Counts the account as pulling in `pulls` until the returned guard drops, so the schedule
+    /// starts no pull beside a pull that is queued or running (schedule.rs).
+    pub(crate) fn pulling(self: &Rc<Self>, account_id: &AccountId) -> Pulling {
+        *self.state.borrow_mut().pulls.entry(account_id.clone()).or_default() += 1;
+        Pulling {
+            core: Rc::clone(self),
+            account_id: account_id.clone(),
+        }
     }
 
     /// Queues a task nobody waits for.

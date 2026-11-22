@@ -46,7 +46,9 @@ use std::rc::Rc;
 
 use letterbox_core::adapter::AdapterFactory;
 
-pub use crate::config::{CLIENT_ID_VAR, CLIENT_SECRET_VAR, GmailConfig, Loopback, Pause, Random};
+pub use crate::config::{
+    CLIENT_ID_VAR, CLIENT_SECRET_VAR, GOOGLE_TIMEOUTS, GmailConfig, Loopback, Pause, Random, Timeouts,
+};
 
 /// The Gmail sign-in option: id "gmail", label "Gmail", method oauth. The host's tokio
 /// runtime must have `enable_time` on, for the HTTP client (see `GmailFactory::new`) and

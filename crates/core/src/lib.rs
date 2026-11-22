@@ -80,6 +80,7 @@ use crate::live_view::LiveView;
 use crate::maps::{HashMap, HashSet, IndexMap};
 use crate::queue::Job;
 use crate::rows::Rows;
+use crate::schedule::Start;
 use crate::secrets::Secrets;
 use crate::sign_in::Attempts;
 use crate::snapshot::Backfill;
@@ -142,6 +143,7 @@ impl Core {
             .map(|factory| (factory.option().id.clone(), Rc::clone(factory)))
             .collect();
 
+        let closing = CancellationToken::new();
         let mut adapters: HashMap<AccountId, Linked> = HashMap::default();
         let mut links = 0;
         let mut lost: Vec<AccountRecord> = Vec::new();
@@ -153,7 +155,7 @@ impl Core {
                 Ok(Some(session)) => {
                     links += 1;
                     let adapter = factory.resume(&session);
-                    adapters.insert(account.id.clone(), Linked::new(adapter, links));
+                    adapters.insert(account.id.clone(), Linked::new(adapter, links, &closing));
                 }
                 // The keychain is locked or lost the entry. The account stays signed in, so
                 // the next start tries again, but shows it needs a sign-in until then.
@@ -217,7 +219,7 @@ impl Core {
                 }),
                 queues: RefCell::new(HashMap::default()),
                 work: TaskTracker::new(),
-                closing: CancellationToken::new(),
+                closing,
                 meter: Meter::default(),
             }),
         };
@@ -231,7 +233,7 @@ impl Core {
                 .collect()
         };
         for (account_id, linked) in resumed {
-            core.inner.schedule(account_id, linked, Duration::ZERO);
+            core.inner.schedule(account_id, linked, Start::Now);
         }
         Ok(core)
     }
@@ -284,7 +286,7 @@ struct Inner {
     queues: RefCell<HashMap<AccountId, mpsc::UnboundedSender<Job>>>,
     /// Every queued job and request task that has not finished. `Core::close` waits for it to empty.
     work: TaskTracker,
-    /// Cancelled when `Core::close` begins. The sync schedules end on it (see schedule.rs).
+    /// Cancelled when `Core::close` begins. Each link's `stop` is a child of it, so every sync schedule ends (schedule.rs).
     closing: CancellationToken,
     /// The view work done so far, which budget.rs holds to a budget.
     meter: Meter,
@@ -333,14 +335,19 @@ struct Linked {
     link: u64,
     /// Wakes the link's sync schedule when the account's health clears (see `record_outcome` in sync.rs).
     wake: Rc<Notify>,
+    /// Cancelled when a sign-out or a new sign-in unlinks it, or the core closes. Its sync
+    /// schedule ends then, and a scheduled pass still queued for it does not start (schedule.rs).
+    stop: CancellationToken,
 }
 
 impl Linked {
-    fn new(adapter: Rc<dyn Adapter>, link: u64) -> Linked {
+    /// A link whose `stop` the core's `closing` cancels too.
+    fn new(adapter: Rc<dyn Adapter>, link: u64, closing: &CancellationToken) -> Linked {
         Linked {
             adapter,
             link,
             wake: Rc::new(Notify::new()),
+            stop: closing.child_token(),
         }
     }
 }

@@ -75,6 +75,11 @@ export interface GmailFake {
   setQuota(address: string, quota: Quota | null): void
   /** How many calls the rate limit refused for `address`. */
   refusals(address: string): number
+  /**
+   * The next API call's answer stalls: its status line and half its body go out, then nothing
+   * more until the fake closes. Lets a scenario check the client gives up on a call that hangs.
+   */
+  stallNextAnswer(): void
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
   /** Resolves once the fake takes connections: at once, unless it is listening again after every account was offline. */
@@ -125,6 +130,19 @@ const damaged = (response: ServerResponse, body: string, how: AnswerDamage): voi
     return void response.write(sent.slice(0, Math.floor(sent.length / 2)), () => response.socket?.end())
   response.flushHeaders()
   response.socket?.end()
+}
+
+/**
+ * Makes the answer about to be written to `response` stall halfway: `end` writes the status
+ * line and the first half of the body, chunked so the client waits for the rest, and never
+ * finishes. The fake's close destroys the socket.
+ */
+const stall = (response: ServerResponse): void => {
+  response.end = ((chunk?: unknown) => {
+    const body = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : ''
+    response.write(body.slice(0, Math.floor(body.length / 2)))
+    return response
+  }) as ServerResponse['end']
 }
 
 /** An error in the shape every Gmail endpoint uses. https://developers.google.com/gmail/api/guides/handle-errors */
@@ -349,6 +367,8 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   // Listening again resolves the host first, so it finishes on a later tick.
   let listening: Promise<void> = Promise.resolve()
   /** Stops listening while every account is offline, and listens again on the same port once one is back. */
+  // Set by `stallNextAnswer`, and cleared by the API call whose answer it stalls.
+  let stallNext = false
   const listenWhileReachable = () => {
     const down = mailboxes.size > 0 && [...mailboxes.values()].every((entry) => entry.isOffline())
     if (down && server.listening) {
@@ -391,6 +411,10 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
         response.writeHead(refused.status, { 'Content-Type': 'application/json; charset=UTF-8', ...wait })
         return void response.end(JSON.stringify(refused.body))
       }
+      if (stallNext) {
+        stallNext = false
+        stall(response)
+      }
       await api(entry, method, path, url.searchParams, response, body)
     })
   })
@@ -425,6 +449,9 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     refreshes: (address) => oauth.refreshes(address),
     setQuota: (address, quota) => quotas.set(address, quota),
     refusals: (address) => quotas.refusals(address),
+    stallNextAnswer: () => {
+      stallNext = true
+    },
     handedOut: () => handedOut,
     reachable: () => listening,
     secrets: () => oauth.secrets(),

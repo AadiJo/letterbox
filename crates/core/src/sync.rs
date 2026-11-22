@@ -19,10 +19,22 @@ use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
 
-/// What a sync-now's pass hands back from the queue: how the pass ended (None when a
+/// Whether a pass pulls, and whether the accounts view shows it as syncing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pull {
+    /// It only pushes, unless a change it carries needs a pull first (push.rs).
+    No,
+    /// It pulls and shows syncing: a sign-in's, a sync-now's, a backfill page's.
+    Shown,
+    /// It pulls and shows syncing only once the pull lists a snapshot: the schedule's routine
+    /// pull (schedule.rs), which mostly finds nothing new and should not move a UI each time.
+    Quiet,
+}
+
+/// What a sync-now's or the schedule's pass hands back from the queue: how the pass ended (None when a
 /// backfill held the pull), the wait for the backfill it left or found running, and
 /// whether it resumed a snapshot saved before the request, whose cursor is then older.
-type Joined = (Option<PassResult>, Option<oneshot::Receiver<PassResult>>, bool);
+pub(crate) type Joined = (Option<PassResult>, Option<oneshot::Receiver<PassResult>>, bool);
 
 impl Inner {
     pub(crate) async fn fetch_body(self: Rc<Self>, id: MessageId) {
@@ -77,8 +89,13 @@ impl Inner {
     }
 
     /// Fetches what changed at the provider. Lists one snapshot page instead while a snapshot
-    /// is under way, or when there is no cursor or it expired.
-    async fn pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> Result<Pulled, AdapterFailure> {
+    /// is under way, or when there is no cursor or it expired. A quiet pull shows syncing then.
+    async fn pull(
+        self: &Rc<Self>,
+        account_id: &AccountId,
+        linked: &Linked,
+        pull: Pull,
+    ) -> Result<Pulled, AdapterFailure> {
         let adapter = &linked.adapter;
         let cursor = self
             .state
@@ -121,6 +138,9 @@ impl Inner {
             return Ok(Pulled::Done);
         }
         self.caught_up_by_snapshot(account_id);
+        if pull == Pull::Quiet && self.state.borrow_mut().syncing.insert(account_id.clone()) {
+            self.commit(|_, _, _| {});
+        }
         self.snapshot_page(account_id, linked).await
     }
 
@@ -128,7 +148,8 @@ impl Inner {
     /// None when it was asked to pull while a backfill is queued: the backfill's pages do the
     /// pulling, and the pass leaves no trace, so a sync-now that waits for the backfill and
     /// runs again does the same work whether it was queued before a page job or after it.
-    pub(crate) async fn pass(self: Rc<Self>, account_id: AccountId, with_pull: bool) -> Option<PassResult> {
+    pub(crate) async fn pass(self: Rc<Self>, account_id: AccountId, pull: Pull) -> Option<PassResult> {
+        let with_pull = pull != Pull::No;
         let adapter = {
             let state = self.state.borrow();
             let known = state.world.accounts.contains_key(&account_id);
@@ -140,7 +161,7 @@ impl Inner {
         if with_pull && self.backfilling(&account_id) {
             return None;
         }
-        if with_pull {
+        if pull == Pull::Shown {
             self.state.borrow_mut().syncing.insert(account_id.clone());
             self.commit(|_, _, _| {});
         }
@@ -152,7 +173,9 @@ impl Inner {
         let mut result = Ok(());
         let mut pulled = None;
         if self.unsure(&account_id) && !self.backfilling(&account_id) {
-            match self.pull(&account_id, &linked).await {
+            // A pass that only pushes was not counted as a pull when it was queued. It is one now.
+            let _pulling = self.pulling(&account_id);
+            match self.pull(&account_id, &linked, pull).await {
                 Ok(done) => pulled = Some(done),
                 Err(failure) => result = Err(failure),
             }
@@ -171,7 +194,7 @@ impl Inner {
         if result.is_ok() && with_pull {
             let done = match pulled {
                 Some(done) => Ok(done),
-                None => self.pull(&account_id, &linked).await.inspect(|done| {
+                None => self.pull(&account_id, &linked, pull).await.inspect(|done| {
                     if caught_up(done) {
                         self.confirm(&account_id);
                     }
@@ -182,11 +205,11 @@ impl Inner {
                 Err(failure) => result = Err(failure),
             }
         }
-        self.state.borrow_mut().syncing.remove(&account_id);
+        let shown = self.state.borrow_mut().syncing.remove(&account_id);
         if !self.still_current(&account_id, &linked) {
             // A sign-out or a new sign-in took the account while this pass ran, and its
             // records are theirs now. Only show that this pass stopped syncing.
-            if with_pull {
+            if shown {
                 self.commit(|_, _, _| {});
             }
             return Some(result);
@@ -252,9 +275,9 @@ impl Inner {
         }
     }
 
-    /// A sync-now's pass. It joins the backfill the pass left or found running while it is
-    /// still in the queue, so the backfill cannot end unseen.
-    async fn sync_pass(self: Rc<Self>, account_id: AccountId) -> Joined {
+    /// A pass that pulls, for a sync-now, a sign-in or the schedule. It joins the backfill the
+    /// pass left or found running while it is still in the queue, so the backfill cannot end unseen.
+    pub(crate) async fn sync_pass(self: Rc<Self>, account_id: AccountId, pull: Pull) -> Joined {
         // Only a linked account can resume. One signed out with its mail kept still holds its
         // saved snapshot, but no pass can move it on, so following up for it would never end.
         let resumed = {
@@ -262,7 +285,7 @@ impl Inner {
             let account = state.world.accounts.get(&account_id);
             state.adapters.contains_key(&account_id) && account.is_some_and(|account| account.snapshot.is_some())
         };
-        let ran = Rc::clone(&self).pass(account_id.clone(), true).await;
+        let ran = Rc::clone(&self).pass(account_id.clone(), pull).await;
         (ran, self.join_backfill(&account_id), resumed)
     }
 
@@ -277,7 +300,7 @@ impl Inner {
         };
         let mut accounts = accounts.into_iter();
         let start = |core: &Rc<Self>, account_id: AccountId| {
-            let pass = core.enqueue_pull(&account_id, Rc::clone(core).sync_pass(account_id.clone()));
+            let pass = core.enqueue_pull(&account_id, Rc::clone(core).sync_pass(account_id.clone(), Pull::Shown));
             (account_id, pass)
         };
         let mut next = accounts.next().map(|account_id| start(self, account_id));

@@ -11,7 +11,9 @@ use letterbox_protocol::{
 };
 
 use crate::adapter::{Connection, SignInInput};
+use crate::schedule::Start;
 use crate::sign_in::{Outcome, outcome};
+use crate::sync::Pull;
 use crate::world::{
     AccountRecord, Health, put_account, remove_account, remove_change, remove_mailbox, remove_message, remove_thread,
 };
@@ -67,7 +69,8 @@ impl Inner {
 
     /// Links the account a sign-in reached, or relinks it if this address signed in before,
     /// answers the sign-in and starts its first sync, and the schedule that pulls a period after
-    /// it. The adapter it replaces closes after, and its schedule ends at its next wake.
+    /// that sync and any backfill it starts end. The link it replaces stops: its adapter closes
+    /// after, and its schedule ends.
     ///
     /// The session goes to the secret store before the commit that marks the account signed
     /// in, so the store never names a signed-in account without a session to resume. A crash
@@ -98,7 +101,7 @@ impl Inner {
         let (linked, replaced) = {
             let mut state = self.state.borrow_mut();
             state.links += 1;
-            let linked = Linked::new(connection.adapter, state.links);
+            let linked = Linked::new(connection.adapter, state.links, &self.closing);
             let replaced = state.adapters.insert(account_id.clone(), linked.clone());
             (linked, replaced)
         };
@@ -126,15 +129,17 @@ impl Inner {
             account_id: account_id.clone(),
         };
         self.respond(id, Response::SignIn(Answer::from(Ok(signed_in))));
-        drop(self.enqueue_pull(&account_id, Rc::clone(self).pass(account_id.clone(), true)));
-        self.schedule(account_id, linked, crate::schedule::PERIOD);
+        let first = self.enqueue_pull(&account_id, Rc::clone(self).sync_pass(account_id.clone(), Pull::Shown));
+        self.schedule(account_id, linked, Start::After(first));
         if let Some(replaced) = replaced {
+            replaced.stop.cancel();
             self.work.spawn_local(async move { replaced.adapter.close().await });
         }
     }
 
     /// Signs the account out at once. No await stands between taking the adapter and
-    /// changing the records, so no sign-in can land in between. The adapter closes after.
+    /// changing the records, so no sign-in can land in between. The link stops: the adapter
+    /// closes after, and its sync schedule ends.
     /// A pass still running for the account sees its adapter is gone and writes nothing
     /// more (see `still_current`). Deleting the mail settles the account's waiting changes
     /// as failed, since each accepted change gets exactly one `settled` (guarantee 2).
@@ -216,6 +221,7 @@ impl Inner {
         }
         self.respond(id, Response::SignOut(Answer::from(Ok(Empty {}))));
         if let Some(unlinked) = unlinked {
+            unlinked.stop.cancel();
             self.work.spawn_local(async move { unlinked.adapter.close().await });
         }
     }

@@ -19,7 +19,8 @@
 //! themselves. `--clock` names a unix socket core-sim listens on: each line written to it is a
 //! number of seconds to move the clock forward, which ends the idle waits that have seen the
 //! clock move by their length (see `FixedEnvironment::moved_by`). Zero ends those due at once.
-//! As each idle wait begins, core-sim writes IDLE_BEGUN and its length to stderr.
+//! As each idle wait begins, core-sim writes IDLE_BEGUN, its length, and how far the clock had
+//! been moved by then, to stderr. Only unix has `--clock`. The harness runs scenarios there.
 //!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! The real app's program is `letterbox-core` in crates/host, which owns the stdio loop
@@ -27,8 +28,10 @@
 //! which factories, clock and secret store it gets.
 
 use std::cell::Cell;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -36,8 +39,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use letterbox_core::adapter::{AdapterFactory, LocalFuture};
-use letterbox_core::clock::{ClockHand, FixedEnvironment};
-use letterbox_gmail::{GmailConfig, Loopback, gmail_factory};
+#[cfg(unix)]
+use letterbox_core::clock::ClockHand;
+use letterbox_core::clock::FixedEnvironment;
+use letterbox_gmail::{GmailConfig, Loopback, Timeouts, gmail_factory};
 use letterbox_host::{Parts, run_stdio};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 
@@ -62,7 +67,17 @@ const WAIT_BEGUN: &str = "core-sim: gmail rate-limit wait of";
 
 /// Written to stderr as each idle wait begins, before its length in milliseconds, so a scenario
 /// knows what the core waits for, and that it has finished what the last wait started.
+#[cfg(unix)]
 const IDLE_BEGUN: &str = "core-sim: idle wait of";
+
+/// Every request's budget at the fake. Its calls answer in milliseconds, so a scenario that
+/// stalls an answer sees the call fail inside the harness's 5 s wait for it. Real time, but only
+/// a stalled answer ever reaches it.
+#[cfg(unix)]
+const FAKE_GMAIL_TIMEOUTS: Timeouts = Timeouts {
+    call: Duration::from_secs(3),
+    transfer: Duration::from_secs(3),
+};
 
 /// The name core-sim reaches the fake Gmail server by. It resolves only through `GmailConfig::hosts`.
 const FAKE_GMAIL_HOST: &str = "gmail.fake.test";
@@ -131,6 +146,7 @@ fn parse_args() -> Option<Args> {
     clippy::disallowed_macros,
     reason = "core-sim says on stderr why the scenario's clock line is wrong"
 )]
+#[cfg(unix)]
 fn follow_clock(socket: &PathBuf, hand: ClockHand) -> std::io::Result<()> {
     let listener = UnixListener::bind(socket)?;
     std::thread::spawn(move || {
@@ -151,7 +167,8 @@ fn follow_clock(socket: &PathBuf, hand: ClockHand) -> std::io::Result<()> {
 
 /// The Gmail option, pointed at the fake server. Nothing here is a real client: the fake
 /// accepts any client id, as long as the code exchange names the one consent did. No wait
-/// takes real time, so a run repeats and its transcript holds nothing about time.
+/// takes real time but a request's budget (FAKE_GMAIL_TIMEOUTS), which only an answer a
+/// scenario stalls runs out, so a run repeats and its transcript holds nothing about time.
 fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
     // Each draw is 32 copies of the next number, so every attempt has its own verifier and state.
     let draws = Cell::new(0u8);
@@ -185,6 +202,7 @@ fn fake_gmail(url: String, redirects: PathBuf) -> Rc<dyn AdapterFactory> {
             [draws.get(); 32]
         }),
         pause: Rc::new(pause),
+        timeouts: FAKE_GMAIL_TIMEOUTS,
     })
 }
 
@@ -211,25 +229,43 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let mut env = match FixedEnvironment::new(&args.now) {
+    let env = match FixedEnvironment::new(&args.now) {
         Ok(env) => env.holding_from(if args.hold_waits { Duration::ZERO } else { HELD_WAIT }),
         Err(error) => {
             eprintln!("--now: {error}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
-    if let Some(socket) = &args.clock {
-        let hand = ClockHand::default();
-        env = env.moved_by(&hand, |wait| eprintln!("{IDLE_BEGUN} {} ms", wait.as_millis()));
-        if let Err(error) = follow_clock(socket, hand) {
-            eprintln!("--clock: {error}\n{USAGE}");
-            return ExitCode::from(2);
-        }
+    // The harness runs scenarios on unix only, so only there does core-sim take clock moves.
+    #[cfg(not(unix))]
+    if args.clock.is_some() {
+        eprintln!("--clock needs unix sockets, and this system has none\n{USAGE}");
+        return ExitCode::from(2);
     }
+    #[cfg(unix)]
+    let env = match &args.clock {
+        None => env,
+        Some(socket) => {
+            let hand = ClockHand::default();
+            let env = env.moved_by(&hand, |wait, moved| {
+                eprintln!(
+                    "{IDLE_BEGUN} {} ms, after {} ms of moves",
+                    wait.as_millis(),
+                    moved.as_millis()
+                );
+            });
+            if let Err(error) = follow_clock(socket, hand) {
+                eprintln!("--clock: {error}\n{USAGE}");
+                return ExitCode::from(2);
+            }
+            env
+        }
+    };
     let mut factories = args.sim.as_deref().map(sim_adapter_factories).unwrap_or_default();
     factories.extend(args.gmail.map(|(url, redirects)| fake_gmail(url, redirects)));
     // run_stdio turns time on for the Gmail adapter's HTTP client (see GmailFactory::new).
-    // Nothing in the core or the adapters waits on a timer, so a run still repeats.
+    // Nothing in the core or the adapters waits on a timer but a request's budget, which only a
+    // stalled answer runs out, so a run still repeats.
     run_stdio(
         "core-sim",
         Parts {

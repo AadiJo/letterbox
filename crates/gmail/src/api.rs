@@ -133,11 +133,16 @@ impl Api {
         Ok(token)
     }
 
-    /// Sends the request `build` makes. A rate-limited answer is sent again after a wait: the
+    /// Sends the request `build` makes, within `budget` each time (see `Timeouts`). A rate-limited answer is sent again after a wait: the
     /// seconds a Retry-After header names, else a backoff from FIRST_BACKOFF that doubles up
     /// to MAX_BACKOFF. After RATE_LIMIT_TRIES of them in a row the call answers with the last.
     /// A Retry-After given as a date is read as absent, since the adapter reads no clock.
-    async fn send(&self, build: impl Fn(&reqwest::Client) -> RequestBuilder) -> Result<Response, CallError> {
+    async fn send(
+        &self,
+        budget: Duration,
+        build: impl Fn(&reqwest::Client) -> RequestBuilder,
+    ) -> Result<Response, CallError> {
+        let build = |http: &reqwest::Client| build(http).timeout(budget);
         let mut backoff = FIRST_BACKOFF;
         let mut refused = 0;
         loop {
@@ -173,7 +178,8 @@ impl Api {
             Some(token) => token,
             None => self.fresh_token().await.map_err(CallError::Failure)?,
         };
-        // A connection that was never made surely carried nothing. Any later failure may have.
+        // A connection that was never made surely carried nothing. Any later failure may have,
+        // a request past its budget included.
         let offline = |error: reqwest::Error| {
             if error.is_connect() {
                 CallError::Failure(AdapterFailure::Offline)
@@ -209,26 +215,54 @@ impl Api {
         CallError::Status { status, reason }
     }
 
-    /// Reads a success body: cut off, or not the expected JSON, it is `Unreadable`.
+    /// Reads a success body: cut off, or not the expected JSON, it is `Unreadable`. One the
+    /// request's budget cut off is `Lost`: the connection stalled, as one that drops does.
     async fn read<T: DeserializeOwned>(response: Response) -> Result<T, CallError> {
-        response.json().await.map_err(|_| CallError::Unreadable)
+        response.json().await.map_err(|error| {
+            if error.is_timeout() {
+                CallError::Lost
+            } else {
+                CallError::Unreadable
+            }
+        })
     }
 
-    /// GET `users/me/<path>` with a query.
+    /// GET `users/me/<path>` with a query, within the call budget.
     pub async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T, CallError> {
         let url = self.url(path);
-        Self::read(self.send(|http| http.get(&url).query(query)).await?).await
+        Self::read(
+            self.send(self.config.timeouts.call, |http| http.get(&url).query(query))
+                .await?,
+        )
+        .await
     }
 
-    /// POST `users/me/<path>` with a JSON body, and read the answer.
-    pub async fn post_for<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T, CallError> {
+    /// GET `users/me/<path>`, within the transfer budget: an attachment's download.
+    pub async fn get_transfer<T: DeserializeOwned>(&self, path: &str) -> Result<T, CallError> {
         let url = self.url(path);
-        Self::read(self.send(|http| http.post(&url).json(body)).await?).await
+        Self::read(self.send(self.config.timeouts.transfer, |http| http.get(&url)).await?).await
     }
 
-    /// POST `users/me/<path>` with a JSON body. The response body, if any, is ignored.
+    /// POST `users/me/<path>` with a JSON body, within the transfer budget, and read the
+    /// answer: a send's upload.
+    pub async fn post_transfer_for<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<T, CallError> {
+        let url = self.url(path);
+        Self::read(
+            self.send(self.config.timeouts.transfer, |http| http.post(&url).json(body))
+                .await?,
+        )
+        .await
+    }
+
+    /// POST `users/me/<path>` with a JSON body, within the call budget. The response body, if any, is ignored.
     pub async fn post(&self, path: &str, body: &impl Serialize) -> Result<(), CallError> {
         let url = self.url(path);
-        self.send(|http| http.post(&url).json(body)).await.map(drop)
+        self.send(self.config.timeouts.call, |http| http.post(&url).json(body))
+            .await
+            .map(drop)
     }
 }

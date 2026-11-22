@@ -43,7 +43,29 @@ pub struct GmailConfig {
     /// Tests give the fake's name an IPv6 and an IPv4 address, the way Google's names
     /// resolve, so the client's dual-stack connect runs in every scenario.
     pub hosts: Vec<(String, Vec<SocketAddr>)>,
+    /// How long a request may take, from connecting until its answer's body has been read.
+    pub timeouts: Timeouts,
 }
+
+/// The time budgets for requests. A request past its budget fails as if the connection had
+/// dropped (see `send_once` in api.rs), so a stalled answer cannot hold an account's queue,
+/// and with it `Core::close`, for good.
+#[derive(Clone, Copy, Debug)]
+pub struct Timeouts {
+    /// Every call but a transfer: metadata, lists, history, labels, modifies and tokens.
+    pub call: Duration,
+    /// A call that moves a file: an attachment's download, or a send's upload.
+    pub transfer: Duration,
+}
+
+/// Google's budgets. A metadata call answers in well under a second, and a page of a list in a
+/// few, so a minute is generous on a slow link and still frees a stalled queue within a minute.
+/// A file can be 25 MB, about 34 MB as the base64 Gmail sends and takes. Ten minutes moves that
+/// at about half a megabit a second.
+pub const GOOGLE_TIMEOUTS: Timeouts = Timeouts {
+    call: Duration::from_secs(60),
+    transfer: Duration::from_secs(600),
+};
 
 /// Where the browser lands after consent. The guide says to listen on 127.0.0.1 at a
 /// random available port and put that port in the redirect URI.
@@ -73,6 +95,7 @@ impl GmailConfig {
             random: Rc::new(os_random),
             pause: Rc::new(timer),
             hosts: Vec::new(),
+            timeouts: GOOGLE_TIMEOUTS,
         }
     }
 

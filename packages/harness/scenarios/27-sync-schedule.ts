@@ -1,8 +1,11 @@
 // The core pulls on its own while it runs (crates/core/src/schedule.rs): at start, then every
 // minute, sooner once the provider can be reached again, and later while pulls fail. Ways it
 // can go wrong: mail that never comes in without a sync-now, a reply never told, a pull piled
-// on one already queued or running, an offline provider asked every minute, a recovery that
-// waits out the backoff, or a close held up by a wait for the next pull.
+// on one already queued or running (a sync-now's, a backfill page's, or a push's pull to
+// settle a change whose answer was lost), a first wait timed from before a slow first sync, an
+// offline provider asked every minute, a recovery that waits out the backoff, a UI told it is
+// syncing every minute, a close held up by a wait for the next pull, and on Gmail, a call whose
+// answer stalls holding everything up for good.
 //
 // The fixed clock holds every idle wait until the scenario moves it (`advanceClock`), and
 // `idleWaits` says when the schedule began its next wait, which it does once its pull has
@@ -10,7 +13,7 @@
 
 import type { Subscription } from '../src/client.ts'
 import type { Scenario } from '../src/scenario.ts'
-import { fromBen, ME, start, thread, untilAccounts } from '../src/fixtures.ts'
+import { fromBen, ME, PASSWORD, signIn, standardSeed, start, thread, untilAccounts } from '../src/fixtures.ts'
 import { scenario } from '../src/scenario.ts'
 
 const ANA = { name: 'Ana', address: 'ana@example.com' }
@@ -111,12 +114,37 @@ scenario('the schedule backs off while offline, and pulls at once when the provi
   t.equal(await core.idleWaits(5), [60, 120, 240, 0, 60], 'and the pulls after it are a minute apart again')
 })
 
+scenario(
+  'health a queued push clears before the schedule resumes from a failed pull still brings the next pull at once',
+  async (t) => {
+    const { core, box } = await start(t)
+    await core.idleWaits(1)
+    // The scheduled pull lists a snapshot, held.
+    box.expireCursors()
+    box.holdSnapshots()
+    core.advanceClock(60)
+    await box.snapshotHeld()
+    // A change queues a push behind it, and its undo cancels the change before any call, so
+    // that push carries nothing: it ends at once, and reads the account as healthy.
+    const target = await thread(core, 'Can you review the draft?')
+    const change = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+    const undo = await core.command({ kind: 'undo', change: change.change })
+    t.equal((await core.settled(change.change)).result, 'undone', 'the change never goes out')
+    await core.settled(undo.change)
+    // The pull fails offline. The push runs right after, before the schedule resumes, and clears the health.
+    box.setOffline(true)
+    box.releaseSnapshots()
+    t.equal(await core.idleWaits(2), [60, 0], 'the health reads clear, so the next pull is due at once')
+  },
+  ['labels', 'folders'],
+)
+
 scenario('a core closed while it waits for its next pull exits at once', async (t) => {
   const { core } = await start(t)
   await core.idleWaits(1)
   // stop() fails unless the core exits within the usual wait, and the next pull is a minute away.
   await core.stop()
-  t.check(true, 'the core exited without waiting for its next pull')
+  t.equal(core.exitCode(), 0, 'the core exited cleanly without waiting for its next pull')
 })
 
 scenario('a reply from a person while the core runs is told once, with no sync-now', async (t) => {
@@ -142,3 +170,140 @@ scenario('a reply from a person while the core runs is told once, with no sync-n
   const next = await core.take('your-turn')
   t.equal(next.threadId, (await thread(core, 'Are you around?')).id, 'the next conversation told is the next reply')
 })
+
+scenario('the schedule starts no pull while a backfill page or a push that pulls first is running', async (t) => {
+  const { core, box } = await start(t, standardSeed(t.dialect, { pageSize: 2 }))
+  await core.idleWaits(1)
+  // A backfill: page 1 goes in the sync-now's pass, and page 2 is its own job, held.
+  box.expireCursors()
+  box.holdSnapshots()
+  const syncing = core.begin({ method: 'sync-now' })
+  await box.snapshotHeld()
+  box.releaseSnapshots()
+  box.holdSnapshots()
+  await box.snapshotHeld()
+  core.advanceClock(60)
+  t.equal(await core.idleWaits(2), [60, 60], 'with a backfill page running, it waits a minute more')
+  box.releaseSnapshots()
+  t.check((await syncing.done).ok, 'the backfill ends well')
+
+  // A change whose answer is lost leaves the core unsure what the provider holds, so the next
+  // push pulls first. Its pull lists a snapshot, held.
+  const target = await thread(core, 'Can you review the draft?')
+  const accounts = core.subscribe({ view: 'accounts' })
+  box.damageNextApplyAnswer('disconnect')
+  const lost = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  // Its push ends with the answer lost, which reads as offline. Waiting for that fixes the order.
+  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
+  box.expireCursors()
+  box.holdSnapshots()
+  const other = await thread(core, 'Lunch on Friday?')
+  const next = await core.command({ kind: 'set-flags', threadIds: [other.id], flagged: true })
+  await box.snapshotHeld()
+  core.advanceClock(60)
+  t.equal(await core.idleWaits(3), [60, 60, 60], "with a push's pull running, it waits a minute more")
+  box.releaseSnapshots()
+  // How each settles is the push's business (see 18-undo-partial.ts). Here they only must.
+  await core.settled(lost.change)
+  await core.settled(next.change)
+  t.check(true, 'both changes settle once the pull ends')
+})
+
+scenario("a pull the schedule queued before a sign-out does not run on the next sign-in's link", async (t) => {
+  const { core, box, accountId } = await start(t)
+  await core.idleWaits(1)
+  const target = await thread(core, 'Can you review the draft?')
+  box.holdApplies()
+  const change = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  await box.applyHeld()
+  // The scheduled pull queues behind the held push. A round trip gives the move time to land
+  // first. Should it land later, the sign-out ends the schedule before it queues anything.
+  core.advanceClock(60)
+  await core.query({ view: 'accounts' })
+  t.check((await core.request({ method: 'sign-out', accountId, deleteLocalMail: false })).ok, 'the account signs out')
+  await signIn(t, core, ME, PASSWORD)
+  const pulls = box.calls().changes
+  box.releaseApplies()
+  await core.settled(change.change)
+  t.equal(await core.idleWaits(2), [60, 60], "the new link's first wait follows its sign-in's sync")
+  t.equal(box.calls().changes, pulls + 1, "only the new sign-in's sync pulled")
+})
+
+scenario("the first wait starts once the sign-in's sync and its backfill end", async (t) => {
+  const box = t.mailbox(standardSeed(t.dialect, { pageSize: 2 }))
+  box.holdSnapshots()
+  const core = t.startCore()
+  await core.hello()
+  await signIn(t, core, ME, PASSWORD)
+  await box.snapshotHeld()
+  // The sign-in's first page is held. A wait timed from the sign-in would have seen this move.
+  core.advanceClock(30)
+  box.releaseSnapshots()
+  t.equal(await core.idleWaits(1), [60], 'the first wait is a minute')
+  t.equal(await core.idleWaitStarts(1), [30], 'and it began after the clock moved, once the backfill ended')
+})
+
+scenario('routine pulls leave the accounts view idle, and a first sync or a resync shows syncing', async (t) => {
+  const seed = standardSeed(t.dialect)
+  const box = t.mailbox(seed)
+  const core = t.startCore()
+  await core.hello()
+  // Every state the view goes through, each change once.
+  const view = core.subscribe({ view: 'accounts' })
+  const states: string[] = []
+  view.watch(() => {
+    const state = view.latest()?.[0]?.status.state
+    if (state !== undefined && state !== states.at(-1)) states.push(state)
+  })
+  const synced = () => {
+    const status = view.latest()?.[0]?.status
+    return status && 'lastSyncedAt' in status ? status.lastSyncedAt : null
+  }
+  /** Waits for updates until `ready` holds. Each pull saves when it synced, so it updates the view. */
+  const until = async (ready: () => boolean) => {
+    while (!ready()) await view.next()
+  }
+  await signIn(t, core, seed.address, seed.password)
+  await until(() => states.at(-1) === 'idle')
+  await core.idleWaits(1)
+  t.equal(states, ['syncing', 'idle'], 'the first sync shows syncing')
+  for (const [count, key] of [
+    [2, null],
+    [3, null],
+    [4, 'quiet'],
+  ] as const) {
+    // From a machine, so it tells no your-turn, which would race the checks here.
+    const headers = { listUnsubscribe: true }
+    if (key) box.deliver(fromBen(key, 'Quietly arrived', '2025-12-09T09:00:00.000Z', { headers }))
+    const before = synced()
+    core.advanceClock(60)
+    await until(() => synced() !== before)
+    await core.idleWaits(count)
+  }
+  t.equal(states, ['syncing', 'idle'], 'three pulls, two with nothing new and one with new mail, leave it idle')
+  t.check((await thread(core, 'Quietly arrived')).subject === 'Quietly arrived', 'the new mail came in all the same')
+  box.expireCursors()
+  const before = synced()
+  core.advanceClock(60)
+  await until(() => synced() !== before && states.at(-1) === 'idle')
+  await core.idleWaits(5)
+  t.equal(states, ['syncing', 'idle', 'syncing', 'idle'], 'a pull that lists the mailbox again shows syncing')
+})
+
+scenario(
+  'on gmail, a call whose answer stalls fails as offline once its time is up, and the next sync goes through',
+  async (t) => {
+    const gmail = t.gmail
+    if (!gmail) throw new Error('this scenario runs as gmail only')
+    const { core, box } = await start(t)
+    box.deliver(fromBen('fresh', 'Fresh news', '2025-12-09T09:00:00.000Z'))
+    const accounts = core.subscribe({ view: 'accounts' })
+    gmail.stallNextAnswer()
+    const stalled = await core.request({ method: 'sync-now' })
+    t.equal(stalled.ok ? null : stalled.error, 'offline', 'the sync gives up on the stalled call and says offline')
+    await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
+    t.check((await core.request({ method: 'sync-now' })).ok, 'the next sync goes through')
+    t.check((await thread(core, 'Fresh news')).subject === 'Fresh news', 'and brings the new mail')
+  },
+  ['gmail'],
+)

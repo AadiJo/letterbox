@@ -133,7 +133,7 @@ struct Moved {
 struct Moves {
     seen: watch::Receiver<Moved>,
     applied: Cell<Moved>,
-    begun: Box<dyn Fn(Duration)>,
+    begun: Box<dyn Fn(Duration, Duration)>,
 }
 
 /// Moves a FixedEnvironment's clock forward while the core runs, from any thread. core-sim
@@ -167,10 +167,11 @@ impl FixedEnvironment {
     }
 
     /// Lets `hand` move this clock forward. An idle wait then ends once the hand has moved the
-    /// clock by the wait's length since it began, and `begun` is told each wait's length as it
-    /// begins, so a test can see what the core waits for and when it waits again.
+    /// clock by the wait's length since it began. `begun` is told each wait's length as it
+    /// begins, and how far the hand had moved the clock by then, so a test can see what the core
+    /// waits for, and when it began to wait.
     #[must_use]
-    pub fn moved_by(self, hand: &ClockHand, begun: impl Fn(Duration) + 'static) -> Self {
+    pub fn moved_by(self, hand: &ClockHand, begun: impl Fn(Duration, Duration) + 'static) -> Self {
         Self {
             moves: Some(Moves {
                 seen: hand.moved.subscribe(),
@@ -238,7 +239,7 @@ impl Environment for FixedEnvironment {
             return Box::pin(std::future::pending());
         };
         let begun = self.catch_up();
-        (moves.begun)(wait);
+        (moves.begun)(wait, begun.by);
         let mut seen = moves.seen.clone();
         Box::pin(async move {
             loop {

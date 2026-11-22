@@ -13,6 +13,7 @@ use crate::Inner;
 use crate::changes::{Edit, mode_of, resolve, targets};
 use crate::effect::{Effect, MessageEffect, TurnEffect};
 use crate::live_view::{LiveView, position};
+use crate::sync::Pull;
 use crate::turns::with_override;
 use crate::world::{ChangeOutcome, ChangeRecord, Op, put_change, put_thread};
 
@@ -172,7 +173,7 @@ impl Inner {
             let result = ChangeResult::Done;
             return self.send(CoreMessage::Settled { change, rev, result });
         }
-        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));
+        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), Pull::No));
     }
 
     fn on_request(self: &Rc<Self>, id: RequestId, request: Request) {

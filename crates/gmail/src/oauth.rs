@@ -90,7 +90,15 @@ async fn token_request(
         .map_err(|_| TokenFailure::Unreachable)?;
     let status = response.status();
     if status.is_success() {
-        return response.json().await.map_err(|_| TokenFailure::Other);
+        // An answer cut off by the request's budget never fully came: the endpoint was not reached.
+        let unreadable = |error: reqwest::Error| {
+            if error.is_timeout() {
+                TokenFailure::Unreachable
+            } else {
+                TokenFailure::Other
+            }
+        };
+        return response.json().await.map_err(unreadable);
     }
     if status.is_server_error() {
         return Err(TokenFailure::Other);

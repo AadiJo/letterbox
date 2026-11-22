@@ -42,6 +42,10 @@ export type CoreClient = KeepingClient & {
    * schedule begins its next wait once its pull has ended, so this is how a scenario knows it has.
    */
   idleWaits(count: number): Promise<number[]>
+  /** Resolves with how far, in seconds, the scenario had moved the clock as each of the first `count` idle waits began. */
+  idleWaitStarts(count: number): Promise<number[]>
+  /** The process's exit code once it has exited on its own, else null. */
+  exitCode(): number | null
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
@@ -67,8 +71,8 @@ const INPUT_CLOSED = 'core-sim: input closed, finishing the work in flight'
 const WAIT_HELD = 'core-sim: holding a gmail rate-limit wait until the adapter closes'
 /** The line core-sim writes to stderr as each gmail rate-limit wait begins, with its length. */
 const WAIT_BEGUN = /core-sim: gmail rate-limit wait of (\d+) ms\n/g
-/** The line core-sim writes to stderr as each idle wait begins, with its length. */
-const IDLE_BEGUN = /core-sim: idle wait of (\d+) ms\n/g
+/** The line core-sim writes to stderr as each idle wait begins, with its length and the clock's moves by then. */
+const IDLE_BEGUN = /core-sim: idle wait of (\d+) ms, after (\d+) ms of moves\n/g
 
 /** The exit code of a scenario run whose core did not build. The break test tells it apart from a failed scenario. */
 export const CORE_DID_NOT_BUILD = 2
@@ -161,6 +165,7 @@ export function startCore(
     })
   const waitsBegun = () => [...stderr.matchAll(WAIT_BEGUN)].map((match) => Number(match[1]) / 1000)
   const idleBegun = () => [...stderr.matchAll(IDLE_BEGUN)].map((match) => Number(match[1]) / 1000)
+  const idleStarts = () => [...stderr.matchAll(IDLE_BEGUN)].map((match) => Number(match[2]) / 1000)
   // Connected on the first move. core-sim binds the socket before it reads its input, so it
   // is there by the time the core has answered anything.
   let clock: Socket | undefined
@@ -274,6 +279,11 @@ export function startCore(
       await untilStderr(() => idleBegun().length >= count, `${count} idle waits`)
       return idleBegun().slice(0, count)
     },
+    idleWaitStarts: async (count) => {
+      await untilStderr(() => idleStarts().length >= count, `${count} idle waits`)
+      return idleStarts().slice(0, count)
+    },
+    exitCode: () => child.exitCode,
     kill: async () => {
       record({ from: 'scenario', note: 'the core is killed' })
       child.kill('SIGKILL')
