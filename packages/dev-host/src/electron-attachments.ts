@@ -9,6 +9,7 @@
 
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { safeName } from '@letterbox/client/files'
 import type { BlobId } from '@letterbox/protocol'
 import { checkQuit, equal, quit, seed, STATE, WAIT_MS, withApp, within } from './electron-app.ts'
 import type { DevServer } from './server.ts'
@@ -192,6 +193,20 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       [basename(dirname(opened)), basename(dirname(program))].toSorted(),
       'attachments: only the two opened copies are left in the temp folder',
     )
+    // A sender can name a file anything, at any length, and the reader cleans the name as a
+    // conversation opens. The cleaning takes time in proportion to the name, not its square.
+    const hostile = ['a'.repeat(100_000), `a${' '.repeat(100_000)}b`, '中'.repeat(100_000), '.'.repeat(100_000)]
+    const timings = hostile.map((name) => {
+      const started = performance.now()
+      const cleaned = safeName(`${name}.exe`)
+      return { ms: performance.now() - started, bytes: new TextEncoder().encode(cleaned).length }
+    })
+    equal(
+      timings.map((timing) => timing.ms < 50 && timing.bytes <= 201),
+      [true, true, true, true],
+      `attachments: names of 100,000 characters clean in under 50 ms each, to at most 200 bytes (${timings.map((timing) => timing.ms.toFixed(1)).join(', ')} ms)`,
+    )
+
     // A disk that fills up part way through the copy, over a file the person chose to replace.
     const kept = join(saved, 'kept.pdf')
     writeFileSync(kept, 'the file the person had')
@@ -270,10 +285,11 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     const before = await asked()
     await answer(null, 0)
     equal(await press('Open', SETUP), 'rest', "attachments: declining main's warning leaves the program's row at rest")
+    const after = await asked()
     equal(
-      [(await asked()).warned.length - before.warned.length, (await asked()).opened.length - before.opened.length],
-      [1, 0],
-      "attachments: Open on the program's row brings main's one warning, and nothing opens",
+      [after.warned.slice(before.warned.length), after.opened.length - before.opened.length],
+      [[warning(SETUP)], 0],
+      "attachments: Open on the program's row brings main's one warning, for that program, and nothing opens",
     )
     equal(await press('Open', REPORT), 'rest', "attachments: Open on the PDF's row comes back to rest")
     equal(
@@ -285,7 +301,7 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     sim.mailbox.setOffline(true)
     equal(
       [await press('Save', REPORT), await row(REPORT).locator('[data-field="failed"]').textContent()],
-      ['failed', "Couldn't fetch while offline"],
+      ['failed', 'Couldn’t fetch · offline'],
       'attachments: offline, the row says it could not fetch the file',
     )
     sim.mailbox.setOffline(false)

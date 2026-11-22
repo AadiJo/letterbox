@@ -286,7 +286,8 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
       {/* On its way, the reply reads a step quieter than mail the provider holds. */}
       <div className={`mt-[18px] ${going ? 'opacity-70' : ''}`}>
         <Body body={message.body} />
-        <Attachments attachments={message.attachments} />
+        {/* Its files can be fetched only once the provider holds the message. */}
+        <Attachments attachments={message.attachments} held={delivery === null} />
       </div>
     </section>
   )

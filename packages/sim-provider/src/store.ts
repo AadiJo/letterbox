@@ -165,12 +165,18 @@ export const bodyOf = (seed: SeedMessage): RemoteBody => ({
 })
 
 /** What a seed attachment holds: its name and a line end, over and over, to its size, or to `served` when it has one. */
-export const placeholderContent = ({ name, size, served }: SeedAttachment): Buffer =>
+export const placeholderContent = ({ name, size, served }: Pick<SeedAttachment, 'name' | 'size' | 'served'>): Buffer =>
   Buffer.alloc(served ?? size, `${name}\n`)
 
-/** The content of each of a seed message's attachments, as `bodyOf` lists them, built when read. */
+/**
+ * The content of each of a seed message's attachments, as `bodyOf` lists them, built when read.
+ * The name and length are taken now, so a caller that changes its seed later changes nothing here.
+ */
 export const contentsOf = (seed: SeedMessage): (() => Buffer)[] =>
-  attachmentsOf(seed).map((attachment) => () => placeholderContent(attachment))
+  attachmentsOf(seed).map(({ name, size, served }) => {
+    const length = served ?? size
+    return () => placeholderContent({ name, size: length })
+  })
 
 /** A seed message's attachments: as it names them, or that many placeholder files. */
 const attachmentsOf = ({ attachments = 0 }: SeedMessage): readonly SeedAttachment[] =>

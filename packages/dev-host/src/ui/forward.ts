@@ -151,12 +151,30 @@ export async function checkForward(page: Page, relay: Relay, mailbox: SimMailbox
   await text(page).click()
   await page.keyboard.press('Control+Enter')
   await composePage(page).waitFor({ state: 'detached' })
+  // While the core holds it, its file shows, with no Open or Save: the provider has no copy yet.
+  await nav(page, 'Sent').click()
+  await open(page, 'Fwd: Cover draft for issue 12')
+  const held = page.locator('[data-message="open"][data-delivery="held"] [data-field="attachment"]')
+  await held.first().waitFor()
+  equal(
+    [await held.count(), await held.getByRole('button').count()],
+    [1, 0],
+    'a forward the core still holds shows its file, with no Open or Save',
+  )
   hold.on = false
   await page.reload()
   await page.locator('[role="listbox"][aria-label="Your turn"] [role="option"]').first().waitFor()
   await nav(page, 'Sent').click()
   await open(page, 'Fwd: Cover draft for issue 12')
   await page.locator('[data-message="open"][data-delivery="delivered"]').waitFor()
+  equal(
+    await page
+      .locator('[data-message="open"][data-delivery="delivered"] [data-field="attachment"]')
+      .getByRole('button')
+      .allTextContents(),
+    ['Open', 'Save'],
+    'once the provider holds the forward, its file offers Open and Save',
+  )
   const copies = mailbox.sent()
   equal(
     [copies.length, copies[0]?.recipients, filesOf(copies[0]?.raw ?? '').map((file) => file.name)],

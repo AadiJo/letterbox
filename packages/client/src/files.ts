@@ -27,16 +27,41 @@ const RESERVED = /[/\\:*?"<>|]/g
 /** The longest extension a cut keeps, dot included. ".settingcontent-ms", among the risky ones, is 18. */
 const MAX_EXTENSION = 32
 
-/** Drops a leading dot, which hides a file or makes "..", and trailing dots and spaces, which Windows drops itself. */
-const trimmed = (name: string) => name.replace(/^[\s.]+|[\s.]+$/g, '')
+/** A character `trimmed` drops at either end: a dot, or white space as `\s` means it. */
+const trimmable = (char: string | undefined) => char === '.' || (char !== undefined && /\s/.test(char))
 
-/** Cuts a name to MAX_BYTES from the end of its stem, keeping its extension. */
+/**
+ * Drops a leading dot, which hides a file or makes "..", and trailing dots and spaces, which
+ * Windows drops itself. One scan from each end, so a name of any length costs its length:
+ * the name is the sender's, and the reader runs this as a conversation opens.
+ */
+function trimmed(name: string): string {
+  let start = 0
+  let end = name.length
+  while (start < end && trimmable(name[start])) start += 1
+  while (end > start && trimmable(name[end - 1])) end -= 1
+  return name.slice(start, end)
+}
+
+/** The bytes one code point takes in UTF-8, as TextEncoder writes it: a lone surrogate becomes U+FFFD, three bytes. */
+const utf8Length = (point: number) => (point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4)
+
+/**
+ * Cuts a name to MAX_BYTES from the end of its stem, keeping its extension: the longest run of
+ * whole code points from the start that fits beside the extension. One walk over the stem.
+ */
 function shorten(name: string): string {
   const dot = name.lastIndexOf('.')
   const extension = dot > 0 && name.length - dot <= MAX_EXTENSION ? name.slice(dot) : ''
-  let stem = Array.from(name.slice(0, name.length - extension.length))
-  while (stem.length > 0 && bytesOf(stem.join('') + extension) > MAX_BYTES) stem = stem.slice(0, -1)
-  return stem.join('') + extension
+  const budget = MAX_BYTES - bytesOf(extension)
+  let used = 0
+  let end = 0
+  for (const char of name.slice(0, name.length - extension.length)) {
+    used += utf8Length(char.codePointAt(0) ?? 0)
+    if (used > budget) break
+    end += char.length
+  }
+  return name.slice(0, end) + extension
 }
 
 /**
