@@ -40,7 +40,7 @@ mod your_turn;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
-pub use body::{Body, Images, Quote, ShowImages, Tracker, TrackerReason, Unavailable, Unsubscribe, UnsubscribeWeb};
+pub use body::{Body, Images, Quote, ShowImages, Tracker, TrackerReason, Unavailable, Unsubscribe, UnsubscribeSource};
 pub use command::{Command, TurnChoice};
 pub use holder::ChangeHolder;
 pub use ids::{

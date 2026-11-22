@@ -85,7 +85,7 @@ fn message<'a>(world: &World, record: &'a MessageRecord, pending: &Pending<'a>, 
         Some(BodyResult::Gone) => Body::Unavailable {
             reason: Unavailable::Gone,
         },
-        Some(BodyResult::Body { body }) => body::ready(body, &record.reading, body::shown(world, record)),
+        Some(BodyResult::Body { body }) => body::ready(world, record, body),
     };
     let attachments = match &record.body {
         Some(BodyResult::Body { body }) => body.attachments.as_slice(),

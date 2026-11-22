@@ -5,7 +5,7 @@
 //!      `data-letterbox-` attribute the sender wrote dropped, and a marker comment before the
 //!      element where the quote starts, which `Html::take_marker` turns into an offset.
 //!   3. `blocked` rewrites that into the body with images blocked: each remote image a
-//!      placeholder, and each remote CSS image `none`.
+//!      placeholder (an `<img>` becomes a `<span>` of its alt text), and each remote CSS image `none`.
 //!
 //! An image is anything the renderer's `img-src` governs that the markup names: `<img>` src
 //! and srcset, `<source>` srcset, an image `<input>`, a `<video>` poster, an SVG `<image>`,
@@ -35,6 +35,10 @@ pub struct Html {
     pub trackers: Vec<(String, Reason)>,
     /// Where the quote starts, in bytes, in `shown` and in `blocked`.
     pub quote: Option<(usize, Option<usize>)>,
+    /// How many earlier messages the quote holds (quote.rs). 0 with no quote.
+    pub earlier: u64,
+    /// The text before the quote, as written, entities decoded, for the message's preview.
+    pub words: String,
     pub link: Option<String>,
 }
 
@@ -42,7 +46,12 @@ pub struct Html {
 /// ambiguous enough that it cannot be sure how a browser would read it: then the caller
 /// shows the plain text instead.
 pub fn process(input: &str) -> Option<Html> {
-    let (boundary, link) = scan(input)?;
+    let Scanned {
+        boundary,
+        earlier,
+        words,
+        link,
+    } = scan(input)?;
     let marker = boundary.map(|_| marker_for(input));
     let mut found = Found::default();
     let shown = shown(
@@ -70,6 +79,8 @@ pub fn process(input: &str) -> Option<Html> {
         remote: found.remote,
         trackers: found.trackers,
         quote: at_shown.map(|at| (at, at_blocked)),
+        earlier,
+        words,
         link,
     })
 }
@@ -128,10 +139,26 @@ struct Reading {
     anchor: Option<(u32, String, String)>,
     /// Each unsubscribe link: its ordinal, how it looks and its URL.
     links: Vec<(u32, Link, String)>,
+    /// The first of the shown text, chunk by chunk, each with its pos, for the preview.
+    words: Vec<(u32, String)>,
+    /// The bytes of text in `words`, which stops at PREVIEW_TEXT.
+    worded: usize,
 }
 
-/// Pass 1: where the quote starts, and the best unsubscribe link before it.
-fn scan(input: &str) -> Option<(Option<Place>, Option<String>)> {
+/// How much shown text pass 1 keeps for a preview. A preview takes the first 200 characters of
+/// the new part, and the rest gives room for markup between them.
+const PREVIEW_TEXT: usize = 2048;
+
+/// What pass 1 found.
+struct Scanned {
+    boundary: Option<Place>,
+    earlier: u64,
+    words: String,
+    link: Option<String>,
+}
+
+/// Pass 1: where the quote starts and what it holds, the text before it, and the best unsubscribe link before it.
+fn scan(input: &str) -> Option<Scanned> {
     let reading = Rc::new(RefCell::new(Reading::default()));
     let (elements, texts) = (Rc::clone(&reading), Rc::clone(&reading));
     let on_element = element!("*", move |el| {
@@ -179,6 +206,9 @@ fn scan(input: &str) -> Option<(Option<Place>, Option<String>)> {
                 if matches!(name.as_str(), "style" | "script" | "title" | "template") {
                     reading.hidden = reading.hidden.saturating_sub(1);
                 }
+                if name == "blockquote" {
+                    reading.scan.left_blockquote();
+                }
                 if name == "a"
                     && let Some((ordinal, href, text)) = reading.anchor.take()
                     && let Some(look) = unsubscribe::link(&href, &text)
@@ -200,6 +230,10 @@ fn scan(input: &str) -> Option<(Option<Place>, Option<String>)> {
             reading.scan.content(pos);
         }
         reading.scan.text(pos, text);
+        if reading.worded < PREVIEW_TEXT {
+            reading.worded += text.len();
+            reading.words.push((pos, text.to_owned()));
+        }
         if let Some((_, _, anchor_text)) = &mut reading.anchor
             && anchor_text.len() < 200
         {
@@ -216,7 +250,18 @@ fn scan(input: &str) -> Option<(Option<Place>, Option<String>)> {
     let before = |ordinal: u32| boundary.is_none_or(|place| ordinal < place.ordinal);
     let mut links: Vec<&(u32, Link, String)> = reading.links.iter().filter(|link| before(link.0)).collect();
     links.sort_by_key(|(ordinal, look, _)| (std::cmp::Reverse(*look), *ordinal));
-    Some((boundary, links.first().map(|(_, _, url)| url.clone())))
+    let words: String = reading
+        .words
+        .iter()
+        .filter(|(pos, _)| boundary.is_none_or(|place| *pos < place.pos))
+        .map(|(_, text)| format!(" {text}"))
+        .collect();
+    Some(Scanned {
+        boundary,
+        earlier: boundary.map_or(0, |place| reading.scan.earlier(place)),
+        words: html_escape::decode_html_entities(&words).into_owned(),
+        link: links.first().map(|(_, _, url)| url.clone()),
+    })
 }
 
 /// What pass 2 found.
@@ -395,16 +440,19 @@ fn blocked(shown: &str, remote: &[String]) -> Option<String> {
             let candidates = trackers::srcset(&srcset);
             candidates.iter().find_map(|candidate| index(candidate.url))
         });
-        if from_src.is_some() {
-            el.remove_attribute("src");
-        }
-        if from_srcset.is_some() {
-            el.remove_attribute("srcset");
-        }
         if name == "img"
             && let Some(at) = from_src.or(from_srcset)
         {
-            set(el, "data-letterbox-image", &at.to_string());
+            let alt = attribute(el, "alt").unwrap_or_default();
+            let line = format!(
+                r#"<span data-letterbox-image="{at}">{}</span>"#,
+                html_escape::encode_text(alt.trim())
+            );
+            el.replace(&line, ContentType::Html);
+            return Ok(());
+        }
+        if from_srcset.is_some() {
+            el.remove_attribute("srcset");
         }
         Ok(())
     });

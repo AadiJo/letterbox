@@ -128,12 +128,23 @@ text: string,
  * state. While images are blocked, each remote image is a placeholder (see `Images`)
  * and no `url()` in its CSS names a remote image.
  */
-html: string | null, images: Images, quote: Quote, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
+html: string | null, images: Images, 
+/**
+ * None when the body ends in no quote.
+ */
+quote: Quote | null, 
+/**
+ * The start of the new part, at most 200 characters with runs of space made one: from
+ * the text before its quote, or from the HTML's text before its quote when the text is
+ * blank. A folded message row shows it.
+ */
+preview: string, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
 
 export type Unavailable = "offline" | "too-large" | "gone";
 
 /**
- * A message's remote images, and the trackers the core took out.
+ * A message's remote images, and the trackers the core took out. It has blocked images when
+ * `remote` is not empty and `shown` is `blocked`.
  */
 export type Images = { 
 /**
@@ -142,11 +153,12 @@ export type Images = {
 shown: ShowImages, 
 /**
  * Every remote image URL left after trackers are taken out, once each, in the order the
- * HTML names them. While blocked, an element that loaded one no longer names it and
- * carries `data-letterbox-image` with the URL's index here instead: an `<img>` (its `src`
- * and `srcset` gone), an image `<input>`, a `<video>`'s poster or an SVG `<image>`. One
- * whose `background` attribute named one carries `data-letterbox-background`. Empty means
- * showing images changes nothing.
+ * HTML names them. Empty means showing images changes nothing. While blocked:
+ *   - an `<img>` that loaded one is `<span data-letterbox-image="i">alt</span>`: `i` is the
+ *     URL's index here and the text is the image's alt text, so it can show as one line,
+ *   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` no longer names it and
+ *     carries `data-letterbox-image="i"`,
+ *   - an element whose `background` attribute named one carries `data-letterbox-background="i"`.
  */
 remote: Array<string>, 
 /**
@@ -176,9 +188,10 @@ host: string, reason: TrackerReason, };
 export type TrackerReason = "known-host" | "tiny" | "hidden" | "beacon";
 
 /**
- * Where the quoted history at the end of a body starts, so a UI can fold it behind "…".
- * Each is an offset in UTF-16 code units, what JavaScript's `slice` counts: the new part is
- * `body.text.slice(0, quote.text)`, and the quote is the rest. The body itself stays whole.
+ * The quoted history at the end of a body, so a UI can fold it. `text` and `html` are where it
+ * starts, as offsets in UTF-16 code units, what JavaScript's `slice` counts: the new part is
+ * `body.text.slice(0, quote.text)`, and the quote is the rest. At least one is set. The body
+ * itself stays whole.
  */
 export type Quote = { 
 /**
@@ -189,28 +202,31 @@ text: number | null,
  * Into `html`, in the state `images.shown` is in. None when the HTML ends in no quote.
  * The new part, `body.html.slice(0, quote.html)`, is a prefix a browser closes by itself.
  */
-html: number | null, };
+html: number | null, 
+/**
+ * How many earlier messages it holds, read from the markup: the deepest nesting of its
+ * levels (`>` in text, `blockquote` in HTML), or its number of Outlook dividers, whichever
+ * is more. At least 1.
+ */
+earlier: number, 
+/**
+ * True when it only repeats what this conversation holds: the message replies to messages
+ * that are all in this conversation (every Message-ID in its References), and to at least
+ * `earlier` of them.
+ */
+inConversation: boolean, };
 
 /**
- * How to unsubscribe from the list a message came from. The core only reads it: acting on it
- * sends mail or a request to the sender, which confirms the address is read.
+ * How to unsubscribe from the list a message came from: the one way to use, chosen by the
+ * core, best first: one-click, then mailto, then a page to open. The core only reads it:
+ * acting on it sends mail or a request to the sender, which confirms the address is read.
  */
-export type Unsubscribe = { "kind": "header", 
-/**
- * A `mailto:` URI, with any subject and body it names.
- */
-mailto: string | null, web: UnsubscribeWeb | null, } | { "kind": "link", url: string, };
+export type Unsubscribe = { "method": "one-click", url: string, } | { "method": "mailto", to: string, uri: string, } | { "method": "web", url: string, from: UnsubscribeSource, };
 
 /**
- * An https URL from the List-Unsubscribe header.
+ * Where a web unsubscribe target came from.
  */
-export type UnsubscribeWeb = { url: string, 
-/**
- * True when List-Unsubscribe-Post says `List-Unsubscribe=One-Click` (RFC 8058): a POST of
- * that body to `url` unsubscribes with no page to visit. RFC 8058 also asks that a DKIM
- * signature cover both headers, which the core does not check.
- */
-oneClick: boolean, };
+export type UnsubscribeSource = "header" | "body";
 
 export type Attachment = { blobId: BlobId, name: string, mime: string, size: number, inline: boolean, };
 

@@ -77,15 +77,15 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'showing images serves the html as it came, trackers and all',
     file: body('mod.rs'),
-    find: '        _ => (processed.html.clone(), shown_at),',
-    replace: '        _ => (body.html.clone(), shown_at),',
+    find: '    } else {\n        processed.html.clone()\n    };',
+    replace: '    } else {\n        body.html.clone()\n    };',
     scenarios: IMAGES,
   },
   {
     name: "the user's choice to show images is ignored",
     file: body('mod.rs'),
-    find: '        (Some(blocked), ShowImages::Blocked) => (Some(blocked.clone()), blocked_at),',
-    replace: '        (Some(blocked), _) => (Some(blocked.clone()), blocked_at),',
+    find: '    let blocked = shown == ShowImages::Blocked && processed.blocked.is_some();',
+    replace: '    let blocked = processed.blocked.is_some();',
     scenarios: IMAGES,
   },
   {
@@ -106,8 +106,8 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'blocked html is folded at the offset of the shown html',
     file: body('mod.rs'),
-    find: '        (Some(blocked), ShowImages::Blocked) => (Some(blocked.clone()), blocked_at),',
-    replace: '        (Some(blocked), ShowImages::Blocked) => (Some(blocked.clone()), shown_at),',
+    find: '            html: if blocked { folded.blocked } else { folded.html },',
+    replace: '            html: folded.html,',
     scenarios: QUOTES,
   },
   {
@@ -139,6 +139,41 @@ export const BODY_MUTATIONS: Mutation[] = [
     scenarios: QUOTES,
   },
   {
+    name: 'a blocked image shows without its alt text',
+    file: body('html.rs'),
+    find: '                html_escape::encode_text(alt.trim())',
+    replace: '                html_escape::encode_text(&alt[..0])',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'a quote is said to hold one message however deep it nests',
+    file: body('quote.rs'),
+    find: '        depth.unwrap_or(0).max(dividers).max(1)',
+    replace: '        drop(depth);\n        dividers.max(1)',
+    scenarios: QUOTES,
+  },
+  {
+    name: 'a plain text quote is said to hold one message however many levels of > it has',
+    file: body('quote.rs'),
+    find: '.map(|(_, line)| marks(line))',
+    replace: '.map(|(_, line)| marks(line).min(1))',
+    scenarios: QUOTES,
+  },
+  {
+    name: 'a quote is said to repeat this conversation without looking at what it replies to',
+    file: body('mod.rs'),
+    find: '    references.len() as u64 >= earlier && !references.is_empty() && references.iter().all(held)',
+    replace: '    let _ = (references, held, earlier);\n    true',
+    scenarios: QUOTES,
+  },
+  {
+    name: 'a folded row previews the quoted text too',
+    file: body('mod.rs'),
+    find: '            preview: preview_of(new_text),',
+    replace: '            preview: preview_of(&body.text),',
+    scenarios: QUOTES,
+  },
+  {
     name: 'one-click is claimed without List-Unsubscribe-Post',
     file: body('unsubscribe.rs'),
     find: '    let one_click = headers\n        .list_unsubscribe_post\n        .trim()\n        .eq_ignore_ascii_case("List-Unsubscribe=One-Click");',
@@ -148,15 +183,15 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'an http List-Unsubscribe URL is offered',
     file: body('unsubscribe.rs'),
-    find: '        .find(|url| url.scheme() == "https")\n        .map(|url| UnsubscribeWeb {',
-    replace: '        .find(|url| url.scheme().starts_with("http"))\n        .map(|url| UnsubscribeWeb {',
+    find: '    let web = urls.iter().find(|url| url.scheme() == "https").map(Url::to_string);',
+    replace: '    let web = urls.iter().find(|url| url.scheme().starts_with("http")).map(Url::to_string);',
     scenarios: UNSUBSCRIBE,
   },
   {
     name: 'an unsubscribe link in the quoted part is offered',
     file: body('mod.rs'),
-    find: 'unsubscribe::link_in_text(&body.text[..text_quote.unwrap_or(body.text.len())])',
-    replace: 'unsubscribe::link_in_text(&body.text)',
+    find: '    let text_link = || unsubscribe::link_in_text(new_text);',
+    replace: '    let text_link = || unsubscribe::link_in_text(&body.text);',
     scenarios: UNSUBSCRIBE,
   },
   {

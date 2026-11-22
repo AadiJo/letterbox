@@ -8,10 +8,15 @@
 //!
 //! `flush` (subscriptions.rs) runs the pipeline on the stored bodies of the conversations
 //! someone has open whose reading is missing or from an older VERSION, in one commit, before
-//! it returns. A message the user sends is processed as the outbox stores it (`processed_now`),
-//! so a reply shows whole at once: it is the user's own draft, and small. So a body fetched in the background is processed in that background task, a
+//! it returns. So a body fetched in the background is processed in that background task, a
 //! change to the rules reprocesses each body lazily when it is next opened, and a message
-//! shows `loading` until then. Raising VERSION is how a rules change reaches stored bodies.
+//! shows `loading` until then. Raising VERSION is how a rules change reaches stored bodies. A
+//! message the user sends is processed as the outbox stores it (`processed_now`), so a reply
+//! shows whole at once: it is the user's own draft, and small.
+//!
+//! A pass that reads color hints from the HTML, to restyle it for a dark reader, belongs in
+//! html.rs beside `shown`, which already reads every element's inline style and every `<style>`
+//! block. What it finds would be kept in `Processed` with the rest, under a new VERSION.
 //!
 //! HTML is hostile, so it is read with lol_html, Cloudflare's streaming rewriter (the engine
 //! behind Workers' HTMLRewriter), and never with patterns. It tokenizes as the HTML standard
@@ -30,6 +35,7 @@ use std::rc::Rc;
 
 use letterbox_protocol::{
     Body, ChangeId, ChangeResult, CoreMessage, Images, MessageId, Quote, Refusal, ShowImages, Tracker, Unsubscribe,
+    UnsubscribeSource,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,11 +43,14 @@ use crate::Inner;
 use crate::adapter::{BodyResult, RemoteBody};
 use crate::effect::Effect;
 use crate::world::{
-    AccountRecord, ChangeOutcome, ChangeRecord, MessageRecord, World, put_account, put_change, put_message,
+    AccountRecord, ChangeOutcome, ChangeRecord, MessageRecord, World, put_account, put_change, put_message, scoped,
 };
 
 /// The version of the rules. Raise it whenever a change to them would change a `Processed`.
 const VERSION: u32 = 1;
+
+/// The most characters a preview holds.
+const PREVIEW: usize = 200;
 
 /// What the pipeline made of a message's body, and the user's choice for its images.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -77,18 +86,32 @@ struct Processed {
     blocked: Option<String>,
     remote: Vec<String>,
     trackers: Vec<(String, trackers::Reason)>,
-    /// Where each quote starts, in UTF-16 code units: in the text, in `html` and in `blocked`.
-    quote: (Option<u64>, Option<u64>, Option<u64>),
+    quote: Option<Folded>,
+    /// The start of the new part (see `Body::Ready::preview`).
+    preview: String,
     /// An unsubscribe link in the body.
     link: Option<String>,
+}
+
+/// Where a body's quote starts, in UTF-16 code units, and how many earlier messages it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Folded {
+    text: Option<u64>,
+    html: Option<u64>,
+    blocked: Option<u64>,
+    earlier: u64,
 }
 
 /// Runs the pipeline on one body.
 fn process(body: &RemoteBody) -> Processed {
     let units = |text: &str, at: usize| text[..at].encode_utf16().count() as u64;
     let text_quote = quote::text(&body.text);
+    let new_text = &body.text[..text_quote.map_or(body.text.len(), |(at, _)| at)];
     let html = body.html.as_deref().and_then(html::process);
-    let text_link = || unsubscribe::link_in_text(&body.text[..text_quote.unwrap_or(body.text.len())]);
+    let text_link = || unsubscribe::link_in_text(new_text);
+    let text_at = text_quote.map(|(at, _)| units(&body.text, at));
+    let text_earlier = text_quote.map_or(0, |(_, earlier)| earlier);
     let Some(html) = html else {
         return Processed {
             version: VERSION,
@@ -96,27 +119,49 @@ fn process(body: &RemoteBody) -> Processed {
             blocked: None,
             remote: Vec::new(),
             trackers: Vec::new(),
-            quote: (text_quote.map(|at| units(&body.text, at)), None, None),
+            quote: text_at.map(|text| Folded {
+                text: Some(text),
+                html: None,
+                blocked: None,
+                earlier: text_earlier,
+            }),
+            preview: preview_of(new_text),
             link: text_link(),
         };
     };
     let (shown_at, blocked_at) = html.quote.unzip();
-    let blocked_at = blocked_at.flatten();
+    let html_at = shown_at.map(|at| units(&html.shown, at));
+    let blocked_at = blocked_at
+        .flatten()
+        .zip(html.blocked.as_deref())
+        .map(|(at, blocked)| units(blocked, at));
+    let quote = (text_at.is_some() || html_at.is_some()).then(|| Folded {
+        text: text_at,
+        html: html_at,
+        blocked: blocked_at,
+        earlier: text_earlier.max(html.earlier),
+    });
+    let preview = if new_text.trim().is_empty() {
+        preview_of(&html.words)
+    } else {
+        preview_of(new_text)
+    };
     Processed {
         version: VERSION,
-        quote: (
-            text_quote.map(|at| units(&body.text, at)),
-            shown_at.map(|at| units(&html.shown, at)),
-            blocked_at
-                .zip(html.blocked.as_deref())
-                .map(|(at, blocked)| units(blocked, at)),
-        ),
+        quote,
+        preview,
         link: html.link.or_else(text_link),
         html: Some(html.shown),
         blocked: html.blocked,
         remote: html.remote,
         trackers: html.trackers,
     }
+}
+
+/// The first PREVIEW characters of `text`, each run of space made one.
+fn preview_of(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words.join(" ").chars().take(PREVIEW).collect()
 }
 
 /// True when a message holds a body the pipeline has not run on at this VERSION.
@@ -137,15 +182,29 @@ pub fn shown(world: &World, record: &MessageRecord) -> ShowImages {
     }
 }
 
-/// A stored body as a client sees it: loading until the pipeline has run on it.
-pub fn ready(body: &RemoteBody, reading: &Reading, shown: ShowImages) -> Body {
-    let Some(processed) = reading.current() else {
+/// True when every message `record` replies to (its References) is in its conversation, and
+/// there are at least `earlier` of them: then its quote only repeats what the conversation holds.
+fn in_conversation(world: &World, record: &MessageRecord, earlier: u64) -> bool {
+    let references = &record.facts.references;
+    let held = |reference: &String| {
+        let ids = world.messages_by_message_id.get(&scoped(&record.account_id, reference));
+        let mut records = ids.into_iter().flatten().filter_map(|id| world.messages.get(id));
+        records.any(|other| other.thread_id == record.thread_id)
+    };
+    references.len() as u64 >= earlier && !references.is_empty() && references.iter().all(held)
+}
+
+/// A message's stored body as a client sees it: loading until the pipeline has run on it.
+pub fn ready(world: &World, record: &MessageRecord, body: &RemoteBody) -> Body {
+    let Some(processed) = record.reading.current() else {
         return Body::Loading;
     };
-    let (text_at, shown_at, blocked_at) = processed.quote;
-    let (html, html_at) = match (&processed.blocked, shown) {
-        (Some(blocked), ShowImages::Blocked) => (Some(blocked.clone()), blocked_at),
-        _ => (processed.html.clone(), shown_at),
+    let shown = shown(world, record);
+    let blocked = shown == ShowImages::Blocked && processed.blocked.is_some();
+    let html = if blocked {
+        processed.blocked.clone()
+    } else {
+        processed.html.clone()
     };
     Body::Ready {
         text: body.text.clone(),
@@ -162,10 +221,13 @@ pub fn ready(body: &RemoteBody, reading: &Reading, shown: ShowImages) -> Body {
                 })
                 .collect(),
         },
-        quote: Quote {
-            text: text_at,
-            html: html_at,
-        },
+        quote: processed.quote.map(|folded| Quote {
+            text: folded.text,
+            html: if blocked { folded.blocked } else { folded.html },
+            earlier: folded.earlier,
+            in_conversation: in_conversation(world, record, folded.earlier),
+        }),
+        preview: processed.preview.clone(),
     }
 }
 
@@ -173,8 +235,11 @@ pub fn ready(body: &RemoteBody, reading: &Reading, shown: ShowImages) -> Body {
 /// the link the pipeline found in its body.
 pub fn unsubscribe_of(record: &MessageRecord) -> Option<Unsubscribe> {
     unsubscribe::from_headers(&record.facts.headers).or_else(|| {
-        let link = record.reading.current()?.link.clone()?;
-        Some(Unsubscribe::Link { url: link })
+        let url = record.reading.current()?.link.clone()?;
+        Some(Unsubscribe::Web {
+            url,
+            from: UnsubscribeSource::Body,
+        })
     })
 }
 

@@ -86,11 +86,9 @@ const summaryFields = {
   pending: 'boolean',
 } as const
 
-const unsubscribe = type({
-  kind: "'header'",
-  mailto: 'string | null',
-  web: type({ url: 'string', oneClick: 'boolean' }).or('null'),
-}).or({ kind: "'link'", url: 'string' })
+const unsubscribe = type({ method: "'one-click'", url: 'string' })
+  .or({ method: "'mailto'", to: 'string', uri: 'string' })
+  .or({ method: "'web'", url: 'string', from: "'header' | 'body'" })
 
 const sender = type({
   id: 'string',
@@ -117,7 +115,10 @@ const body = type({
   text: 'string',
   html: 'string | null',
   images,
-  quote: { text: 'number | null', html: 'number | null' },
+  quote: type({ text: 'number | null', html: 'number | null', earlier: 'number', inConversation: 'boolean' }).or(
+    'null',
+  ),
+  preview: 'string',
 })
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })

@@ -5,7 +5,7 @@
 
 import type { Seed, SeedMessage } from '@letterbox/sim-provider/contract'
 import type { Body, Command, Message, ShowImages } from '@letterbox/protocol'
-import { ME, openThread, PASSWORD, start, thread } from '../src/fixtures.ts'
+import { ME, openThread, PASSWORD, start, sync, thread } from '../src/fixtures.ts'
 import { scenario, type Scenario } from '../src/scenario.ts'
 import type { CoreClient, Subscription } from '../src/client.ts'
 
@@ -69,11 +69,11 @@ const SHOWN = [
   '<div style="background:none">Thanks for reading.</div>',
 ].join('')
 
-/** The newsletter with images blocked: each remote image is a placeholder that names its place in REMOTE. */
+/** The newsletter with images blocked: each remote image is a placeholder that names its place in REMOTE, an `<img>` one line of its alt text. */
 const BLOCKED = [
   '<table><tr><td data-letterbox-background="0">',
-  '<img width="600" alt="Winter sale" data-letterbox-image="1">',
-  '<img src="cid:logo" alt="Shop" data-letterbox-image="2">',
+  '<span data-letterbox-image="1">Winter sale</span>',
+  '<span data-letterbox-image="2">Shop</span>',
   '<p style="background-image:none">Everything is on sale.</p>',
   '<video data-letterbox-image="4"></video>',
   '<input type="image" alt="Shop now">',
@@ -175,7 +175,7 @@ scenario('trackers leave an html body for good, and its remote images wait until
   const other = bodyOf(spring)
   t.equal(
     [other.body.images.shown, other.body.html],
-    ['blocked', '<p>Spring is here.</p><img alt="Spring" data-letterbox-image="0">'],
+    ['blocked', '<p>Spring is here.</p><span data-letterbox-image="0">Spring</span>'],
     "showing one message does not show the sender's next",
   )
   await done(t, core, show(other.message, 'sender'), 'always show this sender')
@@ -186,6 +186,22 @@ scenario('trackers leave an html body for good, and its remote images wait until
   )
   t.equal(bodyOf(winter).body.images.shown, 'sender', "the sender's other message, its address in other case, does too")
   noTrackers(t, bodyOf(winter).body, 'shown for the sender')
+  box.deliver(
+    newsletter(
+      'summer',
+      'Summer sale',
+      SHOP,
+      '<img src="https://cdn.shop.example/summer.jpg" alt="Summer">',
+      '2025-12-03T09:00:00.000Z',
+    ),
+  )
+  await sync(core)
+  const summer = await openThread(core, (await thread(core, 'Summer sale')).id)
+  t.equal(
+    [bodyOf(summer).body.images.shown, bodyOf(summer).body.html],
+    ['sender', '<img src="https://cdn.shop.example/summer.jpg" alt="Summer">'],
+    "the sender's new mail shows its images as it arrives",
+  )
 
   const fetched = box.calls().body
   await core.stop()

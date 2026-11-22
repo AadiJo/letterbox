@@ -1,19 +1,23 @@
 //! Where to unsubscribe from the list a message came from. The core reads it and never acts
 //! on it: a mailto send or a POST to the sender's URL tells the sender the address is read.
 //!
-//! The List-Unsubscribe header (RFC 2369) wins: its first `mailto:` URI and its first https
-//! URL, with one-click when List-Unsubscribe-Post is `List-Unsubscribe=One-Click` (RFC 8058).
-//! Its http URLs are left out, as RFC 8058 allows one-click over https only. Without the
-//! header, a link in the body before its quote (see `Link`): in HTML an `<a>` with an https
-//! `href`, the first whose text says "unsubscribe", else the first whose `href` does. In
-//! plain text, the first https URL on a line that says "unsubscribe", or on the line after it.
+//! The core picks one way, best first:
+//!   1. one-click: the first https URL in List-Unsubscribe (RFC 2369), when
+//!      List-Unsubscribe-Post is `List-Unsubscribe=One-Click` (RFC 8058),
+//!   2. mailto: the first `mailto:` URI in List-Unsubscribe,
+//!   3. web: that https URL without one-click, or else a link in the body before its quote (see
+//!      `Link`): in HTML an `<a>` with an https `href`, the first whose text says "unsubscribe",
+//!      else the first whose `href` does; in plain text, the first https URL on a line that says
+//!      "unsubscribe", or on the line after it.
+//!
+//! http URLs are left out everywhere, as RFC 8058 allows one-click over https only.
 
-use letterbox_protocol::{Unsubscribe, UnsubscribeWeb};
+use letterbox_protocol::{Unsubscribe, UnsubscribeSource};
 use url::Url;
 
 use crate::adapter::RemoteHeaders;
 
-/// The header's targets, or None when it has neither a mailto nor an https one.
+/// The best way the header names, or None when it has neither a mailto nor an https one.
 pub fn from_headers(headers: &RemoteHeaders) -> Option<Unsubscribe> {
     let value = &headers.list_unsubscribe_value;
     let entries: Vec<&str> = if value.contains('<') {
@@ -29,19 +33,24 @@ pub fn from_headers(headers: &RemoteHeaders) -> Option<Unsubscribe> {
         .iter()
         .filter_map(|entry| Url::parse(entry.trim()).ok())
         .collect();
-    let mailto = urls.iter().find(|url| url.scheme() == "mailto").map(Url::to_string);
+    let mailto = urls.iter().find(|url| url.scheme() == "mailto");
     let one_click = headers
         .list_unsubscribe_post
         .trim()
         .eq_ignore_ascii_case("List-Unsubscribe=One-Click");
-    let web = urls
-        .iter()
-        .find(|url| url.scheme() == "https")
-        .map(|url| UnsubscribeWeb {
-            url: url.to_string(),
-            one_click,
-        });
-    (mailto.is_some() || web.is_some()).then_some(Unsubscribe::Header { mailto, web })
+    let web = urls.iter().find(|url| url.scheme() == "https").map(Url::to_string);
+    match (web, mailto) {
+        (Some(url), _) if one_click => Some(Unsubscribe::OneClick { url }),
+        (_, Some(uri)) => Some(Unsubscribe::Mailto {
+            to: uri.path().to_owned(),
+            uri: uri.to_string(),
+        }),
+        (Some(url), None) => Some(Unsubscribe::Web {
+            url,
+            from: UnsubscribeSource::Header,
+        }),
+        (None, None) => None,
+    }
 }
 
 /// How well an `<a>` in an HTML body looks like an unsubscribe link.
