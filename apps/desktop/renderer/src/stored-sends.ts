@@ -1,13 +1,15 @@
 // What the renderer keeps across a reload, in session storage: the sends sending.ts follows,
-// and the compose page's draft (drafts.ts). Here are their rows, how a row is checked when
-// read, and the read and the write. Storage may be missing or refuse, and then nothing is
-// kept. sending.ts and drafts.ts decide what the rows hold and what each phase means.
+// the compose page's draft, and each conversation's reply draft (drafts.ts). Here are their
+// rows, how a row is checked when read, and the read and the write. Storage may be missing or
+// refuse, and then nothing is kept. sending.ts and drafts.ts decide what the rows hold and what
+// each phase means.
 
 import type { ChangeId, ThreadId } from '@letterbox/protocol'
 import type { Reply } from './drafts.ts'
 
 const KEY = 'letterbox.sends'
 const PAGE_KEY = 'letterbox.page'
+const REPLIES_KEY = 'letterbox.replies'
 
 /**
  * One send in storage, by the phase it was in. Each phase is one way sending.ts follows or
@@ -116,5 +118,38 @@ export function saveStoredPage(page: StoredPage | null) {
     else sessionStorage.removeItem(PAGE_KEY)
   } catch {
     // Without storage, a reload starts the page empty.
+  }
+}
+
+/** A conversation's reply draft the user can still edit, and whether its editor was open or folded. */
+export type StoredReply = { threadId: ThreadId; reply: Reply; state: 'open' | 'collapsed' }
+
+/** A stored reply draft, as `saveStoredReplies` wrote it: a reply, never a new message or a forward. */
+const isStoredReply = (value: unknown): value is StoredReply =>
+  isObject(value) &&
+  typeof value.threadId === 'string' &&
+  (value.state === 'open' || value.state === 'collapsed') &&
+  isReply(value.reply) &&
+  value.reply.inReplyTo !== null
+
+/** The reply drafts the last load kept. Empty when storage is missing, refuses, or holds nothing of ours. */
+export function readStoredReplies(): StoredReply[] {
+  try {
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(REPLIES_KEY) ?? '[]')
+    return Array.isArray(parsed)
+      ? parsed.filter(isStoredReply).map((row) => Object.assign(row, { reply: withDefaults(row.reply) }))
+      : []
+  } catch {
+    return []
+  }
+}
+
+/** Keeps `rows` for the next load, replacing what was kept. */
+export function saveStoredReplies(rows: readonly StoredReply[]) {
+  try {
+    if (rows.length > 0) sessionStorage.setItem(REPLIES_KEY, JSON.stringify(rows))
+    else sessionStorage.removeItem(REPLIES_KEY)
+  } catch {
+    // Without storage, a reload starts every conversation without a draft.
   }
 }
