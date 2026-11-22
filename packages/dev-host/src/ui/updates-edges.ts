@@ -1,5 +1,6 @@
 // The Updates UI check's page helpers, and its checks at the edges: the keyboard past the
-// list's loaded window, and Let go? and Updates once the core is lost. updates.ts runs them.
+// list's loaded window, a sender's files, and Let go? and Updates once the core is lost.
+// updates.ts runs them.
 
 import type { Locator, Page } from 'playwright'
 import { equal, SIZES } from './record.ts'
@@ -24,6 +25,30 @@ export const waitForText = (page: Page, selector: string, expected: string) =>
 /** The text of every match of `selector` under `within`. */
 export const texts = (within: Locator, selector: string) =>
   within.locator(selector).evaluateAll((all) => all.map((one) => one.textContent ?? ''))
+
+/**
+ * A sender's open message shows its files as the conversation reader does, each with Open and
+ * Save: the `updates` seed's bank statement carries its PDF (packages/sim-provider seeds).
+ */
+export async function checkFilesInUpdates(page: Page) {
+  await nav(page, 'Updates').click()
+  await senderRow(page, 'Northwind Bank').click()
+  const open = page.locator('[data-message="open"]')
+  await open.locator('[data-field="open-subject"]', { hasText: 'Your February statement is ready' }).waitFor()
+  const file = open.locator('[data-field="attachment"]')
+  await file.first().waitFor()
+  const name = 'Northwind-statement-2026-02.pdf'
+  equal(
+    [
+      await file.count(),
+      await file.locator('[data-field="name"]').textContent(),
+      await file.getByRole('button', { name: `Open ${name}` }).count(),
+      await file.getByRole('button', { name: `Save ${name}` }).count(),
+    ],
+    [1, name, 1, 1],
+    "the bank's statement in Updates shows its PDF, with Open and Save",
+  )
+}
 
 /**
  * With the open sender scrolled out of the list, j opens the next sender the list has loaded,

@@ -8,6 +8,7 @@ import type { MailboxId, SenderSummary, ThreadFilter, ThreadId } from '@letterbo
 import { Archive, ChevronRight, MailOpen } from 'lucide-react'
 import { Fragment, type ReactNode, type RefObject, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { type Mail, markRead } from './actions.ts'
+import { Attachments } from './Attachments.tsx'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
 import { useLost } from './core.ts'
@@ -272,7 +273,10 @@ function Dotted({ parts }: { parts: readonly ReactNode[] }) {
     ))
 }
 
-/** A conversation's newest message, open: the sender's mark, the subject in the name's place, then the body. */
+/**
+ * A conversation's newest message, open: the sender's mark, the subject in the name's place,
+ * then the body and its files, which open and save as they do in the conversation reader.
+ */
 function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary; now: number }) {
   const thread = useThreadDetail(id)
   const message = thread?.messages.at(-1)
@@ -295,6 +299,8 @@ function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary;
       </div>
       <div className="mt-[18px]">
         <Body body={message.body} />
+        {/* Its files can be fetched only once the provider holds the message. */}
+        <Attachments attachments={message.attachments} held={message.delivery === null} />
       </div>
     </section>
   )
