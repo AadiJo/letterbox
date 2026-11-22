@@ -30,8 +30,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'a send waits for the next sync instead of going out when its window ends',
     file: core('outbox.rs'),
-    find: '        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));\n',
-    replace: '        drop(account_id);\n',
+    find: '        self.restage(record, &outbound, Stage::Due);\n        self.background(&account_id, Rc::clone(self).pass(account_id.clone(), false));\n',
+    replace: '        self.restage(record, &outbound, Stage::Due);\n        drop(account_id);\n',
     scenarios: 'a reply shows at once',
   },
   {
@@ -44,8 +44,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'a reply moves the turn as soon as it is written, so one held, refused or unconfirmed shows waiting on them',
     file: core('rows.rs'),
-    find: '            .filter(|record| record.provider_ref().is_some())\n            .map(|record| TurnMessage {',
-    replace: '            .map(|record| TurnMessage {',
+    find: '        .iter()\n        .filter(|record| record.provider_ref().is_some())\n        .collect();\n    let newest',
+    replace: '        .iter()\n        .collect();\n    let newest',
     scenarios: 'the turn waits for the provider',
   },
   {

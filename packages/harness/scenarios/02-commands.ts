@@ -219,7 +219,10 @@ scenario('a change to a message that vanished settles as failed', async (t) => {
   const { core, box } = await start(t)
   const target = await thread(core, SUBJECT)
   box.setOffline(true)
+  const accounts = core.subscribe({ view: 'accounts' })
   const answer = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  // Its push finds the provider unreachable. Waiting for that keeps the order of the next steps fixed.
+  await untilAccounts(accounts, (list) => list[0]?.status.state === 'offline')
   box.expunge('review')
   box.setOffline(false)
   await sync(core)

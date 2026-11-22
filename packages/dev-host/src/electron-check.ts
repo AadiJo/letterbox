@@ -15,24 +15,29 @@
 //   insecure  a plain http page that is not loopback, so not a secure context, still gets the bridge.
 //   attachments  the Vite renderer saves and opens files through the bridge, with main's
 //             dialogs and its OS open call stubbed (electron-attachments.ts).
+//   notify    the Vite renderer, as new mail syncs in, with main's notifications and badge
+//             stubbed (electron-notify.ts).
 //   gmail     real mode with no client file, and with one that does not exist. Main exits
 //             with 1 and says what to set, before any window or core.
 // It also checks that the dev host refuses a --state that would empty the real core's store.
 // Every core main started must be gone once its app has quit.
 //
 // Writes electron.json (the checks and the cold start, from launch to the first painted
-// row), screenshots and the shell's log to artifacts/ui/.
+// row), screenshots, a Playwright trace per app run (electron-app.ts) and the shell's log to
+// artifacts/ui/.
 
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { buildShell, electronBinary, SHELL } from '@letterbox/desktop-shell/build'
 import { STOP_MS } from '@letterbox/desktop-shell/core'
 import { exited, killChildrenNow, logChildrenTo, startChild, stopChildren } from './children.ts'
 import { attachmentsRun } from './electron-attachments.ts'
+import { notifyRun } from './electron-notify.ts'
 import {
   ARTIFACTS,
+  CheckFailure,
   checkQuit,
   checks,
   corePids,
@@ -86,7 +91,7 @@ const builtRun = (renderer: string) =>
         node: [typeof Reflect.get(window, 'require'), typeof Reflect.get(window, 'process')],
       })),
       {
-        bridge: ['connect', 'openAttachment', 'platform', 'saveAttachment'],
+        bridge: ['connect', 'onOpenConversation', 'openAttachment', 'platform', 'saveAttachment'],
         platform: process.platform,
         node: ['undefined', 'undefined'],
       },
@@ -196,10 +201,12 @@ const crashRun = (renderer: string) =>
     process.kill(pid, 'SIGKILL')
     const alert = run.page.getByRole('alert')
     await alert.waitFor({ timeout: WAIT_MS })
+    // The strip says it plainly. Main's own words, with the signal, stay in its tooltip.
+    const reason = alert.locator('[data-field="lost-reason"]')
     equal(
-      (await alert.textContent())?.includes('the core exited on SIGKILL'),
-      true,
-      'crash: the page shows that the core exited',
+      [await reason.textContent(), (await reason.getAttribute('title'))?.startsWith('the core exited on SIGKILL')],
+      ['Lost the core: the core exited.', true],
+      "crash: the page shows that the core exited, with main's reason in the tooltip",
     )
     await run.page.screenshot({ path: join(ARTIFACTS, 'electron-core-lost.png') })
     const code = await quit(run)
@@ -287,7 +294,7 @@ async function insecureRun() {
             secure: isSecureContext,
             bridge: Object.keys(window.letterbox ?? {}).toSorted(),
           })),
-          { secure: false, bridge: ['connect', 'openAttachment', 'platform', 'saveAttachment'] },
+          { secure: false, bridge: ['connect', 'onOpenConversation', 'openAttachment', 'platform', 'saveAttachment'] },
           'insecure: on plain http that is not loopback, the page still gets the bridge',
         )
         checkQuit('insecure', run, await quit(run))
@@ -346,7 +353,8 @@ if (display !== undefined) {
 rmSync(STATE, { recursive: true, force: true })
 mkdirSync(paths.data, { recursive: true })
 mkdirSync(ARTIFACTS, { recursive: true })
-for (const file of ['electron.json', 'electron.png', 'electron-core-lost.png', 'electron-shell.log']) {
+const traces = readdirSync(ARTIFACTS).filter((file) => file.startsWith('trace-electron-'))
+for (const file of ['electron.json', 'electron.png', 'electron-core-lost.png', 'electron-shell.log', ...traces]) {
   rmSync(join(ARTIFACTS, file), { force: true })
 }
 logChildrenTo(join(STATE, 'host.log'))
@@ -356,13 +364,17 @@ let sim: RunningSim | undefined
 let server: DevServer | undefined
 /** The cold start, once the built run has measured it. */
 const measured: { coldStart?: { ms: number; toPageMs: number } } = {}
-/** Runs one part of the check. A failure is noted, and the parts after it still run. */
+/**
+ * Runs one part of the check. A failure is noted, and the parts after it still run. Any error
+ * but a failed check also prints its stack, since its message alone may not say where it came from.
+ */
 async function part(run: () => unknown) {
   try {
     await run()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.log(`FAIL ${message}`)
+    if (error instanceof Error && !(error instanceof CheckFailure)) console.log(error.stack)
     failure ??= message
   }
 }
@@ -381,6 +393,7 @@ if (failure === null) {
     await busyRun(sim, server)
   })
   await part(async () => sim && server && (await attachmentsRun(sim, server)))
+  await part(async () => sim && server && (await notifyRun(sim, server)))
   await part(() => crashRun(renderer))
   await part(redirectRun)
   await part(insecureRun)
@@ -420,6 +433,6 @@ function electronVersion() {
 }
 
 console.log(
-  `\n${checks.filter((check) => check.ok).length} of ${checks.length} Electron checks passed. electron.json, screenshots and the shell log are in artifacts/ui/.`,
+  `\n${checks.filter((check) => check.ok).length} of ${checks.length} Electron checks passed. electron.json, screenshots, traces and the shell log are in artifacts/ui/.`,
 )
 process.exitCode = failure === null ? 0 : 1

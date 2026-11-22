@@ -43,7 +43,7 @@ const mail = (
  *             and a notifications address I once wrote to
  *   Anastasia mail that sits in spam                                    not suggested
  *   Ben, Bea  I wrote to Ben twice and Bea once, the same week          more mail first
- *             (and copied myself to Bea)
+ *             (and named Bea in To and Cc, and copied myself to her: still one message)
  *   Megan     wrote to me, so a prefix of my own address finds her alone
  */
 function seed(dialect: Dialect): Seed {
@@ -81,7 +81,7 @@ function seed(dialect: Dialect): Seed {
       }),
       mail('ben-1', ME, [{ name: 'Ben', address: 'ben@example.com' }], '2025-12-02T09:00:00.000Z'),
       mail('ben-2', ME, [{ name: 'Ben', address: 'ben@example.com' }], '2025-12-03T09:00:00.000Z'),
-      mail('bea', ME, ['bea@example.com'], '2025-12-03T10:00:00.000Z', { cc: [ME] }),
+      mail('bea', ME, ['bea@example.com'], '2025-12-03T10:00:00.000Z', { cc: [ME, 'Bea@example.com'] }),
       mail('bot', ME, ['notifications@tracker.example'], '2025-12-04T09:00:00.000Z'),
       mail('megan', { name: 'Megan', address: 'megan@example.com' }, [ME], '2025-12-08T09:00:00.000Z'),
     ],
@@ -108,16 +108,17 @@ scenario('recipient suggestions put people I wrote to first, then by how much an
   t.equal(
     await suggest(core, accountId, 'an'),
     [
-      { name: 'Ana Lima', address: 'ana@example.com' },
-      { name: null, address: ANDREW },
-      { name: 'Anabel Ortiz', address: 'Anabel@Example.org' },
+      { name: 'Ana Lima', address: 'ana@example.com', lastAt: '2025-12-01T10:00:00.000Z' },
+      { name: null, address: ANDREW, lastAt: '2024-12-01T09:00:00.000Z' },
+      { name: 'Anabel Ortiz', address: 'Anabel@Example.org', lastAt: '2025-10-03T09:00:00.000Z' },
     ],
-    'Ana and Andrew, whom I wrote to, newest first, then Anabel, who only wrote to me, as her mail wrote her address',
+    'Ana and Andrew, whom I wrote to, newest first, then Anabel, who only wrote to me, as her mail wrote her ' +
+      'address, each with when the newest mail with them was sent, either way',
   )
   t.equal(
     addresses(await suggest(core, accountId, 'b')),
     ['ben@example.com', 'bea@example.com'],
-    'Ben, with two messages, before Bea, with one the same week',
+    'Ben, with two messages, before Bea, with one the same week that named her twice',
   )
   t.equal(addresses(await suggest(core, accountId, 'an', 1)), ['ana@example.com'], 'the limit keeps the best')
 })

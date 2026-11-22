@@ -26,22 +26,32 @@
 mod answer;
 mod attachment;
 mod command;
+mod holder;
 mod ids;
+mod lists;
 mod outcome;
 mod recipients;
 mod send;
+mod sign_in;
+mod your_turn;
 
 use std::num::NonZeroU64;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
 pub use command::{Command, TurnChoice};
-pub use ids::{AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SignInOptionId, SubscriptionId, ThreadId};
+pub use holder::ChangeHolder;
+pub use ids::{
+    AccountId, BlobId, ChangeId, MailboxId, MessageId, RequestId, SenderId, SignInOptionId, SubscriptionId, ThreadId,
+};
+pub use lists::{SenderPage, SenderSummary, ThreadFilter};
 pub use outcome::{ChangeResult, Refusal, UndoConflict, UndoField};
 pub use recipients::Recipient;
 pub use send::{Delivery, Draft};
 use serde::{Deserialize, Deserializer, Serialize};
+pub use sign_in::{PasswordInput, SignInError, SignInMethod, SignInOption, SignedIn};
 use ts_rs::TS;
+pub use your_turn::YourTurn;
 
 pub const PROTOCOL: u32 = 0;
 
@@ -249,28 +259,6 @@ pub struct Attachment {
 
 // ---------------------------------------------------------------- subscribe
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadFilter {
-    /// Leave out to list every account together.
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub account_id: Option<AccountId>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub mailbox_id: Option<MailboxId>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub turn: Option<Turn>,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub unread: Option<bool>,
-    /// Full-text search over the local index.
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub text: Option<String>,
-}
-
 /// Every live view. Add a variant here and a matching one to `Update`.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "view", rename_all = "kebab-case", rename_all_fields = "camelCase")]
@@ -291,11 +279,25 @@ pub enum Query {
     Thread {
         thread_id: ThreadId,
     },
+    /// Updates: the automated conversations in the account and mailbox given, grouped by sender.
+    Senders {
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        account_id: Option<AccountId>,
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        mailbox_id: Option<MailboxId>,
+        offset: u64,
+        limit: NonZeroU64,
+    },
     /// People to suggest in a recipient field, best first (see `Recipient`).
     Recipients {
         account_id: AccountId,
         prefix: String,
         limit: NonZeroU64,
+    },
+    Change {
+        change: ChangeId,
     },
 }
 
@@ -308,7 +310,9 @@ pub enum Update {
     Mailboxes { data: Vec<Mailbox> },
     Threads { data: ThreadPage },
     Thread { data: Option<ThreadDetail> },
+    Senders { data: SenderPage },
     Recipients { data: Vec<Recipient> },
+    Change { data: ChangeHolder },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
@@ -318,21 +322,6 @@ pub struct ThreadPage {
 }
 
 // ---------------------------------------------------------------- request
-
-/// A way to add an account. The UI lists these and never hard-codes a provider.
-#[derive(Clone, Debug, PartialEq, Serialize, TS)]
-pub struct SignInOption {
-    pub id: SignInOptionId,
-    pub label: String,
-    pub method: SignInMethod,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum SignInMethod {
-    Oauth,
-    Password,
-}
 
 /// Every one-shot call. Add a variant here and a matching one to `Response`.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
@@ -360,15 +349,6 @@ pub enum Request {
     Attachment { blob_id: BlobId },
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, TS)]
-pub struct PasswordInput {
-    pub username: String,
-    pub password: String,
-    #[serde(default, deserialize_with = "present")]
-    #[ts(optional)]
-    pub server: Option<String>,
-}
-
 /// The answer to one request, by method.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "method", rename_all = "kebab-case")]
@@ -378,26 +358,6 @@ pub enum Response {
     SyncNow(Answer<Empty, SyncNowError>),
     Blob(Answer<BlobUrl, BlobError>),
     Attachment(Answer<AttachmentFile, AttachmentError>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SignedIn {
-    pub account_id: AccountId,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum SignInError {
-    Cancelled,
-    Denied,
-    TimedOut,
-    Superseded,
-    WrongPassword,
-    Offline,
-    /// The provider let the user in, but the system keychain would not save the login,
-    /// for example because it is locked. No account was added. Unlock it and sign in again.
-    Keychain,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
@@ -480,6 +440,8 @@ pub enum CoreMessage {
         id: RequestId,
         data: String,
     },
+    /// New mail from a person made it the user's turn in a conversation. See `YourTurn`.
+    YourTurn(YourTurn),
     /// The core could not read a client message, or the versions differ. `detail` is for logs.
     ProtocolError {
         reason: ProtocolErrorReason,

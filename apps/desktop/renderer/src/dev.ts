@@ -2,7 +2,7 @@
 // loads this file behind `import.meta.env.DEV`. The routes it calls exist only in packages/dev-host.
 
 import type { Client } from '@letterbox/client'
-import type { Attachment } from '@letterbox/protocol'
+import type { Attachment, ThreadId } from '@letterbox/protocol'
 
 declare global {
   interface Window {
@@ -15,6 +15,12 @@ declare global {
       settle(): Promise<void>
       /** Syncs, then gives the files of the conversation with this subject once its bodies have loaded. */
       attachments(subject: string): Promise<Attachment[]>
+      /** Syncs every account once. */
+      sync(): Promise<void>
+      /** The id of the conversation with this subject. */
+      threadOf(subject: string): Promise<ThreadId>
+      /** Marks the conversation with this subject read, and resolves once the core has answered everything before. */
+      markRead(subject: string): Promise<void>
     }
   }
 }
@@ -34,14 +40,29 @@ export function installDevHooks(client: Client) {
     },
     // The core answers in the order it reads, so a query's answer comes after every earlier one.
     settle: async () => void (await client.query({ view: 'accounts' })),
-    attachments: async (subject) => {
+    sync: async () => {
       const synced = await client.request({ method: 'sync-now' })
-      if (!synced.ok) throw new Error(`the sync before reading the files failed: ${synced.error}`)
+      if (!synced.ok) throw new Error(`the sync failed: ${synced.error}`)
+    },
+    threadOf: async (subject) => {
       // oxlint-disable-next-line letterbox/renderer-thread-lists -- a dev hook reads the list once and renders no row
       const list = await client.query({ view: 'threads', filter: { text: subject }, offset: 0, limit: 10 })
       const found = list.threads.find((thread) => thread.subject === subject)
       if (!found) throw new Error(`no conversation is called "${subject}"`)
-      const open = client.subscribe({ view: 'thread', threadId: found.id })
+      return found.id
+    },
+    markRead: async (subject) => {
+      const threadId = await window.letterboxDev?.threadOf(subject)
+      if (threadId === undefined) throw new Error('the dev hooks are gone')
+      const answer = await client.command({ kind: 'set-flags', threadIds: [threadId], unread: false })
+      if (answer.kind !== 'accepted') throw new Error(`marking read was rejected: ${answer.reason}`)
+      await window.letterboxDev?.settle()
+    },
+    attachments: async (subject) => {
+      await window.letterboxDev?.sync()
+      const threadId = await window.letterboxDev?.threadOf(subject)
+      if (threadId === undefined) throw new Error('the dev hooks are gone')
+      const open = client.subscribe({ view: 'thread', threadId })
       try {
         let detail = open.latest() ?? (await open.next())
         while (detail?.messages.some((message) => message.body.state === 'loading'))

@@ -1,10 +1,13 @@
 // The attachments run of the Electron check (electron-check.ts): the page saves and opens
-// files through the bridge, then through the reader's rows, with main's save dialog, warning
-// dialog and OS open call stubbed inside main, so nothing reaches the desktop. It checks the bytes that land on disk, the
-// names main gives them, the warning before a file that can run code, that the page never
-// sees a path, and that every temp copy but the opened ones is gone afterwards.
+// files through the bridge, with main's save dialog, warning dialog and OS open call stubbed
+// inside main, so nothing reaches the desktop. It checks the bytes that land on disk, the
+// names main gives them, the warning before a file that can run code, long names cut so they
+// keep their extension and end in neither a dot nor a space, that a save that fails part
+// way leaves the file it would replace as it was, that the page never sees a path, and that
+// every temp copy but the opened ones is gone afterwards. Then the reader's rows: they mark
+// the files main warns about, and their Save, Open and Retry reach the same shell.
 
-import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { BlobId } from '@letterbox/protocol'
 import { checkQuit, equal, quit, seed, STATE, WAIT_MS, withApp, within } from './electron-app.ts'
@@ -31,11 +34,24 @@ declare global {
 
 const KEY = 'files-for-the-check'
 const SUBJECT = 'Files for the check'
-/** A file of a little over three chunks, and one whose name tries a path, a hidden file and a reversed extension. */
+/**
+ * A file of a little over three chunks, one whose name tries a path, a hidden file and a
+ * reversed extension, and names over the 200 bytes main keeps: two the cut leaves ending in
+ * ".exe." and ".exe ", which Windows creates as ".exe", and two whose risky extension sits
+ * past byte 200, and a macOS shortcut, which opens whatever URL it holds.
+ */
 const FILES = [
   { name: 'Q3 report.pdf', mime: 'application/pdf', size: 3 * 64 * 1024 + 5 },
   { name: '../setup‮fdp.exe', mime: 'application/octet-stream', size: 2048 },
+  { name: `${'a'.repeat(195)}.exe.${'b'.repeat(40)}`, mime: 'application/octet-stream', size: 10 },
+  { name: `${'c'.repeat(195)}.exe ${'b'.repeat(40)}`, mime: 'application/octet-stream', size: 10 },
+  { name: `${'d'.repeat(300)}.exe`, mime: 'application/octet-stream', size: 10 },
+  { name: `${'e'.repeat(300)}.settingcontent-ms`, mime: 'application/octet-stream', size: 10 },
+  { name: 'Office map.webloc', mime: 'application/octet-stream', size: 10 },
 ]
+
+/** The warning main shows before it opens a file of this name. */
+const warning = (name: string) => `"${name}" can run programs on this computer`
 
 export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
   withApp('attachments', server.url, async (run) => {
@@ -48,7 +64,7 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       from: { name: 'Ana Check', address: 'ana@files.example' },
       to: [seed.seed.address],
       subject: SUBJECT,
-      text: 'Two files for the check.',
+      text: 'Files for the check.',
       sentAt: seed.now,
       attachments: FILES,
     })
@@ -89,8 +105,11 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       page.evaluate((subject) => window.letterboxDev?.attachments(subject), SUBJECT),
       'the conversation with the files',
     )
-    const [report, setup] = files ?? []
-    if (!report || !setup) throw new Error(`the conversation lists ${files?.length ?? 0} files, not 2`)
+    const [report, setup, ...rest] = files ?? []
+    const long = rest.slice(0, 4)
+    const [shortcut] = rest.slice(4)
+    if (!report || !setup || !shortcut || long.length !== 4)
+      throw new Error(`the conversation lists ${files?.length ?? 0} files, not ${FILES.length}`)
     // Bounded, so main never answering fails the check instead of hanging it.
     const save = (blobId: BlobId) =>
       within(
@@ -148,11 +167,69 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     )
     equal(readFileSync(program).equals(bytesOf(1)), true, 'attachments: the program copy holds its own bytes')
 
+    await answer(null, 0)
+    // oxlint-disable-next-line no-await-in-loop -- one open at a time, so the warnings come in order
+    for (const file of long) await open(file.blobId)
+    equal(
+      (await asked()).warned.slice(2),
+      [
+        warning(`${'a'.repeat(195)}.exe`),
+        warning(`${'c'.repeat(195)}.exe`),
+        warning(`${'d'.repeat(196)}.exe`),
+        warning(`${'e'.repeat(182)}.settingcontent-ms`),
+      ],
+      'attachments: a long name is cut to keep its extension, with no dot or space at its end, and a program still warns',
+    )
+    await open(shortcut.blobId)
+    equal(
+      (await asked()).warned.at(-1),
+      warning('Office map.webloc'),
+      'attachments: a macOS shortcut, which opens the URL inside it, warns too',
+    )
+
     equal(
       readdirSync(dirname(dirname(opened))).toSorted(),
       [basename(dirname(opened)), basename(dirname(program))].toSorted(),
       'attachments: only the two opened copies are left in the temp folder',
     )
+    // A disk that fills up part way through the copy, over a file the person chose to replace.
+    const kept = join(saved, 'kept.pdf')
+    writeFileSync(kept, 'the file the person had')
+    await answer(kept, 0)
+    await app.evaluate(() => {
+      const fs = process.getBuiltinModule('node:fs')
+      const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+      const real = fs.createWriteStream
+      // Once: the next stream writes its first chunk, then fails every write after it.
+      fs.createWriteStream = (...args: Parameters<typeof real>) => {
+        fs.createWriteStream = real
+        syncBuiltinESMExports()
+        const stream = real(...args)
+        // oxlint-disable-next-line no-underscore-dangle -- the fault goes into the stream's own write, which Node names so
+        const write = stream._write.bind(stream)
+        const full = new Error('ENOSPC: no space left on device, write')
+        let writes = 0
+        // oxlint-disable-next-line no-underscore-dangle -- the fault goes into the stream's own write, which Node names so
+        stream._write = (chunk, encoding, done) => ((writes += 1) === 1 ? write(chunk, encoding, done) : done(full))
+        // oxlint-disable-next-line no-underscore-dangle -- the fault goes into the stream's own write, which Node names so
+        stream._writev = (_chunks, done) => done(full)
+        return stream
+      }
+      syncBuiltinESMExports()
+    })
+    equal(await save(report.blobId), { ok: false, reason: 'failed' }, 'attachments: a save the disk cuts short fails')
+    equal(
+      [readFileSync(kept, 'utf8'), readdirSync(saved).toSorted()],
+      ['the file the person had', ['chosen.pdf', 'kept.pdf']],
+      'attachments: it leaves the file it would replace as it was, and no part of the copy beside it',
+    )
+
+    equal(
+      await page.evaluate(() => window.letterbox?.saveAttachment(42 as never)),
+      { ok: false, reason: 'gone' },
+      'attachments: a blob id that is not a string names no file',
+    )
+
     // From the reader: each row's Save and Open reach the same shell, and the row shows what came of it.
     await page
       .getByRole('navigation', { name: 'Sidebar' })
@@ -173,14 +250,17 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     const SETUP = '_setupfdp.exe'
     await row(REPORT).waitFor({ timeout: WAIT_MS })
     await row(SETUP).waitFor({ timeout: WAIT_MS })
+    // The reader reads the same rules as main (@letterbox/client/files), so it marks at rest
+    // exactly the files main warned about above, under the names main warned with.
+    const marked = await page
+      .locator('[data-message="open"] [data-field="attachment"]:has([data-field="program"]) [data-field="name"]')
+      .allTextContents()
     equal(
-      [
-        await row(REPORT).locator('[data-field="program"]').count(),
-        await row(SETUP).locator('[data-field="program"]').count(),
-      ],
-      [0, 1],
-      'attachments: the reader marks the program, under the name main warns with, and not the PDF',
+      marked.map(warning).toSorted(),
+      [...new Set((await asked()).warned)].toSorted(),
+      'attachments: the reader marks as a program exactly the files main warns about, under the names it warns with',
     )
+    equal(await row(REPORT).locator('[data-field="program"]').count(), 0, 'attachments: the reader marks no PDF')
 
     const fromReader = join(saved, 'from-the-reader.pdf')
     await answer(fromReader, 0)
@@ -213,11 +293,5 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     await answer(retried, 0)
     equal(await press('Retry', REPORT), 'rest', 'attachments: back online, Retry saves it')
     equal(readFileSync(retried).equals(bytesOf(0)), true, 'attachments: the retried save holds the same bytes')
-
-    equal(
-      await page.evaluate(() => window.letterbox?.saveAttachment(42 as never)),
-      { ok: false, reason: 'gone' },
-      'attachments: a blob id that is not a string names no file',
-    )
     checkQuit('attachments', run, await quit(run))
   })

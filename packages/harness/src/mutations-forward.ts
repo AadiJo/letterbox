@@ -8,6 +8,13 @@ const core = (file: string) => `crates/core/src/${file}`
 
 export const FORWARD_MUTATIONS: Mutation[] = [
   {
+    name: 'the change view keeps naming the conversation it opened with, after a merge or an undo',
+    file: core('live_view.rs'),
+    find: '                let now = holder_of(world, change);',
+    replace: '                let now = holder.clone();',
+    scenarios: 'the change view names the conversation holding a send',
+  },
+  {
     name: 'an undone new conversation stays where it was',
     file: core('outbox.rs'),
     find: 'self.cancel(change, record, |world, tx| remove_with_thread(world, tx, &message_id));',
@@ -67,17 +74,51 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   {
     name: 'a forward whose files are gone goes out without them',
     file: core('outbox.rs'),
-    find: '                AttachmentResult::Gone => return Ok(None),',
+    find: '                AttachmentResult::Gone => return Ok(Contents::Gone),',
     replace: '                AttachmentResult::Gone => continue,',
     also: [
       {
         file: core('outbox.rs'),
-        find: '        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {\n            return Ok(None);',
-        replace:
-          '        let Some(r#ref) = original.as_ref().and_then(MessageRecord::provider_ref) else {\n            return Ok(Some(Vec::new()));',
+        find: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),',
+        replace: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Ready(Vec::new())),',
       },
     ],
     scenarios: 'original is gone before it goes out',
+  },
+  {
+    name: 'a forward carries every file of the original, even those the user took off',
+    file: core('forward.rs'),
+    find: '.filter(|(index, _)| !self.left_out.contains(index))',
+    replace: '.filter(|_| true)',
+    scenarios: 'a forward without some of the original files',
+  },
+  {
+    name: 'a forward that leaves out a file fetches the others by their places among those it carries',
+    file: core('outbox.rs'),
+    find: '        for (index, _) in forward.carried() {',
+    replace: '        for (index, _) in forward.carried().enumerate().map(|(at, (_, file))| (at, file)) {',
+    scenarios: 'a forward without some of the original files',
+  },
+  {
+    name: 'a held forward lists the files the user took off',
+    file: core('draft.rs'),
+    find: '        .flat_map(Forward::carried)',
+    replace: '        .flat_map(|forward| forward.files.iter().enumerate())',
+    scenarios: 'a forward without some of the original files',
+  },
+  {
+    name: 'a forward that leaves out a file the original lacks goes out with every file',
+    file: core('draft.rs'),
+    find: '    without.iter().map(|blob| place(blob).ok_or(Refusal::Invalid)).collect()',
+    replace: '    Ok(without.iter().filter_map(place).collect())',
+    scenarios: 'leaving out a file is refused',
+  },
+  {
+    name: 'a draft that forwards nothing may leave out files',
+    file: core('draft.rs'),
+    find: '        None if draft.forward_without.is_some() => return Err(Refusal::Invalid),\n',
+    replace: '',
+    scenarios: 'leaving out a file is refused',
   },
   {
     name: 'a forward of a message still loading is refused as if the message were gone',
@@ -120,6 +161,13 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     find: '        parse(at).timestamp().div_euclid(PERIOD_SECONDS)',
     replace: '        parse(at).timestamp().div_euclid(i64::MAX)',
     scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: "a suggestion's last mail is its oldest",
+    file: core('suggestions.rs'),
+    find: '            let newest = person.seen.iter().next_back();',
+    replace: '            let newest = person.seen.iter().next();',
+    scenarios: 'put people I wrote to first',
   },
   {
     name: 'the sender of a newsletter is suggested',
@@ -170,5 +218,54 @@ export const FORWARD_MUTATIONS: Mutation[] = [
     find: '            shown.contains(key) || (',
     replace: '            false || (',
     scenarios: 'recipient suggestions stay live',
+  },
+  {
+    name: 'a restart leaves a due send for the next sync, so a forward stopped while fetching its files sits there',
+    file: core('outbox.rs'),
+    find: '        for account_id in due {\n',
+    replace: '        for account_id in due.into_iter().filter(|_| false) {\n',
+    scenarios: "killed while it fetches a forward's files",
+  },
+  {
+    name: 'a forward of a send the provider may not hold yet fails as if its original were gone',
+    file: core('outbox.rs'),
+    find: '                    return Ok(if pending { Contents::Waiting } else { Contents::Gone });',
+    replace: '                    return Ok(if pending { Contents::Gone } else { Contents::Gone });',
+    scenarios: 'may not hold yet',
+  },
+  {
+    name: 'a forward that waits for its original is not carried when a sync finds the original',
+    file: core('outbox.rs'),
+    find: '        for change in arrived.0 {\n            self.waiting_on(&change);\n',
+    replace: '        for change in arrived.0 {\n',
+    scenarios: 'may not hold yet',
+  },
+  {
+    name: 'a forward that waits for its original is not carried when a lookup finds the original',
+    file: core('outbox.rs'),
+    find: '        self.waiting_on(&id);\n',
+    replace: '',
+    scenarios: 'as soon as a lookup finds the first',
+  },
+  {
+    name: 'a forwarded Message-ID of 973 to 983 characters makes a line longer than 998',
+    file: core('mime.rs'),
+    find: 'letter.forwards.filter(|id| id.len() <= MAX_FORWARDED)',
+    replace: 'letter.forwards.filter(|id| id.len() <= MAX_FORWARDED + 11)',
+    scenarios: 'too long for its line',
+  },
+  {
+    name: 'an address in both To and Cc counts as two messages to them',
+    file: core('suggestions.rs'),
+    find: '            for who in everyone.filter(|who| named.insert(who.address.to_lowercase())) {',
+    replace: '            for who in everyone.filter(|who| named.insert(who.address.clone()) || true) {',
+    scenarios: 'put people I wrote to first',
+  },
+  {
+    name: 'a forward that waits for its original keeps waiting after the original fails',
+    file: core('push.rs'),
+    find: '        self.waiting_on(&id);\n',
+    replace: '',
+    scenarios: 'never found fails with it',
   },
 ]

@@ -2,7 +2,8 @@
 //! what changed there, or one snapshot page (see snapshot.rs), and records how it went.
 //! It runs in the account's queue, and stops writing once a sign-out or a new sign-in
 //! takes the account (`still_current`). Bodies load here too, one fetch per message
-//! someone is looking at.
+//! someone is looking at. A change set's new mail that makes it the user's turn is told
+//! after its commit (notify.rs).
 
 use std::rc::Rc;
 
@@ -93,6 +94,7 @@ impl Inner {
             if !self.still_current(account_id, linked) {
                 return Ok(Pulled::Done);
             }
+            let arrivals = self.arrivals(account_id, &set);
             let mut arrived = None;
             let rev = self.commit(|world, tx, at| {
                 let Some(account) = world.accounts.get(account_id).cloned() else {
@@ -112,11 +114,13 @@ impl Inner {
             if let Some(arrived) = arrived {
                 self.announce(arrived, rev);
             }
+            self.tell_your_turns(account_id, arrivals);
             return Ok(Pulled::Done);
         }
         if !self.still_current(account_id, linked) {
             return Ok(Pulled::Done);
         }
+        self.caught_up_by_snapshot(account_id);
         self.snapshot_page(account_id, linked).await
     }
 

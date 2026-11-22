@@ -34,15 +34,18 @@ mod confirm;
 mod dispatch;
 mod draft;
 mod effect;
+mod forward;
 mod live_view;
 mod maps;
 mod mime;
+mod notify;
 mod outbox;
 mod push;
 mod queue;
 mod reconcile;
 mod rows;
 pub mod secrets;
+mod senders;
 mod sign_in;
 mod snapshot;
 mod store;
@@ -178,6 +181,7 @@ impl Core {
             })
             .collect();
 
+        let catching_up = crate::notify::CatchUp::starting(&world, options.env.now());
         let core = Core {
             inner: Rc::new(Inner {
                 store,
@@ -202,6 +206,9 @@ impl Core {
                     checks: HashSet::default(),
                     pushing: HashSet::default(),
                     held_undos: Vec::new(),
+                    catching_up,
+                    wake_at: None,
+                    views_now: letterbox_protocol::Time::new(),
                     links,
                 }),
                 queues: RefCell::new(HashMap::default()),
@@ -286,6 +293,12 @@ struct State {
     pushing: HashSet<ChangeId>,
     /// Undos that wait for a change a pass is carrying (see undo.rs).
     held_undos: Vec<crate::undo::HeldUndo>,
+    /// When the core started, and the accounts that started with a saved cursor and have not pulled since (see notify.rs).
+    catching_up: crate::notify::CatchUp,
+    /// When the booked wake for a list that splits on age runs (see `book_wake` in subscriptions.rs).
+    wake_at: Option<letterbox_protocol::Time>,
+    /// The time the lists that split on age go by. Empty until one opens (see subscriptions.rs).
+    views_now: letterbox_protocol::Time,
     /// How many adapters have been linked to an account. Each link takes the next number.
     links: u64,
 }

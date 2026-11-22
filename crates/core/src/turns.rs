@@ -4,10 +4,12 @@
 
 use std::sync::LazyLock;
 
-use letterbox_protocol::{Turn, TurnReason, TurnState};
+use letterbox_protocol::{ThreadId, Time, Turn, TurnReason, TurnState};
 use regex::Regex;
 
 use crate::adapter::RemoteFacts;
+use crate::clock::parse;
+use crate::world::{ThreadRecord, World, messages_of};
 
 /// What the rule reads from one message.
 pub struct TurnMessage {
@@ -42,8 +44,43 @@ pub fn is_automated(facts: &RemoteFacts) -> bool {
         || NO_REPLY.is_match(&facts.from.address)
 }
 
+/// When the newest message the provider holds in a conversation was sent. None while it holds
+/// none: a message of mine still in the outbox does not count, as it does not move the turn.
+pub fn newest_held(world: &World, thread_id: &ThreadId) -> Option<Time> {
+    let records = messages_of(world, thread_id);
+    let newest = records.into_iter().rev().find(|record| record.provider_ref().is_some());
+    newest.map(|record| record.facts.sent_at.clone())
+}
+
+/// A conversation's record with its turn set by the user, or handed back to the rule with None.
+/// The turn is set against the conversation as it is now (see `held_override`). Every turn the
+/// user sets goes through here: set-turn and its undo (dispatch.rs).
+pub fn with_override(world: &World, thread: ThreadRecord, turn: Option<Turn>) -> ThreadRecord {
+    let override_since = turn.map(|_| newest_held(world, &thread.id).unwrap_or_default());
+    ThreadRecord {
+        turn_override: turn,
+        override_since,
+        ..thread
+    }
+}
+
+/// The turn the user set on a conversation, while it holds. It holds until the conversation
+/// has a message the provider holds that was sent after the newest one it had when they set
+/// it: then the conversation moved, and the rule decides again. So their reply to a conversation
+/// I marked done makes it my turn, and a message of mine ends it too: the rule then says I am
+/// waiting. A message that arrives late but was sent before, as a backfill brings, does not.
+/// `newest` is `newest_held`. A turn set before `override_since` was kept holds as it always did.
+pub fn held_override(thread: &ThreadRecord, newest: Option<&Time>) -> Option<Turn> {
+    let (Some(turn), Some(since)) = (thread.turn_override, &thread.override_since) else {
+        return thread.turn_override;
+    };
+    let moved = newest.is_some_and(|newest| parse(newest) > parse(since));
+    (!moved).then_some(turn)
+}
+
 /// Decides the turn for one conversation. `messages` is oldest first, and holds only the
 /// messages the provider has, so a send of mine moves the turn once it surely went (rows.rs).
+/// `turn_override` is the turn the user set, while it holds (`held_override`).
 /// The last person to write holds the turn until the other answers. Mail from
 /// machines and mail I am only copied on are nobody's turn, and so is a conversation
 /// the provider holds nothing of yet: a new message of mine still in the outbox.

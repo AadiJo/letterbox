@@ -68,7 +68,13 @@ export type SeedMessage = {
 }
 
 /** One attachment a seed names, as a mail client would show it. */
-export type SeedAttachment = { name: string; mime: string; size: number }
+export type SeedAttachment = {
+  name: string
+  mime: string
+  size: number
+  /** How many bytes the provider serves, when it differs from the `size` it lists. Defaults to `size`. */
+  served?: number
+}
 
 export type Seed = {
   /** The address the mailbox belongs to. Also the sign-in username. */
@@ -177,6 +183,12 @@ export interface SimMailbox {
   sendHeld(count?: number): Promise<void>
   /** Delivers and answers every waiting send call, in the order they came, and stops holding. */
   releaseSends(): void
+  /** From now on, attachment calls wait. Lets a scenario stop a core while it fetches a forward's files. */
+  holdAttachments(): void
+  /** Resolves once `count` attachment calls (1 unless given) are waiting, at once if they already are. */
+  attachmentHeld(count?: number): Promise<void>
+  /** Answers every waiting attachment call, from the truth as it is now, and stops holding. */
+  releaseAttachments(): void
 
   // What a scenario checks.
   truth(): TruthMessage[]

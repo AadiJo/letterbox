@@ -48,7 +48,7 @@ export type MailboxEntry = {
   /** Goes into the session string, so `resume` can rebuild the adapter. */
   session: Session
   isOffline(): boolean
-  /** Answers one adapter call through `reply`. A body, apply, send or snapshot call waits while its method is held. */
+  /** Answers one adapter call through `reply`. A body, attachment, apply, send or snapshot call waits while its method is held. */
   respond(call: Call, reply: (result: CallResult, damage?: AnswerDamage) => void): void
 }
 
@@ -122,7 +122,13 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   let searchLags = false
   // Rises on `expirePageTokens`. A page token from an older generation answers page-expired.
   let generation = 0
-  const holds = { body: createHold(), apply: createHold(), snapshot: createHold(), send: createHold() }
+  const holds = {
+    body: createHold(),
+    attachment: createHold(),
+    apply: createHold(),
+    snapshot: createHold(),
+    send: createHold(),
+  }
 
   if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`sim provider: pageSize ${pageSize} is not usable`)
 
@@ -279,6 +285,9 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     holdSends: holds.send.hold,
     sendHeld: holds.send.held,
     releaseSends: holds.send.release,
+    holdAttachments: holds.attachment.hold,
+    attachmentHeld: holds.attachment.held,
+    releaseAttachments: holds.attachment.release,
     truth: () =>
       [...store.messages.values()].map((message) => ({
         key: message.key,
@@ -289,7 +298,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     calls: () => ({ ...counts }),
     sent: () => sentCopies.map((copy) => ({ ...copy, recipients: [...copy.recipients] })),
     attachmentBytes: (key, index) => {
-      const content = messageOf(key).contents[index]
+      const content = messageOf(key).contents[index]?.()
       if (content === undefined) throw new Error(`sim provider: "${key}" has no attachment ${index}`)
       return content
     },
@@ -332,7 +341,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
 
   /** The content of the attachment at `index` in a message's body, or gone. */
   const attachment = ({ ref, index }: { ref: MessageRef; index: number }): AttachmentResult => {
-    const content = targetsOf([ref])[0]?.contents[index]
+    const content = targetsOf([ref])[0]?.contents[index]?.()
     return content === undefined ? { kind: 'gone' } : { kind: 'bytes', base64: content.toString('base64') }
   }
 
@@ -392,7 +401,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     if (!sentBox) return { kind: 'refused', reason: 'not-supported' }
     const copy = readSent(outgoing.raw, dialect === 'labels' ? false : null)
     const key = `sent-${sentCopies.length + 1}`
-    const stored = file({ key, ...copy, unread: false, flagged: false, mailboxes: [sentBox.key] })
+    const contents = copy.contents.map((content) => () => content)
+    const stored = file({ key, ...copy, contents, unread: false, flagged: false, mailboxes: [sentBox.key] })
     const recipients = [...copy.facts.to, ...copy.facts.cc].map((address) => address.address)
     sentCopies.push({ key, recipients: [...recipients, ...outgoing.bcc], raw: outgoing.raw })
     return { kind: 'sent', ref: stored.ref }
