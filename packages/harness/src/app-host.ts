@@ -7,6 +7,7 @@
 //   - closing stdin ends the program with exit code 0
 //   - the store it makes holds an id, which names its keychain entries: a second start on the
 //     same store keeps it, and a new store gets one of its own
+//   - it starts on a store that has its id while another connection holds the store's write lock
 // Nothing signs in, so nothing reaches Google or the keychain. Writes the transcript to
 // artifacts/app-host/letterbox-core.jsonl. It holds no paths or times, so every run writes the same file.
 // CI runs it on Linux, macOS and Windows. Only the OS's words for a missing file differ.
@@ -92,8 +93,11 @@ function checkBadArguments(folder: string) {
   check(!existsSync(join(folder, 'data')), 'no bad command line made a data folder')
 }
 
-/** Starts the program with good arguments on the store in `data`, drives it as a UI would, and closes its input. */
-async function checkSession(folder: string, data: string) {
+/**
+ * Starts the program with good arguments on the store in `data`, drives it as a UI would, and
+ * closes its input. `beforeClose` runs once the UI part is done, before the input closes.
+ */
+async function checkSession(folder: string, data: string, beforeClose?: () => void) {
   const child = spawn(PROGRAM, ['--data', data, '--gmail-client', 'client.json'], {
     cwd: folder,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -147,6 +151,7 @@ async function checkSession(folder: string, data: string) {
   } catch (error) {
     check(false, error instanceof Error ? error.message : String(error))
   }
+  beforeClose?.()
 
   record({ from: 'scenario', note: 'stdin closes' })
   child.stdin.end()
@@ -180,6 +185,13 @@ async function checkStoreIds(folder: string) {
   await checkSession(folder, 'other')
   const other = storeIdOf(join(folder, 'other'))
   check(isId(other) && other !== first, 'a new store gets an id of its own')
+
+  // Opening a store that has its id only reads it, so a writer elsewhere does not hold the
+  // program up. The lock goes once the program has answered, before its input closes.
+  record({ from: 'scenario', note: 'a start on the same store, while another connection holds its write lock' })
+  using writer = new DatabaseSync(join(folder, 'data', 'letterbox.sqlite'))
+  writer.exec('begin immediate')
+  await checkSession(folder, 'data', () => writer.isTransaction && writer.exec('commit'))
 }
 
 const built = spawnSync('cargo', ['build', '--quiet', '--bin', 'letterbox-core'], { cwd: ROOT, stdio: 'inherit' })

@@ -101,9 +101,20 @@ impl Store {
             "pragma journal_mode = wal;
              pragma synchronous = normal;
              create table if not exists meta (key text primary key, value integer not null) strict;
-             create table if not exists identity (one integer primary key check (one = 1), id text not null) strict;
-             insert into identity (one, id) values (1, lower(hex(randomblob(16)))) on conflict do nothing;",
+             create table if not exists identity (one integer primary key check (one = 1), id text not null) strict;",
         )?;
+        // Read first: an insert takes the write lock even when it changes nothing, and would
+        // wait behind any other writer. Two first opens at once both insert, and one id wins.
+        let has_id = db
+            .query_row("select 1 from identity", [], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !has_id {
+            db.execute(
+                "insert into identity (one, id) values (1, lower(hex(randomblob(16)))) on conflict do nothing",
+                [],
+            )?;
+        }
         for table in TABLES {
             db.execute_batch(&format!(
                 "create table if not exists {table} \
