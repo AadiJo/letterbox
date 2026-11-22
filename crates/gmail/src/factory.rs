@@ -10,7 +10,7 @@ use letterbox_protocol::SignInMethod;
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::GmailAdapter;
-use crate::api::Api;
+use crate::api::{Api, Clients};
 use crate::config::GmailConfig;
 use crate::loopback::{self, Redirect};
 use crate::oauth::{self, Pkce};
@@ -28,7 +28,7 @@ struct Session {
 
 pub struct GmailFactory {
     config: GmailConfig,
-    http: reqwest::Client,
+    http: Clients,
     option: FactoryOption,
     /// Sign-in attempts so far. Picks the port for `Loopback::Unix`.
     attempts: Cell<u16>,
@@ -36,17 +36,26 @@ pub struct GmailFactory {
 
 impl GmailFactory {
     /// The host's tokio runtime must have its time driver on (`enable_time`): the HTTP
-    /// client starts a timer when a name has both IPv6 and IPv4 addresses, as Google's do.
-    /// The adapter's own code never waits on a timer (clippy.toml).
+    /// client starts a timer when a name has both IPv6 and IPv4 addresses, as Google's do, and
+    /// one for each request's budget (`GmailConfig::timeouts`). The adapter's own code never
+    /// waits on a timer (clippy.toml).
     pub fn new(config: GmailConfig) -> Self {
-        let http = config
-            .hosts
-            .iter()
-            .fold(reqwest::Client::builder(), |builder, (name, addresses)| {
-                builder.resolve_to_addrs(name, addresses)
-            })
-            .build()
-            .expect("an HTTP client with rustls builds");
+        let builder = || {
+            config
+                .hosts
+                .iter()
+                .fold(reqwest::Client::builder(), |builder, (name, addresses)| {
+                    builder.resolve_to_addrs(name, addresses)
+                })
+                // Every request's budget unless it sets its own: a transfer does (see api.rs).
+                .timeout(config.timeouts.call)
+        };
+        let built = "an HTTP client with rustls builds";
+        let http = Clients {
+            calls: builder().build().expect(built),
+            // Reset by every read, so it ends only a download whose answer stopped coming.
+            downloads: builder().read_timeout(config.timeouts.stall).build().expect(built),
+        };
         GmailFactory {
             config,
             http,
@@ -85,7 +94,7 @@ impl GmailFactory {
         let redirect_uri = listening.redirect_uri.clone();
         drop(listening);
 
-        let tokens = oauth::exchange(&self.http, &self.config, &code, &pkce, &redirect_uri).await?;
+        let tokens = oauth::exchange(&self.http.calls, &self.config, &code, &pkce, &redirect_uri).await?;
         // Without a refresh token the account could not survive a restart.
         let refresh_token = tokens.refresh_token.ok_or(SignInFailure::Denied)?;
         let modify = oauth::can_modify(&tokens.scope);

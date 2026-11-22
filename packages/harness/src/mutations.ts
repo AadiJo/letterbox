@@ -22,6 +22,7 @@ import { YOUR_TURN_MUTATIONS } from './mutations-your-turn.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
 import { PEOPLE_MUTATIONS } from './mutations-people.ts'
 import { POSITION_MUTATIONS } from './mutations-position.ts'
+import { SCHEDULE_MUTATIONS } from './mutations-schedule.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
 import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
@@ -426,5 +427,6 @@ await runBreaks([
   ...YOUR_TURN_MUTATIONS,
   ...ATTACHMENT_MUTATIONS,
   ...POSITION_MUTATIONS,
+  ...SCHEDULE_MUTATIONS,
   ...BODY_MUTATIONS,
 ])

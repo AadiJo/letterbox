@@ -34,9 +34,10 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import type { MessageRef, PageToken } from '../adapter.ts'
-import type { Seed, AnswerDamage, SimMailbox } from '../contract.ts'
+import type { Seed, SimMailbox } from '../contract.ts'
 import { createMailboxEntry } from '../mailbox.ts'
 import type { MailboxEntry } from '../mailbox.ts'
+import { damaged, stall } from './answers.ts'
 import { ask, modify, parse, strings } from './modify.ts'
 import { MODIFY_SCOPE, READONLY_SCOPE, createOauth } from './oauth.ts'
 import { type Quota, createQuotas, unitsOf } from './quota.ts'
@@ -75,6 +76,22 @@ export interface GmailFake {
   setQuota(address: string, quota: Quota | null): void
   /** How many calls the rate limit refused for `address`. */
   refusals(address: string): number
+  /**
+   * The next API call's answer stalls, a refusal by the quota included: its status line and half
+   * its body go out, then nothing more until the fake closes. Lets a scenario check the client
+   * gives up on a call that hangs, and what it makes of an answer it never read whole. With
+   * `part`, only a call whose path under `users/me/` holds it counts as the next one.
+   * With `trickle`, a space follows every half second, so the answer never goes quiet but
+   * never ends either.
+   */
+  stallNextAnswer(part?: string, trickle?: boolean): void
+  /**
+   * The next API call whose path under `users/me/` holds `part` is not read for `seconds`: its
+   * client gets nothing back meanwhile, as one whose upload is slow does.
+   */
+  slowNextRequest(part: string, seconds: number): void
+  /** Resolves once the answer `stallNextAnswer` named has stalled. Rejects if none has within 5 s. */
+  answerStalled(): Promise<void>
   /** Every id, history id, page token and token this fake gave the core. None may reach a UI. */
   handedOut(): ReadonlySet<string>
   /** Resolves once the fake takes connections: at once, unless it is listening again after every account was offline. */
@@ -106,25 +123,6 @@ const INVALID_PAGE_TOKEN = {
 const send = (response: ServerResponse, status: number, body?: unknown): void => {
   if (body === undefined) return void response.writeHead(status).end()
   response.writeHead(status, { 'Content-Type': 'application/json; charset=UTF-8' }).end(JSON.stringify(body))
-}
-
-/**
- * A 200 that goes wrong on its way back. The status line and headers promise the whole body,
- * then the connection ends before any of it, or halfway through it, or the body arrives
- * whole but is not JSON.
- */
-const damaged = (response: ServerResponse, body: string, how: AnswerDamage): void => {
-  const sent = how === 'invalid-json' ? '{"id": ' : body
-  response.writeHead(200, {
-    'Content-Type': 'application/json; charset=UTF-8',
-    'Content-Length': String(Buffer.byteLength(sent)),
-  })
-  if (how === 'invalid-json') return void response.end(sent)
-  // Write what goes, then end the connection with the rest of the body still owed.
-  if (how === 'truncated')
-    return void response.write(sent.slice(0, Math.floor(sent.length / 2)), () => response.socket?.end())
-  response.flushHeaders()
-  response.socket?.end()
 }
 
 /** An error in the shape every Gmail endpoint uses. https://developers.google.com/gmail/api/guides/handle-errors */
@@ -349,6 +347,15 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
   // Listening again resolves the host first, so it finishes on a later tick.
   let listening: Promise<void> = Promise.resolve()
   /** Stops listening while every account is offline, and listens again on the same port once one is back. */
+  // Set by `stallNextAnswer`, and cleared by the API call whose answer it stalls. True stalls
+  // any call, a string only a call whose path holds it.
+  let stallNext: boolean | string = false
+  let trickleNext = false
+  // Set by `slowNextRequest`, and cleared by the call it slows.
+  let slowNext: { part: string; seconds: number } | null = null
+  // Told when that call's answer stalls.
+  let onStalled: (() => void)[] = []
+  let stalls = 0
   const listenWhileReachable = () => {
     const down = mailboxes.size > 0 && [...mailboxes.values()].every((entry) => entry.isOffline())
     if (down && server.listening) {
@@ -369,7 +376,11 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     busy.add(request.socket)
     response.on('close', () => busy.delete(request.socket))
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-    void readBody(request).then(async (body) => {
+    const slowed = slowNext !== null && url.pathname.includes(slowNext.part) ? slowNext : null
+    if (slowed) slowNext = null
+    const read = () => readBody(request)
+    const reading = slowed ? new Promise<void>((done) => setTimeout(done, slowed.seconds * 1000)).then(read) : read()
+    void reading.then(async (body) => {
       if (request.method === 'POST' && url.pathname === '/token') {
         const form = new URLSearchParams(body)
         const address = oauth.accountOf(form)
@@ -385,6 +396,14 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       if (entry?.isOffline()) return void request.socket.destroy()
       if (!entry) return fail(response, 401, 'Request had invalid authentication credentials.')
       const method = request.method ?? 'GET'
+      // Before the quota, so an answer it refuses stalls too.
+      if (stallNext === true || (stallNext !== false && path.includes(stallNext))) {
+        stallNext = false
+        stall(response, trickleNext, () => {
+          stalls += 1
+          for (const told of onStalled.splice(0)) told()
+        })
+      }
       const refused = quotas.charge(entry.control.address, unitsOf(method, path, url.searchParams))
       if (refused) {
         const wait = refused.retryAfter === undefined ? {} : { 'Retry-After': String(refused.retryAfter) }
@@ -425,6 +444,24 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     refreshes: (address) => oauth.refreshes(address),
     setQuota: (address, quota) => quotas.set(address, quota),
     refusals: (address) => quotas.refusals(address),
+    stallNextAnswer: (part, trickle = false) => {
+      stallNext = part ?? true
+      trickleNext = trickle
+    },
+    slowNextRequest: (part, seconds) => {
+      slowNext = { part, seconds }
+    },
+    answerStalled: () =>
+      new Promise<void>((resolve, reject) => {
+        // At once when the last stall asked for has already happened.
+        if (stalls > 0 && stallNext === false) return resolve()
+        // A call that never comes must fail the scenario, not hang it.
+        const timer = setTimeout(() => reject(new Error('fake gmail: no answer stalled within 5 s')), 5000)
+        onStalled.push(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+      }),
     handedOut: () => handedOut,
     reachable: () => listening,
     secrets: () => oauth.secrets(),
