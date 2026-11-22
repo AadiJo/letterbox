@@ -4,9 +4,22 @@
 // A run that is stopped still puts the files back: SIGINT, SIGTERM, SIGHUP and an uncaught
 // error all end at the `exit` handler below. SIGKILL cannot be caught, so before a break
 // edits anything it writes the originals to JOURNAL, and the next run puts them back first.
+// The journal is on disk before the first edit and goes only once the originals are, so even
+// a machine that stops leaves either no journal and clean files, or a whole journal.
 
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { constants, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -59,10 +72,35 @@ function stopChild() {
   child = null
 }
 
+/**
+ * Writes `text` to `path` and waits until it is on disk. A plain write sits in memory for up to
+ * 30 s first, so a machine that stops meanwhile can keep a later write and lose this one: a
+ * renamed journal comes back empty, or a source file keeps its break while its journal is gone.
+ */
+function writeToDisk(path: string, text: string) {
+  const fd = openSync(path, 'w')
+  try {
+    writeFileSync(fd, text)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Waits until the folder `path` is on disk as it is now, as a rename into it leaves it. */
+function syncFolder(path: string) {
+  const fd = openSync(path, 'r')
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /** Puts back the files of the applied break and removes the journal. Safe to call when none is applied. */
 function putBack() {
   if (applied === null) return
-  for (const file of applied.files) writeFileSync(file.path, file.original)
+  for (const file of applied.files) writeToDisk(file.path, file.original)
   rmSync(JOURNAL, { force: true })
   applied = null
 }
@@ -91,14 +129,57 @@ function alive(pid: number) {
   }
 }
 
+/** True when `value` has a journal's shape. */
+const isJournal = (value: unknown): value is Journal => {
+  if (typeof value !== 'object' || value === null) return false
+  const { pid, break: name, files } = value as Record<string, unknown>
+  return (
+    typeof pid === 'number' &&
+    typeof name === 'string' &&
+    Array.isArray(files) &&
+    files.every(
+      (file: unknown) =>
+        typeof file === 'object' &&
+        file !== null &&
+        ['path', 'original', 'broken'].every((key) => typeof (file as Record<string, unknown>)[key] === 'string'),
+    )
+  )
+}
+
+/** The journal a run left, null when there is none, or 'unreadable' when it is empty, cut off or not a journal. */
+function readJournal(): Journal | null | 'unreadable' {
+  if (!existsSync(JOURNAL)) return null
+  try {
+    const value: unknown = JSON.parse(readFileSync(JOURNAL, 'utf8'))
+    return isJournal(value) ? value : 'unreadable'
+  } catch {
+    return 'unreadable'
+  }
+}
+
 /**
  * Called once at the start of a run. Puts back the files a killed run left broken, as its
  * journal records them, and says so loudly. Throws, and touches nothing, when another run is
  * still applying a break here, or when a file changed since the killed run edited it.
+ *
+ * A journal it cannot read stops the run before it touches anything. Which break it held, and
+ * so which file may still be broken, is lost. A run on top of a break left in the source would
+ * read that break as the original, and report on broken code. A person has to look.
  */
 function recover() {
-  if (!existsSync(JOURNAL)) return
-  const journal: Journal = JSON.parse(readFileSync(JOURNAL, 'utf8'))
+  const journal = readJournal()
+  if (journal === null) return
+  if (journal === 'unreadable') {
+    const path = relative(ROOT, JOURNAL)
+    console.log(`\n!!! ${path} is here, but it is empty or cut off, so it cannot be read.`)
+    console.log(
+      '!!! A break run stopped part way. Its break may still be in the source, and this run cannot tell which.',
+    )
+    console.log(
+      `!!! No break ran and no file was changed. Check \`git status\`, put back any break left in the source, then delete ${path}.\n`,
+    )
+    process.exit(1)
+  }
   if (journal.pid !== process.pid && alive(journal.pid))
     throw new Error(`Another break run (pid ${journal.pid}) is applying a break in this checkout. Wait for it to end.`)
   const changed = journal.files.filter((file) => {
@@ -112,7 +193,7 @@ function recover() {
   console.log(`\n!!! A break run (pid ${journal.pid}) was killed while "${journal.break}" was applied.`)
   for (const file of journal.files) {
     if (readFileSync(file.path, 'utf8') === file.original) continue
-    writeFileSync(file.path, file.original)
+    writeToDisk(file.path, file.original)
     console.log(`!!! Put back ${relative(ROOT, file.path)}.`)
   }
   rmSync(JOURNAL)
@@ -166,10 +247,12 @@ async function caught(mutation: Mutation): Promise<{ ok: boolean; why: string }>
     files.set(path, { ...file, broken: file.broken.replace(edit.find, edit.replace) })
   }
   applied = { pid: process.pid, break: mutation.name, files: [...files.values()] }
-  // The journal goes in whole before any edit, so a kill at any point leaves it readable.
+  // The journal is whole and on disk before any edit, so a stop at any point, of this process
+  // or of the machine, leaves no journal and clean files, or a journal the next run can read.
   mkdirSync(dirname(JOURNAL), { recursive: true })
-  writeFileSync(`${JOURNAL}.partial`, JSON.stringify(applied))
+  writeToDisk(`${JOURNAL}.partial`, JSON.stringify(applied))
   renameSync(`${JOURNAL}.partial`, JOURNAL)
+  syncFolder(dirname(JOURNAL))
   try {
     for (const file of applied.files) writeFileSync(file.path, file.broken)
     const run = await runScenarios(mutation.scenarios)
