@@ -2,15 +2,26 @@
 // from UTC's: Updates with its volume strips counted by the user's days, the list windowed
 // to its last sender, an opened sender with its newest marked read and every older line
 // reachable, Mark read and Archive all of a sender with over 50 conversations and their
-// undo, the Let go? pile by month with Let go on d and its toast, People, and avatar
-// contrast. Each is checked against what the seed holds, and captured at the mock's scenes
+// undo, the Let go? pile by month with Let go on d and its toast, People, avatar contrast,
+// and the edges in updates-edges.ts: the keyboard past the loaded window, and a lost core.
+// Each is checked against what the seed holds, and captured at the mock's scenes
 // (c2-updates-1440.png beside b-updates-1440.png, and so on).
 
 import type { SeedAddress, SeedMessage } from '@letterbox/sim-provider/contract'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
-import type { Browser, Locator, Page } from 'playwright'
+import type { Browser, Page } from 'playwright'
 import { MUTED } from './c2.ts'
 import { appErrors, captureC2, equal, openPage, SIZES } from './record.ts'
+import {
+  checkKeyboardPastTheWindow,
+  checkLost,
+  nav,
+  senderRow,
+  text,
+  texts,
+  toast,
+  waitForText,
+} from './updates-edges.ts'
 
 const seed = devSeeds.updates
 const ZONE = 'America/Chicago'
@@ -84,26 +95,6 @@ function headingsOf(conversations: typeof pile) {
   if (conversations.length > shown) headings.push(`${monthName(older)} and older${conversations.length - shown}`)
   return headings
 }
-
-const sidebar = (page: Page) => page.getByRole('navigation', { name: 'Sidebar' })
-const nav = (page: Page, name: string) => sidebar(page).getByRole('button', { name: new RegExp(`^${name}`) })
-const text = (page: Page, selector: string) => page.locator(selector).first().textContent()
-const toast = (page: Page) => page.locator('[role="status"]').filter({ has: page.locator('[data-field="toast"]') })
-const senderRow = (page: Page, name: string) =>
-  page
-    .locator('[data-sender]')
-    .filter({ has: page.locator('[data-field="person"]', { hasText: new RegExp(`^${name}$`) }) })
-
-/** Waits for the page's `selector` to read `expected`. */
-const waitForText = (page: Page, selector: string, expected: string) =>
-  page.waitForFunction(([where, wanted]) => document.querySelector(where)?.textContent === wanted, [
-    selector,
-    expected,
-  ] as const)
-
-/** The text of every match of `selector` under `within`. */
-const texts = (within: Locator, selector: string) =>
-  within.locator(selector).evaluateAll((all) => all.map((one) => one.textContent ?? ''))
 
 async function checkList(page: Page) {
   await nav(page, 'Updates').click()
@@ -276,36 +267,6 @@ async function checkAvatars(page: Page) {
   )
 }
 
-/**
- * With the open sender scrolled out of the list, j opens the next sender the list has loaded,
- * and the list scrolls to it, even when its row was not painted. In a 1024 by 700 window, the
- * last screen of the list leaves loaded rows above the painted ones.
- */
-async function checkKeyboardPastTheWindow(page: Page) {
-  const list = page.locator('[role="listbox"][aria-label="Updates"]')
-  await page.setViewportSize(SIZES.narrow)
-  await list.evaluate((element) => element.scrollTo({ top: element.scrollHeight }))
-  await senderRow(page, lastSender?.name ?? '').waitFor()
-  equal(
-    await page.locator('[data-sender][aria-selected="true"]').count(),
-    0,
-    'the open sender has scrolled out of the list',
-  )
-  await page.keyboard.press('j')
-  const opened = page.locator('[data-sender][aria-selected="true"]')
-  await opened.waitFor()
-  const [row, box] = [await opened.boundingBox(), await list.boundingBox()]
-  equal(
-    row !== null && box !== null && row.y >= box.y && row.y + row.height <= box.y + box.height,
-    true,
-    'j opens a sender the list then scrolls fully into view',
-  )
-  await page.setViewportSize(SIZES.wide)
-  await list.evaluate((element) => element.scrollTo({ top: 0 }))
-  await senderRow(page, 'Codeyard').click()
-  await page.locator('[data-field="archive-count"]').waitFor()
-}
-
 export async function checkUpdatesScreens(browser: Browser, url: string) {
   const { page, relay, errors, close } = await openPage(browser, url, 'trace-updates.zip', ZONE)
   await page.locator('[data-field="people-count"]').waitFor()
@@ -330,7 +291,7 @@ export async function checkUpdatesScreens(browser: Browser, url: string) {
     )
   })
 
-  await checkKeyboardPastTheWindow(page)
+  await checkKeyboardPastTheWindow(page, lastSender?.name ?? '')
 
   // Mark read from a hovered row reads all of one sender's mail. z takes it back.
   const target = senderRow(page, 'Tasklane')
@@ -471,29 +432,4 @@ export async function checkUpdatesScreens(browser: Browser, url: string) {
   await checkLost(page, relay.drop)
   equal(appErrors(errors, { lostCore: true }), [], 'the page logged no errors')
   await close()
-}
-
-/** How a control looks off while the core is lost: disabled, and dimmed whole to 40%. */
-const offWhileLost = (control: Locator) =>
-  control.evaluate((element) => ({
-    disabled: element instanceof HTMLButtonElement && element.disabled,
-    opacity: getComputedStyle(element).opacity,
-  }))
-
-/**
- * With the core lost, Let go in Done's slot is off at 40%, as Done and the toolbar's actions
- * are, and d lets nothing go. It stays on Let go?: a screen opened after the loss would open
- * subscriptions on a closed connection.
- */
-async function checkLost(page: Page, drop: () => Promise<void>) {
-  await nav(page, 'Let go').click()
-  await page.locator('[role="option"]').first().click()
-  await page.locator('[data-field="waited"]').waitFor()
-  const count = await text(page, '[data-field="let-go-count"]')
-  await drop()
-  await page.locator('[data-field="lost-core"]').waitFor()
-  const letGo = page.getByRole('button', { name: 'Let go', exact: true })
-  equal(await offWhileLost(letGo), { disabled: true, opacity: '0.4' }, 'while lost, Let go is off at 40%, like Done')
-  await page.keyboard.press('d')
-  equal(await text(page, '[data-field="let-go-count"]'), count, 'while lost, d lets nothing go')
 }
