@@ -260,6 +260,10 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     )
 
     // From the reader: each row's Save and Open reach the same shell, and the row shows what came of it.
+    // The OS clamps the window to its screen, and under 1100 px wide (a 1024 by 768 CI runner) the
+    // sidebar folds behind its toggle, so the check opens it the way a person would.
+    const toggle = page.getByRole('button', { name: 'Show the sidebar' })
+    if (await toggle.isVisible()) await toggle.click()
     await page
       .getByRole('navigation', { name: 'Sidebar' })
       .getByRole('button', { name: /^Inbox/ })
