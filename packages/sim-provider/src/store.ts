@@ -42,8 +42,12 @@ export type Stored = {
   order: number
   facts: RemoteFacts
   body: RemoteBody
-  /** The content of each attachment `body` lists, in the same order. */
-  contents: Buffer[]
+  /**
+   * The content of each attachment `body` lists, in the same order, made when it is read. A
+   * seeded file's placeholder is built on each fetch, so a seed of large files holds none of
+   * their bytes. A sent copy's files are the bytes the core sent, kept as they came.
+   */
+  contents: readonly (() => Buffer)[]
   unread: boolean
   flagged: boolean
   /** Mailbox keys. */
@@ -161,11 +165,18 @@ export const bodyOf = (seed: SeedMessage): RemoteBody => ({
 })
 
 /** What a seed attachment holds: its name and a line end, over and over, to its size, or to `served` when it has one. */
-export const placeholderContent = ({ name, size, served }: SeedAttachment): Buffer =>
+export const placeholderContent = ({ name, size, served }: Pick<SeedAttachment, 'name' | 'size' | 'served'>): Buffer =>
   Buffer.alloc(served ?? size, `${name}\n`)
 
-/** The content of each of a seed message's attachments, as `bodyOf` lists them. */
-export const contentsOf = (seed: SeedMessage): Buffer[] => attachmentsOf(seed).map(placeholderContent)
+/**
+ * The content of each of a seed message's attachments, as `bodyOf` lists them, built when read.
+ * The name and length are taken now, so a caller that changes its seed later changes nothing here.
+ */
+export const contentsOf = (seed: SeedMessage): (() => Buffer)[] =>
+  attachmentsOf(seed).map(({ name, size, served }) => {
+    const length = served ?? size
+    return () => placeholderContent({ name, size: length })
+  })
 
 /** A seed message's attachments: as it names them, or that many placeholder files. */
 const attachmentsOf = ({ attachments = 0 }: SeedMessage): readonly SeedAttachment[] =>

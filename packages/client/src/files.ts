@@ -1,9 +1,15 @@
-// What main decides about an attachment's file name before it touches the disk. The name
-// comes from a message, so it is hostile: it may hold a path, a name the OS treats
-// specially, or characters that make "photo.exe" read as "photo.pdf". attachments.ts calls these.
+// What the desktop shell decides about an attachment's file name before it touches the disk,
+// and what the reader shows. The name comes from a message, so it is hostile: it may hold a
+// path, a name the OS treats specially, or characters that make "photo.exe" read as "photo.pdf".
+// The shell's main (attachments.ts) cleans the name and warns before opening a file that can
+// run code. The reader (Attachments.tsx) shows the same cleaned name and marks the same files,
+// so what it says at rest agrees with the warning. Plain code, no Node, so both can load it.
 
 /** The most bytes of UTF-8 a cleaned name keeps. Every common file system takes 255. */
 const MAX_BYTES = 200
+
+const utf8 = new TextEncoder()
+const bytesOf = (text: string) => utf8.encode(text).length
 
 /** Names Windows keeps for devices, with or without an extension. */
 const DEVICE_NAMES = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i
@@ -21,16 +27,41 @@ const RESERVED = /[/\\:*?"<>|]/g
 /** The longest extension a cut keeps, dot included. ".settingcontent-ms", among the risky ones, is 18. */
 const MAX_EXTENSION = 32
 
-/** Drops a leading dot, which hides a file or makes "..", and trailing dots and spaces, which Windows drops itself. */
-const trimmed = (name: string) => name.replace(/^[\s.]+|[\s.]+$/g, '')
+/** A character `trimmed` drops at either end: a dot, or white space as `\s` means it. */
+const trimmable = (char: string | undefined) => char === '.' || (char !== undefined && /\s/.test(char))
 
-/** Cuts a name to MAX_BYTES from the end of its stem, keeping its extension. */
+/**
+ * Drops a leading dot, which hides a file or makes "..", and trailing dots and spaces, which
+ * Windows drops itself. One scan from each end, so a name of any length costs its length:
+ * the name is the sender's, and the reader runs this as a conversation opens.
+ */
+function trimmed(name: string): string {
+  let start = 0
+  let end = name.length
+  while (start < end && trimmable(name[start])) start += 1
+  while (end > start && trimmable(name[end - 1])) end -= 1
+  return name.slice(start, end)
+}
+
+/** The bytes one code point takes in UTF-8, as TextEncoder writes it: a lone surrogate becomes U+FFFD, three bytes. */
+const utf8Length = (point: number) => (point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4)
+
+/**
+ * Cuts a name to MAX_BYTES from the end of its stem, keeping its extension: the longest run of
+ * whole code points from the start that fits beside the extension. One walk over the stem.
+ */
 function shorten(name: string): string {
   const dot = name.lastIndexOf('.')
   const extension = dot > 0 && name.length - dot <= MAX_EXTENSION ? name.slice(dot) : ''
-  let stem = Array.from(name.slice(0, name.length - extension.length))
-  while (stem.length > 0 && Buffer.byteLength(stem.join('') + extension) > MAX_BYTES) stem = stem.slice(0, -1)
-  return stem.join('') + extension
+  const budget = MAX_BYTES - bytesOf(extension)
+  let used = 0
+  let end = 0
+  for (const char of name.slice(0, name.length - extension.length)) {
+    used += utf8Length(char.codePointAt(0) ?? 0)
+    if (used > budget) break
+    end += char.length
+  }
+  return name.slice(0, end) + extension
 }
 
 /**
@@ -43,7 +74,7 @@ function shorten(name: string): string {
 export function safeName(name: string): string {
   const clean = trimmed(name.normalize('NFC').replace(INVISIBLE, '').replace(RESERVED, '_'))
   // A cut can leave a dot or a space at the end again, so the name is trimmed once more after it.
-  const cut = trimmed(Buffer.byteLength(clean) > MAX_BYTES ? shorten(clean) : clean)
+  const cut = trimmed(bytesOf(clean) > MAX_BYTES ? shorten(clean) : clean)
   if (cut === '') return 'attachment'
   return DEVICE_NAMES.test(cut) ? `_${cut}` : cut
 }
@@ -51,7 +82,7 @@ export function safeName(name: string): string {
 /**
  * Extensions whose file the OS runs, installs or mounts, or opens in a program that runs code
  * from it, when a person opens it: programs, installers, scripts, shortcuts, disk images and
- * documents with macros. Main warns before it opens one.
+ * documents with macros. Main warns before it opens one, and the reader marks one at rest.
  */
 const RUNS_CODE = new Set(
   [

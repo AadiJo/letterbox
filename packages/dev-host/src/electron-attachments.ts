@@ -4,10 +4,12 @@
 // names main gives them, the warning before a file that can run code, long names cut so they
 // keep their extension and end in neither a dot nor a space, that a save that fails part
 // way leaves the file it would replace as it was, that the page never sees a path, and that
-// every temp copy but the opened ones is gone afterwards.
+// every temp copy but the opened ones is gone afterwards. Then the reader's rows: they mark
+// the files main warns about, and their Save, Open and Retry reach the same shell.
 
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { safeName } from '@letterbox/client/files'
 import type { BlobId } from '@letterbox/protocol'
 import { checkQuit, equal, quit, seed, STATE, WAIT_MS, withApp, within } from './electron-app.ts'
 import type { DevServer } from './server.ts'
@@ -191,6 +193,20 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       [basename(dirname(opened)), basename(dirname(program))].toSorted(),
       'attachments: only the two opened copies are left in the temp folder',
     )
+    // A sender can name a file anything, at any length, and the reader cleans the name as a
+    // conversation opens. The cleaning takes time in proportion to the name, not its square.
+    const hostile = ['a'.repeat(100_000), `a${' '.repeat(100_000)}b`, '中'.repeat(100_000), '.'.repeat(100_000)]
+    const timings = hostile.map((name) => {
+      const started = performance.now()
+      const cleaned = safeName(`${name}.exe`)
+      return { ms: performance.now() - started, bytes: new TextEncoder().encode(cleaned).length }
+    })
+    equal(
+      timings.map((timing) => timing.ms < 50 && timing.bytes <= 201),
+      [true, true, true, true],
+      `attachments: names of 100,000 characters clean in under 50 ms each, to at most 200 bytes (${timings.map((timing) => timing.ms.toFixed(1)).join(', ')} ms)`,
+    )
+
     // A disk that fills up part way through the copy, over a file the person chose to replace.
     const kept = join(saved, 'kept.pdf')
     writeFileSync(kept, 'the file the person had')
@@ -228,5 +244,70 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       { ok: false, reason: 'gone' },
       'attachments: a blob id that is not a string names no file',
     )
+
+    // From the reader: each row's Save and Open reach the same shell, and the row shows what came of it.
+    await page
+      .getByRole('navigation', { name: 'Sidebar' })
+      .getByRole('button', { name: /^Inbox/ })
+      .click()
+    await page.locator('[data-list="mail"] [role="option"]', { hasText: SUBJECT }).first().click()
+    const row = (name: string) =>
+      page
+        .locator('[data-message="open"] [data-field="attachment"]')
+        .filter({ has: page.locator('[data-field="name"]', { hasText: name }) })
+    /** Clicks a row's button, and waits until the shell has answered and the row shows it. */
+    const press = async (action: 'Open' | 'Save' | 'Retry', name: string) => {
+      await page.getByRole('button', { name: `${action} ${name}`, exact: true }).click()
+      await row(name).and(page.locator('[data-state="rest"], [data-state="failed"]')).waitFor({ timeout: WAIT_MS })
+      return row(name).getAttribute('data-state')
+    }
+    const REPORT = 'Q3 report.pdf'
+    const SETUP = '_setupfdp.exe'
+    await row(REPORT).waitFor({ timeout: WAIT_MS })
+    await row(SETUP).waitFor({ timeout: WAIT_MS })
+    // The reader reads the same rules as main (@letterbox/client/files), so it marks at rest
+    // exactly the files main warned about above, under the names main warned with.
+    const marked = await page
+      .locator('[data-message="open"] [data-field="attachment"]:has([data-field="program"]) [data-field="name"]')
+      .allTextContents()
+    equal(
+      marked.map(warning).toSorted(),
+      [...new Set((await asked()).warned)].toSorted(),
+      'attachments: the reader marks as a program exactly the files main warns about, under the names it warns with',
+    )
+    equal(await row(REPORT).locator('[data-field="program"]').count(), 0, 'attachments: the reader marks no PDF')
+
+    const fromReader = join(saved, 'from-the-reader.pdf')
+    await answer(fromReader, 0)
+    equal(await press('Save', REPORT), 'rest', "attachments: Save on the reader's row comes back to rest")
+    equal(readFileSync(fromReader).equals(bytesOf(0)), true, 'attachments: it saved the bytes the provider has')
+
+    const before = await asked()
+    await answer(null, 0)
+    equal(await press('Open', SETUP), 'rest', "attachments: declining main's warning leaves the program's row at rest")
+    const after = await asked()
+    equal(
+      [after.warned.slice(before.warned.length), after.opened.length - before.opened.length],
+      [[warning(SETUP)], 0],
+      "attachments: Open on the program's row brings main's one warning, for that program, and nothing opens",
+    )
+    equal(await press('Open', REPORT), 'rest', "attachments: Open on the PDF's row comes back to rest")
+    equal(
+      basename((await asked()).opened.at(-1) ?? ''),
+      REPORT,
+      "attachments: the OS opened the PDF from the reader's row",
+    )
+
+    sim.mailbox.setOffline(true)
+    equal(
+      [await press('Save', REPORT), await row(REPORT).locator('[data-field="failed"]').textContent()],
+      ['failed', 'Couldn’t fetch · offline'],
+      'attachments: offline, the row says it could not fetch the file',
+    )
+    sim.mailbox.setOffline(false)
+    const retried = join(saved, 'retried.pdf')
+    await answer(retried, 0)
+    equal(await press('Retry', REPORT), 'rest', 'attachments: back online, Retry saves it')
+    equal(readFileSync(retried).equals(bytesOf(0)), true, 'attachments: the retried save holds the same bytes')
     checkQuit('attachments', run, await quit(run))
   })

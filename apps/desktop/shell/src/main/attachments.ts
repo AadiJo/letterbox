@@ -7,7 +7,7 @@
 //         it, so a failed copy leaves a file it would replace as it was, and removes the temp copy.
 //   open  fetches the file into a temp folder of its own, under its cleaned name, then hands
 //         it to the OS, which opens it with the app it picks for that type. Main never runs a
-//         file. A type that can run code (files.ts) gets a native warning first, and opens
+//         file. A type that can run code (@letterbox/client/files) gets a native warning first, and opens
 //         only if the person chooses to. The copy is readable by this user only and has no
 //         execute bit, and on Windows and macOS it is marked as from the internet, so the OS
 //         applies its own checks too. It stays after the app quits, since the app that
@@ -23,10 +23,10 @@ import { basename, dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
+import { runsCode, safeName } from '@letterbox/client/files'
 import type { AttachmentOutcome } from '@letterbox/client/message-port'
 import type { BlobId } from '@letterbox/protocol'
 import type { CoreSession, Fetched } from './core.ts'
-import { safeName, runsCode } from './files.ts'
 import { log } from './log.ts'
 
 /** The folder this run keeps its temp copies in, made on first use. */

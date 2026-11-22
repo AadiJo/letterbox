@@ -268,7 +268,7 @@ async function checkAvatars(page: Page) {
 }
 
 export async function checkUpdatesScreens(browser: Browser, url: string) {
-  const { page, relay, errors, close } = await openPage(browser, url, 'trace-updates.zip', ZONE)
+  const { page, relay, errors, close } = await openPage(browser, url, 'trace-updates.zip', { timezoneId: ZONE })
   await page.locator('[data-field="people-count"]').waitFor()
   await checkList(page)
   await checkReader(page)

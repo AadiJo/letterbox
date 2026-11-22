@@ -298,7 +298,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     calls: () => ({ ...counts }),
     sent: () => sentCopies.map((copy) => ({ ...copy, recipients: [...copy.recipients] })),
     attachmentBytes: (key, index) => {
-      const content = messageOf(key).contents[index]
+      const content = messageOf(key).contents[index]?.()
       if (content === undefined) throw new Error(`sim provider: "${key}" has no attachment ${index}`)
       return content
     },
@@ -341,7 +341,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
 
   /** The content of the attachment at `index` in a message's body, or gone. */
   const attachment = ({ ref, index }: { ref: MessageRef; index: number }): AttachmentResult => {
-    const content = targetsOf([ref])[0]?.contents[index]
+    const content = targetsOf([ref])[0]?.contents[index]?.()
     return content === undefined ? { kind: 'gone' } : { kind: 'bytes', base64: content.toString('base64') }
   }
 
@@ -401,7 +401,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     if (!sentBox) return { kind: 'refused', reason: 'not-supported' }
     const copy = readSent(outgoing.raw, dialect === 'labels' ? false : null)
     const key = `sent-${sentCopies.length + 1}`
-    const stored = file({ key, ...copy, unread: false, flagged: false, mailboxes: [sentBox.key] })
+    const contents = copy.contents.map((content) => () => content)
+    const stored = file({ key, ...copy, contents, unread: false, flagged: false, mailboxes: [sentBox.key] })
     const recipients = [...copy.facts.to, ...copy.facts.cc].map((address) => address.address)
     sentCopies.push({ key, recipients: [...recipients, ...outgoing.bcc], raw: outgoing.raw })
     return { kind: 'sent', ref: stored.ref }

@@ -258,14 +258,25 @@ export async function closeLeftOpen() {
  * Content Security Policy refused as a request that failed with "csp" before it reached
  * the network: those go in `blocked`. Every other remote request goes in `remote`.
  * Its trace goes to artifacts/ui/`trace` when the check closes it, or when `closeLeftOpen` does.
+ * `deviceScaleFactor` 2 takes screenshots at twice their pixels, to compare with 2x mocks.
  */
-export async function openPage(browser: Browser, url: string, trace: string, timezoneId = 'UTC') {
+export async function openPage(
+  browser: Browser,
+  url: string,
+  trace: string,
+  { timezoneId = 'UTC', deviceScaleFactor = 1 } = {},
+) {
   const unsafe = trace.match(UNSAFE_IN_FILE_NAMES)
   if (unsafe)
     throw new Error(
       `the trace name "${trace}" has ${JSON.stringify(unsafe[0])} in it, which CI's artifact upload rejects`,
     )
-  const context: BrowserContext = await browser.newContext({ viewport: SIZES.wide, locale: 'en-US', timezoneId })
+  const context: BrowserContext = await browser.newContext({
+    viewport: SIZES.wide,
+    deviceScaleFactor,
+    locale: 'en-US',
+    timezoneId,
+  })
   await context.tracing.start({ screenshots: true, snapshots: true })
   const page: Page = await context.newPage()
   page.setDefaultTimeout(WAIT_MS)

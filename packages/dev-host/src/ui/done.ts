@@ -72,7 +72,7 @@ async function checkReaderLayout(page: Page) {
   equal(
     await page.locator('[data-field="attachment"]').count(),
     0,
-    'a message with no attachments shows no attachment chip',
+    'a message with no attachments shows no attachment row',
   )
   equal(
     subject.left - list.right <= 64,
@@ -147,13 +147,17 @@ async function checkDoneAndUndo(page: Page) {
   await page.keyboard.press('d')
   await toast(page).waitFor()
   await page.locator(`[data-row="${first}"]`).waitFor({ state: 'detached' })
-  // Tomas's lease addendum carries its PDF, shown as a chip under the body.
+  // Tomas's lease addendum carries its PDF, shown as a row under the body.
   equal(
     await page
       .locator('[data-message="open"] [data-field="attachment"]')
-      .evaluateAll((files) => files.map((file) => [...file.children].map((part) => part.textContent))),
+      .evaluateAll((files) =>
+        files.map((file) =>
+          ['type', 'name', 'size'].map((part) => file.querySelector(`[data-field="${part}"]`)?.textContent),
+        ),
+      ),
     [['PDF', 'Addendum-4B-signed-TO.pdf', '212 KB']],
-    "a message's attachment shows as a chip with its type, name and size",
+    "a message's attachment shows as a row with its type, name and size",
   )
   await checkToastClear(page, 'wide')
   await checkToastClear(page, 'narrow')

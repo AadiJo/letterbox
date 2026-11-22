@@ -25,6 +25,8 @@
   --color-well: #121214;
   --color-line: rgb(255 255 255 / 6%);
   --color-hover: rgb(255 255 255 / 8%);
+  /* A file's row under the pointer (Attachments.tsx). */
+  --color-wash: rgb(255 255 255 / 4%);
   --color-pill: rgb(255 255 255 / 8%);
   --color-nav: rgb(255 255 255 / 7%);
   --color-keycap: rgb(255 255 255 / 12%);

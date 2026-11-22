@@ -1,6 +1,6 @@
 // The end-to-end UI check, run by `pnpm check:ui` and `pnpm check`.
 //
-// Eight runs, each against real cores over the sim provider, in Playwright's Chromium:
+// Ten runs, each against real cores over the sim provider, in Playwright's Chromium:
 //   people-first  `pnpm dev` (main.ts) with the people-first seed: People, All mail, the
 //                 reader, the C2 design's rules (ui/c2.ts), HTML bodies, the narrow window,
 //                 keyboard actions, new mail, a reload (ui/people-first.ts)
@@ -16,6 +16,7 @@
 //   compose       the same parts: the compose page, a new message and a forward, recipient
 //                 suggestions, sending and undo from it (ui/compose.ts, ui/forward.ts)
 //   lost core     the same parts: the strip at the reader's foot once the connection drops, and Reload (ui/lost-core.ts)
+//   attachments   the same parts: a message's files as rows, and each state of a save or an open (ui/attachments.ts)
 // Every process a run started must be gone at its end.
 //
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
@@ -26,6 +27,7 @@
 
 import { mkdirSync, rmSync } from 'node:fs'
 import { type Browser, chromium } from 'playwright'
+import { checkAttachments } from './ui/attachments.ts'
 import { checkCompose } from './ui/compose.ts'
 import { checkDone } from './ui/done.ts'
 import { checkFirstSync } from './ui/first-sync.ts'
@@ -78,6 +80,7 @@ try {
   await runCheck(() => checkReply(browser))
   await runCheck(() => checkCompose(browser))
   await runCheck(() => checkLostCore(browser))
+  await runCheck(() => checkAttachments(browser))
 } finally {
   await browser.close()
 }
