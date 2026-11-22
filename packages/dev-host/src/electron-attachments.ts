@@ -7,6 +7,7 @@
 // every temp copy but the opened ones is gone afterwards. Then the reader's rows: they mark
 // the files main warns about, and their Save, Open and Retry reach the same shell.
 
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { safeName } from '@letterbox/client/files'
@@ -147,7 +148,20 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     if (opened === undefined) throw new Error('main handed nothing to the OS to open')
     equal(basename(opened), 'Q3 report.pdf', 'attachments: the OS opens a copy under the file name')
     equal(readFileSync(opened).equals(bytesOf(0)), true, 'attachments: the copy holds the bytes the provider has')
-    equal(statSync(opened).mode & 0o777, 0o600, "attachments: the copy is the user's only, and not executable")
+    // Windows keeps no mode bits, so Node reports 0o666 there. It gets the internet mark instead.
+    if (process.platform === 'win32') {
+      equal(
+        readFileSync(`${opened}:Zone.Identifier`, 'utf8').includes('ZoneId=3'),
+        true,
+        'attachments: on Windows the copy is marked as from the internet',
+      )
+    } else {
+      equal(statSync(opened).mode & 0o777, 0o600, "attachments: the copy is the user's only, and not executable")
+    }
+    if (process.platform === 'darwin') {
+      const quarantine = execFileSync('/usr/bin/xattr', ['-p', 'com.apple.quarantine', opened], { encoding: 'utf8' })
+      equal(quarantine.includes(';Letterbox;'), true, 'attachments: on macOS the copy is quarantined')
+    }
     equal((await asked()).warned, [], 'attachments: a PDF opens without a warning')
 
     equal(await open(setup.blobId), { ok: false, reason: 'declined' }, 'attachments: a cancelled warning opens nothing')
@@ -246,6 +260,10 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     )
 
     // From the reader: each row's Save and Open reach the same shell, and the row shows what came of it.
+    // The OS clamps the window to its screen, and under 1100 px wide (a 1024 by 768 CI runner) the
+    // sidebar folds behind its toggle, so the check opens it the way a person would.
+    const toggle = page.getByRole('button', { name: 'Show the sidebar' })
+    if (await toggle.isVisible()) await toggle.click()
     await page
       .getByRole('navigation', { name: 'Sidebar' })
       .getByRole('button', { name: /^Inbox/ })

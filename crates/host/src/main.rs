@@ -127,7 +127,13 @@ fn start() -> Result<(PathBuf, GmailClient), StartError> {
 )]
 fn main() -> ExitCode {
     match start() {
-        Ok((data, client)) => run_stdio("letterbox-core", app_parts(data, client)),
+        Ok((data, client)) => match app_parts(data, client) {
+            Ok(parts) => run_stdio("letterbox-core", parts),
+            Err(error) => {
+                eprintln!("letterbox-core: {error}");
+                ExitCode::FAILURE
+            }
+        },
         Err(error) => {
             eprintln!("letterbox-core: {error}\n{USAGE}");
             ExitCode::from(2)

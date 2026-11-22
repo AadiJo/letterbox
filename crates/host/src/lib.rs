@@ -54,16 +54,17 @@ pub struct GmailClient {
 }
 
 /// The parts a real app runs the core with: the wall clock, the system keychain, and
-/// Gmail at Google's real endpoints.
-pub fn app_parts(data_path: PathBuf, gmail: GmailClient) -> Parts {
-    Parts {
+/// Gmail at Google's real endpoints. It opens the store to read its id, which names the
+/// store's keychain entries, so a store that cannot open is an error here.
+pub fn app_parts(data_path: PathBuf, gmail: GmailClient) -> Result<Parts, StoreError> {
+    Ok(Parts {
+        secrets: Box::new(SystemKeychain::for_store(letterbox_core::store_id(&data_path)?)),
         data_path,
         env: Box::new(SystemEnvironment),
-        secrets: Box::new(SystemKeychain),
         factories: vec![gmail_factory(GmailConfig::google(gmail.id, gmail.secret))],
         undo_window: UNDO_WINDOW,
         confirm_window: CONFIRM_WINDOW,
-    }
+    })
 }
 
 /// Runs a core for one client until `input` ends. Each line of `input` is one message

@@ -44,7 +44,14 @@ impl Drop for Listener {
 }
 
 /// Starts listening. `attempt` counts sign-in attempts, from 0, and picks the port for `Loopback::Unix`.
-pub async fn listen(loopback: &Loopback, attempt: u16) -> io::Result<Listening> {
+pub async fn listen(
+    loopback: &Loopback,
+    #[cfg_attr(
+        not(unix),
+        expect(unused_variables, reason = "only Loopback::Unix, which is unix only, reads it")
+    )]
+    attempt: u16,
+) -> io::Result<Listening> {
     match loopback {
         Loopback::Tcp => {
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;

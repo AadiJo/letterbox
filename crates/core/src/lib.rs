@@ -85,7 +85,7 @@ use crate::secrets::Secrets;
 use crate::sign_in::Attempts;
 use crate::snapshot::Backfill;
 use crate::store::Store;
-pub use crate::store::StoreError;
+pub use crate::store::{StoreError, store_id};
 use crate::suggestions::People;
 use crate::work::Meter;
 use crate::world::{AccountRecord, Health, World, load_world, put_account};

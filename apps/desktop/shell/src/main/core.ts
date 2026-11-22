@@ -75,7 +75,8 @@ export type CoreHooks = {
  * main acts on; an `open-url` or a `your-turn` line still goes to the page as well.
  */
 export function startCore(command: CoreCommand, hooks: CoreHooks): CoreSession {
-  const child = spawn(command.program, command.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+  // windowsHide: the core is a console program, and Windows would open a console window for it.
+  const child = spawn(command.program, command.args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   const { pid } = child
   const unsent: HostFrame[] = []
   const stderr: string[] = []
@@ -216,7 +217,10 @@ function write(request: { fd: number; failed: boolean }, data: string) {
   }
 }
 
-/** Kills our core by the PID we captured. It may have exited a moment ago, which is what we wanted. */
+/**
+ * Kills our core by the PID we captured. It may have exited a moment ago, which is what we
+ * wanted. On Windows, which has no signals, Node ends it with exit code 1.
+ */
 function kill(pid: number) {
   try {
     process.kill(pid, 'SIGKILL')

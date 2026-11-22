@@ -13,11 +13,15 @@ export type Paths = {
   root: string
   /** The core's store and its stand-in keychain. */
   data: string
-  /** The sim provider's socket. */
+  /** The sim provider's socket: a path, or a named pipe on Windows (localSocket in @letterbox/sim-provider/socket). */
   socket: string
   /** cargo's and every core's stderr. */
   coreLog: string
 }
+
+/** A core program cargo built in debug, by its name: core-sim or letterbox-core, with `.exe` on Windows. */
+export const coreProgram = (paths: Paths, program: 'core-sim' | 'letterbox-core') =>
+  join(paths.root, 'target/debug', process.platform === 'win32' ? `${program}.exe` : program)
 
 /** How long a core gets to finish its work after its input closes, before it is killed. */
 const STOP_MS = 3000
@@ -47,7 +51,7 @@ export type CoreProcess = {
  * own, such as `--hold-waits`. Its stderr goes to the core log.
  */
 export function startCore(paths: Paths, now: string, flags: readonly string[] = []): CoreProcess {
-  const program = join(paths.root, 'target/debug/core-sim')
+  const program = coreProgram(paths, 'core-sim')
   const args = ['--data', paths.data, '--sim', paths.socket, '--now', now, ...flags]
   const child: Child = startChild(program, args, paths.root)
   child.stderr.pipe(createWriteStream(paths.coreLog, { flags: 'a' }))

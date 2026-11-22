@@ -3,6 +3,7 @@
 //! packages/sim-provider/src/gmail and fix the random source and the pause, so a run repeats.
 
 use std::net::SocketAddr;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -83,7 +84,8 @@ pub enum Loopback {
     /// For tests, where a random port would change the consent URL on every run. The
     /// redirect URI names `127.0.0.1:<port>`, but the listener is the unix socket
     /// `<dir>/<port>.sock`, where the fake server delivers the redirect. Ports count up
-    /// from `first_port`, one per sign-in attempt.
+    /// from `first_port`, one per sign-in attempt. Unix only, so the scenarios that sign in to
+    /// the fake Gmail run on Linux and macOS, not Windows.
     #[cfg(unix)]
     Unix { dir: PathBuf, first_port: u16 },
 }

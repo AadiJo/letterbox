@@ -13,18 +13,32 @@
 // `[dev] desktop <url>` and stops when the app quits. The shell's log is in <state>/shell.log.
 // `--core gmail` runs the app's real core, letterbox-core, against Gmail instead of the sim.
 // It needs LETTERBOX_GMAIL_CLIENT, the path to a Google OAuth client file of type Desktop app,
-// and keeps its store in `.letterbox/gmail/`, which no run empties.
+// and keeps its store in `.letterbox/gmail/`, which no run empties. With no account signed in,
+// the page starts the core's OAuth sign-in, and the shell opens Google's consent page in the
+// browser. After consent the account syncs, and a later run resumes it. Its session goes to the
+// system keychain under the service "letterbox" (crates/keychain says where each OS shows it):
+//
+//   LETTERBOX_GMAIL_CLIENT=<client.json> pnpm dev:desktop --core gmail          Linux, macOS
+//   $env:LETTERBOX_GMAIL_CLIENT='<client.json>'; pnpm dev:desktop --core gmail   Windows PowerShell
+//
+// It runs on Linux, macOS and Windows. On Windows, run it with Windows' own Node, pnpm and Rust
+// (MSVC) from PowerShell or cmd, in a checkout on the Windows disk: from WSL it builds Linux
+// programs. The sim provider listens on a named pipe there instead of a unix socket. On macOS
+// the first keychain access asks to allow letterbox-core. A debug build is not signed, so macOS
+// may ask again after each rebuild. On Linux Electron needs a display (see desktop.ts).
 //
 // State lives in the worktree's `.letterbox/dev/` (or `--state`, which must also be under
 // `.letterbox/`) and starts empty on every run, so every run shows the same mailbox.
 // The port comes from the worktree path (port.ts). `--port 0` lets the system pick one.
-// On exit it stops every process it started, by PID (children.ts).
+// On exit it stops every process it started, by PID (children.ts). On Windows that stop is a
+// kill, as Windows has no SIGTERM. The shell's core then sees its input close, and exits.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { devSeeds, isDevSeedName } from '@letterbox/sim-provider/seeds'
+import { localSocket } from '@letterbox/sim-provider/socket'
 import type { SimProvider } from '@letterbox/sim-provider/contract'
 import { type Child, exited, killChildrenNow, logChildrenTo, stopChild, stopChildren } from './children.ts'
 import { buildCore, type Paths } from './core.ts'
@@ -35,8 +49,11 @@ import { startSim } from './sim.ts'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url)).replace(/\/$/, '')
 
-/** Unix socket paths longer than this do not fit in sockaddr_un on Linux. */
-const MAX_SOCKET_PATH = 107
+/**
+ * Unix socket paths longer than this many bytes, in UTF-8, do not fit in sockaddr_un: 108 bytes
+ * on Linux and 104 on macOS, less the closing zero. Windows uses a named pipe, whose name is short and fixed.
+ */
+const MAX_SOCKET_PATH = process.platform === 'darwin' ? 103 : process.platform === 'linux' ? 107 : Infinity
 
 /** Prints why the dev host cannot start, then exits. */
 function fail(reason: string): never {
@@ -91,10 +108,11 @@ const paths: Paths = {
   root,
   // The real core keeps its store across runs, outside the state folder that every start empties.
   data: core === 'gmail' ? join(GMAIL, 'core') : join(state, 'data'),
-  socket: join(state, 'provider.sock'),
+  socket: localSocket(join(state, 'provider.sock')),
   coreLog: join(state, 'core.log'),
 }
-if (paths.socket.length > MAX_SOCKET_PATH) fail(`the sim socket path is too long for a unix socket: ${paths.socket}`)
+if (Buffer.byteLength(paths.socket) > MAX_SOCKET_PATH)
+  fail(`the sim socket path is too long for a unix socket: ${paths.socket}`)
 
 // One dev host per state folder. Starting clears the folder, which would pull the store out from under another.
 const lock = join(state, 'host.pid')
@@ -153,7 +171,8 @@ try {
       await buildCore(paths, 'letterbox-core')
       server = await startServer({ paths, port, relay: false, sim: undefined })
       const client = process.env.LETTERBOX_GMAIL_CLIENT
-      desktop = await launchDesktop(paths, server.url, { kind: 'gmail', client }, shellLog)
+      // The renderer starts Gmail's OAuth sign-in when no account is signed in (apps/desktop/renderer/src/dev.ts).
+      desktop = await launchDesktop(paths, `${server.url}?sign-in=oauth`, { kind: 'gmail', client }, shellLog)
     } else {
       const running = await startSim(paths, devSeed)
       provider = running.provider

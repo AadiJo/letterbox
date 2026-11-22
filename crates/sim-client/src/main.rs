@@ -9,9 +9,11 @@
 //! the fake Gmail server at `<url>` (packages/sim-provider/src/gmail). Its consent URLs must
 //! not change between runs, so its random source and loopback port are fixed here, and the
 //! browser's redirect arrives on a unix socket in `--gmail-redirects`. At least one is needed.
-//! `--gmail` needs unix sockets, so on Windows core-sim refuses it. Its requests get Google's
-//! time budgets unless `--gmail-timeouts` gives seconds for them, as a scenario that stalls an
-//! answer does, so the call fails inside its wait (see packages/harness/scenarios/28-gmail-deadlines.ts).
+//! `--sim` works everywhere (a named pipe on Windows). `--gmail` needs unix sockets, so on
+//! Windows core-sim refuses it, and the scenarios that use it run on Linux and macOS only.
+//! Its requests get Google's time budgets unless `--gmail-timeouts` gives seconds for them, as a
+//! scenario that stalls an answer does, so the call fails inside its wait (see
+//! packages/harness/scenarios/28-gmail-deadlines.ts).
 //!
 //! The clock is fixed (`--now`) and a wait on it ends at once, so a send's undo window
 //! (`--undo-window`, 10 seconds unless given) and its confirm window (`--confirm-window`,
