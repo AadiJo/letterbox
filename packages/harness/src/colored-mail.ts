@@ -78,11 +78,12 @@ export const INVALID_HTML = [
  * cascade layer over a bgcolor, and text set beside its own background, which is read on it.
  */
 export const PAIRS_HTML = [
-  '<style>@layer sender{td.layered{background-color:#00ff00}}</style>',
+  '<style>@layer sender{td.layered{background-color:#00ff00}}.badge{background:#1a1a5e;color:#707070}</style>',
   '<div bgcolor="#ff0000">Ignored</div>',
   '<table bgcolor="#ffffff"><tr><td bgcolor="#000038" style="color:#888888">On navy</td>',
   '<td class="layered" bgcolor="#ff0000">Layered</td></tr></table>',
   '<p style="background:#fff3c4;color:#8a6d00">A note</p>',
+  '<p><span class="badge">New</span></p>',
 ].join('')
 
 /** One message from `from`, its text its subject. */

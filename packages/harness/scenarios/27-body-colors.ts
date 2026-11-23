@@ -42,22 +42,26 @@ const INVALID_PALETTE = [
 
 /** PAIRS_HTML as the core passes it on: the div's bgcolor, which a browser ignores, stays bare. */
 const PAIRS_SHOWN = [
-  '<style>@layer{:where([data-letterbox-bg="1"]){background-color:var(--letterbox-color-1, #ffffff)}',
-  ':where([data-letterbox-bg="3"]){background-color:var(--letterbox-color-3, #000038)}',
-  ':where([data-letterbox-bg="4"]){background-color:var(--letterbox-color-4, #ff0000)}}</style>',
-  '<style>@layer sender{td.layered{background-color:var(--letterbox-color-0, #00ff00)}}</style>',
+  '<style>@layer{:where([data-letterbox-bg="3"]){background-color:var(--letterbox-color-3, #ffffff)}',
+  ':where([data-letterbox-bg="5"]){background-color:var(--letterbox-color-5, #000038)}',
+  ':where([data-letterbox-bg="6"]){background-color:var(--letterbox-color-6, #ff0000)}}</style>',
+  '<style>@layer sender{td.layered{background-color:var(--letterbox-color-0, #00ff00)}}',
+  '.badge{background:var(--letterbox-color-1, #1a1a5e);color:var(--letterbox-color-2, #707070)}</style>',
   '<div bgcolor="#ff0000">Ignored</div>',
-  '<table bgcolor="#ffffff" data-letterbox-bg="1"><tr><td bgcolor="#000038" style="color:var(--letterbox-color-2, #888888)" data-letterbox-bg="3">On navy</td>',
-  '<td class="layered" bgcolor="#ff0000" data-letterbox-bg="4">Layered</td></tr></table>',
-  '<p style="background:var(--letterbox-color-5, #fff3c4);color:var(--letterbox-color-6, #8a6d00)">A note</p>',
+  '<table bgcolor="#ffffff" data-letterbox-bg="3"><tr><td bgcolor="#000038" style="color:var(--letterbox-color-4, #888888)" data-letterbox-bg="5">On navy</td>',
+  '<td class="layered" bgcolor="#ff0000" data-letterbox-bg="6">Layered</td></tr></table>',
+  '<p style="background:var(--letterbox-color-7, #fff3c4);color:var(--letterbox-color-8, #8a6d00)">A note</p>',
+  '<p><span class="badge">New</span></p>',
 ].join('')
 
 /**
- * PAIRS_HTML's palette. Grey text on navy is read on the navy's dark value, so it is lighter than
- * the same grey alone (#979797), and the note's olive on its cream likewise.
+ * PAIRS_HTML's palette. Text set beside a background, in a rule or on its element, is read on
+ * that background's dark value: grey on navy is lighter than the same grey alone (#979797).
  */
 const PAIRS_PALETTE = [
   ['background', '#00ff00', '#002700'],
+  ['background', '#1a1a5e', '#3c448c'],
+  ['text', '#707070', '#bbbbba'],
   ['background', '#ffffff', '#1b1b1b'],
   ['text', '#888888', '#bdbdbc'],
   ['background', '#000038', '#2e4a87'],
@@ -374,8 +378,9 @@ scenario("a sender's choice stays in its account, and goes with it at sign-out",
   await signIn(t, core, other.address, other.password)
   await sync(core)
   const here = await openThread(core, (await thread(core, 'Issue 212 here')).id)
-  const there = await openThread(core, (await thread(core, 'Issue 212 there')).id)
   await done(t, core, choose(opened(here).message, 'original'), 'show the sender in its own colors in one account')
+  // Opened after the choice, so it shows what the core holds now, not an answer from before it.
+  const there = await openThread(core, (await thread(core, 'Issue 212 there')).id)
   t.equal(schemes([here, there]), ['original', 'dark'], 'the same sender in the other account keeps its own choice')
   const kept = () => t.sql('select count(*) as senders from senders').map((row) => row['senders'])
   t.equal(kept(), [1], 'the store keeps one choice')
