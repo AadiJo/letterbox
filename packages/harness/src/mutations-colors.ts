@@ -41,10 +41,10 @@ export const COLOR_MUTATIONS: Mutation[] = [
     scenarios: COLORS,
   },
   {
-    name: 'a bgcolor is read as CSS, so one written without # keeps its own color',
+    name: "a color attribute is read as a CSS color name only, so a hex bgcolor keeps the sender's color in dark",
     file: body('paint.rs'),
     find: 'let Some(color) = attribute(element, hint.attribute).and_then(|value| color::legacy(&value)) else {',
-    replace: 'let Some(color) = attribute(element, hint.attribute).and_then(|value| color::color_of(&value)) else {',
+    replace: 'let Some(color) = attribute(element, hint.attribute).and_then(|value| color::named(&value)) else {',
     scenarios: COLORS,
   },
   {
@@ -274,12 +274,11 @@ export const COLOR_MUTATIONS: Mutation[] = [
     scenarios: RENDERED,
   },
   {
-    name: '!important is not read, so an important color is left as written',
+    name: '!important is not read, so text is read on the white a later plain background names, not the important navy painted',
     file: body('css.rs'),
-    find: '.try_parse(|input| parse_important(input).and_then(|()| input.expect_exhausted()))',
-    replace:
-      '.try_parse(|input| parse_important(input).and_then(|()| input.expect_exhausted()).and(Err(input.new_basic_error(cssparser::BasicParseErrorKind::EndOfInput))))',
-    scenarios: COLORS,
+    find: '            important = true;\n            break;',
+    replace: '            important = false;\n            break;',
+    scenarios: RENDERED,
   },
   {
     name: 'an important background loses to a later plain one, so text is read on a background the browser does not paint',
