@@ -100,7 +100,12 @@ export type ThreadDetail = { messages: Array<Message>, id: ThreadId, accountId: 
  */
 pending: boolean, };
 
-export type Message = { id: MessageId, from: Person, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, 
+export type Message = { id: MessageId, from: Person, 
+/**
+ * True when the provider verified that the sender's domain sent it (for Gmail, DMARC
+ * passed for the From domain). Only then does `set-images` take `sender` for it.
+ */
+senderVerified: boolean, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, 
 /**
  * From the List-Unsubscribe header, or else a link in the body once it has loaded.
  */
@@ -115,8 +120,8 @@ delivery: Delivery | null, };
  * stays `loading` until the pipeline has run on it.
  *
  * `html` is still hostile input. The UI must render it sandboxed, with scripts off and the
- * network off. Only while `images.shown` is not `blocked` may it let images load, and only
- * over https (`img-src https:`). The core never fetches remote content named in a message.
+ * network off in every state (`img-src data: cid:` and `base-uri 'none'`). It names no remote
+ * image: shown images come from the core, through `Request::Image`.
  */
 export type Body = { "state": "ready", 
 /**
@@ -124,9 +129,8 @@ export type Body = { "state": "ready",
  */
 text: string, 
 /**
- * The HTML for the state `images.shown` is in. Trackers are gone from it in every
- * state. While images are blocked, each remote image is a placeholder (see `Images`)
- * and no `url()` in its CSS names a remote image.
+ * The HTML, the same in every state: trackers gone, each remote image a placeholder
+ * (see `Images`), and no `<base>`.
  */
 html: string | null, images: Images, 
 /**
@@ -153,17 +157,21 @@ export type Images = {
 shown: ShowImages, 
 /**
  * Every remote image URL left after trackers are taken out, once each, in the order the
- * HTML names them. Empty means showing images changes nothing. While blocked:
- *   - an `<img>` that loaded one is `<span data-letterbox-image="i">alt</span>`: `i` is the
- *     URL's index here and the text is the image's alt text, so it can show as one line,
- *   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` no longer names it and
- *     carries `data-letterbox-image="i"`,
- *   - an element whose `background` attribute named one carries `data-letterbox-background="i"`.
+ * HTML names them, at most 100. Empty means showing images changes nothing. In `html`,
+ * each is a placeholder that names its index `i` here:
+ *   - an `<img>` is `<span data-letterbox-image="i">alt</span>`, with its alt text, and
+ *     `data-letterbox-width` and `data-letterbox-height` when it had a width or a height,
+ *   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` carries
+ *     `data-letterbox-image="i"` and no longer names the URL,
+ *   - an element whose `background` attribute named one carries `data-letterbox-background="i"`,
+ *   - a CSS `url()` is `var(--letterbox-image-i, none)`.
+ *
+ * While `shown` is not `blocked`, the UI asks for each with `Request::Image` and puts the
+ * bytes in as a `data:` URL.
  */
 remote: Array<string>, 
 /**
- * The trackers taken out, in the order the HTML named them. None of them is in `html`
- * in any state, so none loads, even once images are shown.
+ * The trackers taken out, in the order the HTML named them. The core never fetches one.
  */
 trackers: Array<Tracker>, };
 
@@ -190,8 +198,8 @@ export type TrackerReason = "known-host" | "tiny" | "hidden" | "beacon";
 /**
  * The quoted history at the end of a body, so a UI can fold it. `text` and `html` are where it
  * starts, as offsets in UTF-16 code units, what JavaScript's `slice` counts: the new part is
- * `body.text.slice(0, quote.text)`, and the quote is the rest. At least one is set. The body
- * itself stays whole.
+ * `body.text.slice(0, quote.text)`, and the quote is the rest, with its enclosing markup. At
+ * least one is set. The body itself stays whole.
  */
 export type Quote = { 
 /**
@@ -199,34 +207,47 @@ export type Quote = {
  */
 text: number | null, 
 /**
- * Into `html`, in the state `images.shown` is in. None when the HTML ends in no quote.
- * The new part, `body.html.slice(0, quote.html)`, is a prefix a browser closes by itself.
+ * Into `html`. None when the HTML ends in no quote. The new part,
+ * `body.html.slice(0, quote.html)`, is a prefix a browser closes by itself.
  */
 html: number | null, 
 /**
- * How many earlier messages it holds, read from the markup: the deepest nesting of its
- * levels (`>` in text, `blockquote` in HTML), or its number of Outlook dividers, whichever
- * is more. At least 1.
- */
-earlier: number, 
-/**
- * True when it only repeats what this conversation holds: the message replies to messages
- * that are all in this conversation (every Message-ID in its References), and to at least
- * `earlier` of them.
+ * A hint that it only repeats what this conversation holds: true when the message replies
+ * to messages (every Message-ID in its References) that are all in this conversation.
  */
 inConversation: boolean, };
 
 /**
  * How to unsubscribe from the list a message came from: the one way to use, chosen by the
- * core, best first: one-click, then mailto, then a page to open. The core only reads it:
- * acting on it sends mail or a request to the sender, which confirms the address is read.
+ * core. The core only reads it: acting on it sends mail or a request to the sender, which
+ * confirms the address is read.
  */
-export type Unsubscribe = { "method": "one-click", url: string, } | { "method": "mailto", to: string, uri: string, } | { "method": "web", url: string, from: UnsubscribeSource, };
+export type Unsubscribe = { "method": "one-click", url: string, 
+/**
+ * True once a DKIM signature that covers List-Unsubscribe and List-Unsubscribe-Post is
+ * verified, as RFC 8058 requires before a POST. The core does not check that yet, so
+ * it is always false.
+ */
+verified: boolean, } | { "method": "mailto", to: string, uri: string, } | { "method": "web", url: string, from: UnsubscribeSource, };
 
 /**
  * Where a web unsubscribe target came from.
  */
 export type UnsubscribeSource = "header" | "body";
+
+/**
+ * The bytes of one remote image, after its `chunk` messages, which carry them as base64.
+ */
+export type ImageFile = { 
+/**
+ * The type the server gave, always `image/...`.
+ */
+mime: string, size: number, };
+
+/**
+ * Why the core did not fetch an image.
+ */
+export type ImageError = "gone" | "blocked" | "refused" | "too-large" | "unreachable";
 
 export type Attachment = { blobId: BlobId, name: string, mime: string, size: number, inline: boolean, };
 
@@ -423,14 +444,14 @@ export type SignInMethod = "oauth" | "password";
 /**
  * Every one-shot call. Add a variant here and a matching one to `Response`.
  */
-export type Request = { "method": "sign-in", option: SignInOptionId, password?: PasswordInput, } | { "method": "sign-out", accountId: AccountId, deleteLocalMail: boolean, } | { "method": "sync-now", accountId?: AccountId, } | { "method": "blob", blobId: BlobId, } | { "method": "attachment", blobId: BlobId, } | { "method": "position", filter: ThreadFilter, threadId: ThreadId, };
+export type Request = { "method": "sign-in", option: SignInOptionId, password?: PasswordInput, } | { "method": "sign-out", accountId: AccountId, deleteLocalMail: boolean, } | { "method": "sync-now", accountId?: AccountId, } | { "method": "blob", blobId: BlobId, } | { "method": "attachment", blobId: BlobId, } | { "method": "position", filter: ThreadFilter, threadId: ThreadId, } | { "method": "image", messageId: MessageId, index: number, };
 
 export type PasswordInput = { username: string, password: string, server?: string, };
 
 /**
  * The answer to one request, by method.
  */
-export type Response = { "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError> | { "method": "position" } & Answer<Position, Never>;
+export type Response = { "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError> | { "method": "position" } & Answer<Position, Never> | { "method": "image" } & Answer<ImageFile, ImageError>;
 
 /**
  * A result or an error. On the wire: `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}`.
@@ -488,7 +509,7 @@ export type Position = { offset: number | null, };
 
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError> | { "method": "position" } & Answer<Position, Never>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError> | { "method": "position" } & Answer<Position, Never> | { "method": "image" } & Answer<ImageFile, ImageError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
 
 /**
  * A sync brought a message from a person, in the inbox, that leaves this conversation the

@@ -110,6 +110,8 @@ export type RemoteFacts = {
   }
   /** The provider's own verdict that this is bulk mail. Null when it gives none. */
   bulk: boolean | null
+  /** True when the provider verified that the From address's domain sent it. Left out when not. */
+  senderVerified?: boolean
 }
 
 export type RemoteMessage = RemoteState & RemoteFacts

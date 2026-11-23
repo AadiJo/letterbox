@@ -117,6 +117,7 @@ fn message(index: usize, conversation: usize, place: usize) -> RemoteMessage {
                 list_unsubscribe_post: String::new(),
             },
             bulk: None,
+            sender_verified: false,
         },
     }
 }
@@ -169,6 +170,7 @@ fn start(folder: &std::path::Path) -> (Core, Rc<RefCell<Vec<CoreMessage>>>) {
         env: Box::new(FixedEnvironment::new("2026-01-01T00:00:00.000Z").expect("a valid start time")),
         secrets: Box::new(NoSecrets),
         factories: vec![],
+        web: Box::new(crate::web::NoWeb),
         undo_window: std::time::Duration::from_secs(10),
         confirm_window: std::time::Duration::from_secs(120),
         send: Box::new(move |message| sink.borrow_mut().push(message)),

@@ -57,6 +57,7 @@ mod sync;
 mod turns;
 mod undo;
 mod views;
+pub mod web;
 mod work;
 mod world;
 
@@ -99,6 +100,8 @@ pub struct CoreOptions {
     pub secrets: Box<dyn Secrets>,
     /// One per way to add an account.
     pub factories: Vec<Rc<dyn AdapterFactory>>,
+    /// Carries the remote images the user chose to show (see web.rs).
+    pub web: Box<dyn crate::web::Web>,
     /// How long a send waits before it goes to the provider. `undo` can cancel it until then.
     pub undo_window: Duration,
     /// How long the core looks for a send that may have reached the provider without saying
@@ -193,6 +196,7 @@ impl Core {
                 store,
                 env: options.env,
                 secrets: options.secrets,
+                web: options.web,
                 factories,
                 options: options_list,
                 send: options.send,
@@ -208,6 +212,7 @@ impl Core {
                     pulls: HashMap::default(),
                     pulled_well: HashMap::default(),
                     loading_bodies: HashSet::default(),
+                    processing: HashSet::default(),
                     unreachable_bodies: HashSet::default(),
                     attempts: Attempts::default(),
                     backfills: HashMap::default(),
@@ -278,6 +283,7 @@ struct Inner {
     store: Store,
     env: Box<dyn Environment>,
     secrets: Box<dyn Secrets>,
+    web: Box<dyn crate::web::Web>,
     factories: IndexMap<String, Rc<dyn AdapterFactory>>,
     options: Vec<SignInOption>,
     send: Box<dyn Fn(CoreMessage)>,
@@ -311,6 +317,8 @@ struct State {
     /// How many pulls have ended well for each account (see `count_pull` in sync.rs).
     pulled_well: HashMap<AccountId, u64>,
     loading_bodies: HashSet<MessageId>,
+    /// Stored bodies with a job queued to process them (see `reprocess` in body/mod.rs).
+    processing: HashSet<MessageId>,
     unreachable_bodies: HashSet<MessageId>,
     attempts: Attempts,
     /// The accounts with a snapshot page job queued (see snapshot.rs).

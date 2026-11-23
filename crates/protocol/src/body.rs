@@ -1,7 +1,8 @@
 //! A message's body as a UI shows it, after the core's body pipeline (crates/core/src/body).
 //! The core processes each body once, when it arrives, and keeps the result:
 //!   - trackers are taken out of the HTML for good (`Tracker`),
-//!   - every other remote image is blocked until the user shows it (`Images`),
+//!   - every remote image is a placeholder, and the core fetches it only once the user shows
+//!     images (`Images`, `Request::Image`),
 //!   - the quoted history at the end is found, so a UI can fold it (`Quote`),
 //!   - and an unsubscribe target is read from the headers or the body (`Unsubscribe`).
 
@@ -12,17 +13,16 @@ use ts_rs::TS;
 /// stays `loading` until the pipeline has run on it.
 ///
 /// `html` is still hostile input. The UI must render it sandboxed, with scripts off and the
-/// network off. Only while `images.shown` is not `blocked` may it let images load, and only
-/// over https (`img-src https:`). The core never fetches remote content named in a message.
+/// network off in every state (`img-src data: cid:` and `base-uri 'none'`). It names no remote
+/// image: shown images come from the core, through `Request::Image`.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "state", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Body {
     Ready {
         /// The plain text, as the message has it.
         text: String,
-        /// The HTML for the state `images.shown` is in. Trackers are gone from it in every
-        /// state. While images are blocked, each remote image is a placeholder (see `Images`)
-        /// and no `url()` in its CSS names a remote image.
+        /// The HTML, the same in every state: trackers gone, each remote image a placeholder
+        /// (see `Images`), and no `<base>`.
         html: Option<String>,
         images: Images,
         /// None when the body ends in no quote.
@@ -54,15 +54,19 @@ pub struct Images {
     /// Whether the user shows them. Set with the `set-images` command.
     pub shown: ShowImages,
     /// Every remote image URL left after trackers are taken out, once each, in the order the
-    /// HTML names them. Empty means showing images changes nothing. While blocked:
-    ///   - an `<img>` that loaded one is `<span data-letterbox-image="i">alt</span>`: `i` is the
-    ///     URL's index here and the text is the image's alt text, so it can show as one line,
-    ///   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` no longer names it and
-    ///     carries `data-letterbox-image="i"`,
-    ///   - an element whose `background` attribute named one carries `data-letterbox-background="i"`.
+    /// HTML names them, at most 100. Empty means showing images changes nothing. In `html`,
+    /// each is a placeholder that names its index `i` here:
+    ///   - an `<img>` is `<span data-letterbox-image="i">alt</span>`, with its alt text, and
+    ///     `data-letterbox-width` and `data-letterbox-height` when it had a width or a height,
+    ///   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` carries
+    ///     `data-letterbox-image="i"` and no longer names the URL,
+    ///   - an element whose `background` attribute named one carries `data-letterbox-background="i"`,
+    ///   - a CSS `url()` is `var(--letterbox-image-i, none)`.
+    ///
+    /// While `shown` is not `blocked`, the UI asks for each with `Request::Image` and puts the
+    /// bytes in as a `data:` URL.
     pub remote: Vec<String>,
-    /// The trackers taken out, in the order the HTML named them. None of them is in `html`
-    /// in any state, so none loads, even once images are shown.
+    /// The trackers taken out, in the order the HTML named them. The core never fetches one.
     pub trackers: Vec<Tracker>,
 }
 
@@ -75,7 +79,9 @@ pub enum ShowImages {
     Blocked,
     /// Shown for this message only.
     Message,
-    /// Shown for every message from this sender's address in this account.
+    /// Shown for every message from this sender's address in this account whose sender the
+    /// provider verified (`Message::sender_verified`). Unverified mail from the address stays
+    /// blocked.
     Sender,
 }
 
@@ -101,39 +107,64 @@ pub enum TrackerReason {
     Beacon,
 }
 
+/// The bytes of one remote image, after its `chunk` messages, which carry them as base64.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+pub struct ImageFile {
+    /// The type the server gave, always `image/...`.
+    pub mime: String,
+    pub size: u64,
+}
+
+/// Why the core did not fetch an image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImageError {
+    /// The message, its body or that index is not there.
+    Gone,
+    /// The message's images are not shown.
+    Blocked,
+    /// The server sent something the core will not pass on: a redirect to a tracker or to a
+    /// URL that is not https, more than five redirects, or a type that is not an image.
+    Refused,
+    /// More than 5 MB.
+    TooLarge,
+    /// The server could not be reached, or answered with an error.
+    Unreachable,
+}
+
 /// The quoted history at the end of a body, so a UI can fold it. `text` and `html` are where it
 /// starts, as offsets in UTF-16 code units, what JavaScript's `slice` counts: the new part is
-/// `body.text.slice(0, quote.text)`, and the quote is the rest. At least one is set. The body
-/// itself stays whole.
+/// `body.text.slice(0, quote.text)`, and the quote is the rest, with its enclosing markup. At
+/// least one is set. The body itself stays whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Quote {
     /// Into `text`. None when the text ends in no quote.
     pub text: Option<u64>,
-    /// Into `html`, in the state `images.shown` is in. None when the HTML ends in no quote.
-    /// The new part, `body.html.slice(0, quote.html)`, is a prefix a browser closes by itself.
+    /// Into `html`. None when the HTML ends in no quote. The new part,
+    /// `body.html.slice(0, quote.html)`, is a prefix a browser closes by itself.
     pub html: Option<u64>,
-    /// How many earlier messages it holds, read from the markup: the deepest nesting of its
-    /// levels (`>` in text, `blockquote` in HTML), or its number of Outlook dividers, whichever
-    /// is more. At least 1.
-    pub earlier: u64,
-    /// True when it only repeats what this conversation holds: the message replies to messages
-    /// that are all in this conversation (every Message-ID in its References), and to at least
-    /// `earlier` of them.
+    /// A hint that it only repeats what this conversation holds: true when the message replies
+    /// to messages (every Message-ID in its References) that are all in this conversation.
     pub in_conversation: bool,
 }
 
 /// How to unsubscribe from the list a message came from: the one way to use, chosen by the
-/// core, best first: one-click, then mailto, then a page to open. The core only reads it:
-/// acting on it sends mail or a request to the sender, which confirms the address is read.
+/// core. The core only reads it: acting on it sends mail or a request to the sender, which
+/// confirms the address is read.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(tag = "method", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Unsubscribe {
     /// RFC 8058: a POST of the body `List-Unsubscribe=One-Click` to `url` unsubscribes, with no
-    /// page to open. From an https URL in List-Unsubscribe, when List-Unsubscribe-Post says
-    /// `List-Unsubscribe=One-Click`. RFC 8058 also asks that a DKIM signature cover both
-    /// headers, which the core does not check.
-    OneClick { url: String },
+    /// page to open. From the first https URL in List-Unsubscribe, when List-Unsubscribe-Post
+    /// says `List-Unsubscribe=One-Click`.
+    OneClick {
+        url: String,
+        /// True once a DKIM signature that covers List-Unsubscribe and List-Unsubscribe-Post is
+        /// verified, as RFC 8058 requires before a POST. The core does not check that yet, so
+        /// it is always false.
+        verified: bool,
+    },
     /// An email to `to`, from a `mailto:` URI in List-Unsubscribe. `uri` is the whole URI, with
     /// any subject and body the sender asks for.
     Mailto { to: String, uri: String },

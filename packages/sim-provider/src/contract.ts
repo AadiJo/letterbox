@@ -65,6 +65,12 @@ export type SeedMessage = {
     listUnsubscribe?: boolean | string
     /** List-Unsubscribe-Post's value, for example "List-Unsubscribe=One-Click". */
     listUnsubscribePost?: string
+    /**
+     * Authentication-Results headers, topmost first, as a receiving server writes them, for
+     * example "mx.google.com; dmarc=pass header.from=shop.example". Only the first one from
+     * mx.google.com verifies the sender (see `senderVerified` in store.ts).
+     */
+    authenticationResults?: readonly string[]
     listId?: boolean
     precedence?: string
     autoSubmitted?: string

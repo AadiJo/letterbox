@@ -157,6 +157,12 @@ pub struct RemoteFacts {
     pub headers: RemoteHeaders,
     /// The provider's own verdict that this is bulk mail. None when it gives none.
     pub bulk: Option<bool>,
+    /// True when the provider verified that the From address's domain sent it: for Gmail,
+    /// Google's own Authentication-Results says DMARC passed for that domain. False for a
+    /// provider that cannot say, and for messages stored before this was kept. "Always show
+    /// images from this sender" applies only to verified messages (body/mod.rs).
+    #[serde(default)]
+    pub sender_verified: bool,
 }
 
 /// Empty string when the header is absent.

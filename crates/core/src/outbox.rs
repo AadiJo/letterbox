@@ -131,8 +131,10 @@ impl Inner {
         };
         let window = TimeDelta::from_std(self.undo_window).unwrap_or(TimeDelta::MAX);
         let until = iso(parse(&now).checked_add_signed(window).unwrap_or(parse(&now)));
-        // Processed before it is stored, so the reply shows whole in the same update that shows it.
-        let reading = self.processed_now(&prepared.body);
+        // Processed before it is stored, so the reply shows whole in the same update that shows
+        // it, unless it is large (see `processed_for_send` in body/mod.rs).
+        let body = BodyResult::Body { body: prepared.body };
+        let reading = self.processed_for_send(&body);
         self.commit_then(
             |world, tx, at| {
                 // The message id is minted before the thread id, as reconcile does.
@@ -148,7 +150,7 @@ impl Inner {
                         thread_id,
                         facts: prepared.facts,
                         server: prepared.server,
-                        body: Some(BodyResult::Body { body: prepared.body }),
+                        body: Some(body),
                         reading,
                         round: 0,
                     },

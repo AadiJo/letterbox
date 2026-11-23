@@ -1171,6 +1171,7 @@ dependencies = [
  "letterbox-core",
  "letterbox-gmail",
  "letterbox-keychain",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

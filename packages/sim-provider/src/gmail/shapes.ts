@@ -142,6 +142,8 @@ export const headersOf = (message: Stored): Header[] => {
   const { facts } = message
   const references = facts.references.map((id) => `<${id}>`)
   const list: [string, string | null][] = [
+    // A receiving server writes Authentication-Results on top, above every header the sender wrote.
+    ...(message.authentication ?? []).map((value): [string, string] => ['Authentication-Results', value]),
     ['From', formatAddress(facts.from)],
     ['To', facts.to.map(formatAddress).join(', ')],
     ['Cc', facts.cc.length > 0 ? facts.cc.map(formatAddress).join(', ') : null],

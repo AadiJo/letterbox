@@ -1,17 +1,20 @@
-// Breaks in the body pipeline (crates/core/src/body): trackers, remote images, unsubscribe
-// targets and quoted history. mutations.ts runs them with the others.
+// Breaks in the body pipeline (crates/core/src/body): trackers, remote images and their
+// fetch, verified senders, unsubscribe targets, quoted history and when the pipeline runs.
+// mutations.ts runs them with the others.
 
 import type { Mutation } from './breaks.ts'
 
 const body = (file: string) => `crates/core/src/body/${file}`
 
 const IMAGES = 'remote images wait until the user shows them'
+const FETCH = 'the core fetches a shown image'
 const UNSUBSCRIBE = 'unsubscribe targets come from the headers'
 const QUOTES = 'the quote at the end of a body'
+const PROCESSING = 'a stored reading survives a restart'
 
 export const BODY_MUTATIONS: Mutation[] = [
   {
-    name: 'a 1x1 image is kept as a remote image, so it loads once images are shown',
+    name: 'a 1x1 image is kept as a remote image, so it can be fetched once images are shown',
     file: body('trackers.rs'),
     find: '(Some(width), Some(height)) => width <= 1.0 && height <= 1.0 || width == 0.0 || height == 0.0,',
     replace: '(Some(_), Some(_)) => false,',
@@ -39,53 +42,75 @@ export const BODY_MUTATIONS: Mutation[] = [
     scenarios: 'remote images wait',
   },
   {
-    name: 'a tracker stays in the html, so it loads once images are shown',
-    file: body('html.rs'),
-    find: '            el.remove();\n            return Ok(());',
-    replace: '            return Ok(());',
+    name: 'a hidden or tiny image stays, as a remote image',
+    file: body('rewrite.rs'),
+    find: '            for url in &urls {\n                found.sort(url, Some(reason));\n            }\n            el.remove();\n            return;',
+    replace: '            drop((urls, reason));',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'a tracker in src takes the real image in its srcset with it',
+    file: body('rewrite.rs'),
+    find: '    let element = trackers::by_element(\n        width.as_deref(),\n        height.as_deref(),\n        style.as_deref(),\n        el.has_attribute("hidden"),\n    );',
+    replace:
+      '    let element = trackers::by_element(\n        width.as_deref(),\n        height.as_deref(),\n        style.as_deref(),\n        el.has_attribute("hidden"),\n    )\n    .or(attribute(el, "src").as_deref().and_then(trackers::remote).and_then(|url| trackers::by_url(&url)));',
     scenarios: IMAGES,
   },
   {
     name: 'a tracker in a CSS background stays',
-    file: body('html.rs'),
-    find: '        (!gone.is_empty()).then(|| trackers::blank(css, &gone))\n    }\n\n    /// A srcset',
-    replace: '        drop(gone);\n        None\n    }\n\n    /// A srcset',
+    file: body('rewrite.rs'),
+    find: '                Some(Verdict::Drop) => "none".to_owned(),',
+    replace: '                Some(Verdict::Drop) => continue,',
     scenarios: IMAGES,
   },
   {
     name: "an attribute the sender wrote passes for one of the core's own",
-    file: body('html.rs'),
+    file: body('rewrite.rs'),
     find: '.filter(|name| name.starts_with("data-letterbox-"))',
     replace: '.filter(|_| false)',
     scenarios: IMAGES,
   },
   {
-    name: 'a remote CSS image loads while images are blocked',
-    file: body('html.rs'),
-    find: '            .filter(|found| trackers::remote(&found.url).is_some())\n            .collect();',
-    replace: '            .filter(|_| false)\n            .collect();',
+    name: 'a remote CSS image keeps its URL instead of becoming a placeholder',
+    file: body('rewrite.rs'),
+    find: '                Some(Verdict::Place(index)) => format!("var(--letterbox-image-{index}, none)"),',
+    replace: '                Some(Verdict::Place(_)) => continue,',
     scenarios: IMAGES,
   },
   {
-    name: 'a video poster or an SVG image loads while images are blocked',
-    file: body('html.rs'),
-    find: '        if let Some(loads) = image_attribute(el, &name)\n            && let Some(at) = attribute(el, loads).and_then(|value| index(&value))',
+    name: 'a video poster or an SVG image keeps its URL instead of becoming a placeholder',
+    file: body('rewrite.rs'),
+    find: '            el.remove_attribute(loads);\n            if let Verdict::Place(index) = verdict {\n                set(el, "data-letterbox-image", &index.to_string());',
     replace:
-      '        if let Some(loads) = image_attribute(el, &name).filter(|_| false)\n            && let Some(at) = attribute(el, loads).and_then(|value| index(&value))',
+      '            if let Verdict::Place(index) = verdict {\n                set(el, "data-letterbox-image", &index.to_string());',
     scenarios: IMAGES,
   },
   {
-    name: 'showing images serves the html as it came, trackers and all',
-    file: body('mod.rs'),
-    find: '    } else {\n        processed.html.clone()\n    };',
-    replace: '    } else {\n        body.html.clone()\n    };',
+    name: 'an image beside a local src is listed though nothing names it',
+    file: body('rewrite.rs'),
+    find: '            if reason.is_none() && !list {',
+    replace: '            if reason.is_none() && !list && false {',
     scenarios: IMAGES,
   },
   {
-    name: "the user's choice to show images is ignored",
-    file: body('mod.rs'),
-    find: '    let blocked = shown == ShowImages::Blocked && processed.blocked.is_some();',
-    replace: '    let blocked = processed.blocked.is_some();',
+    name: 'a noscript is read as text, so the image in it is never judged',
+    file: body('html.rs'),
+    find: '            el.remove_and_keep_content();',
+    replace: '            let _ = el;',
+    scenarios: IMAGES,
+  },
+  {
+    name: "a sender's base href stays, so relative images point at the sender",
+    file: body('html.rs'),
+    find: '        .append_element_content_handler(element!("base", |el| {\n            el.remove();',
+    replace: '        .append_element_content_handler(element!("base", |el| {\n            let _ = el;',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'a blocked image shows without its alt text',
+    file: body('rewrite.rs'),
+    find: '    line.push_str(&html_escape::encode_text(alt.trim()));',
+    replace: '    line.push_str(&html_escape::encode_text(&alt[..0]));',
     scenarios: IMAGES,
   },
   {
@@ -104,11 +129,53 @@ export const BODY_MUTATIONS: Mutation[] = [
     scenarios: IMAGES,
   },
   {
-    name: 'blocked html is folded at the offset of the shown html',
+    name: 'mail that only claims an always-shown address shows its images',
     file: body('mod.rs'),
-    find: '            html: if blocked { folded.blocked } else { folded.html },',
-    replace: '            html: folded.html,',
-    scenarios: QUOTES,
+    find: '    let trusted = record.facts.sender_verified && !address.is_empty();',
+    replace: '    let trusted = !address.is_empty();',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'an unverified sender can be always shown',
+    file: body('mod.rs'),
+    find: '        if show == ShowImages::Sender && (!record.facts.sender_verified || address.is_empty()) {',
+    replace: '        if show == ShowImages::Sender && address.is_empty() {',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'the Gmail adapter trusts an Authentication-Results any server wrote',
+    file: 'crates/gmail/src/message.rs',
+    find: '    if !authserv.eq_ignore_ascii_case("mx.google.com") {',
+    replace: '    if authserv.is_empty() {',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'the core fetches an image while the message blocks images',
+    file: body('fetch.rs'),
+    find: '                if shown(world, record) == ShowImages::Blocked {',
+    replace: '                if shown(world, record) == ShowImages::Blocked && false {',
+    scenarios: FETCH,
+  },
+  {
+    name: 'a redirect to a tracker is followed',
+    file: body('fetch.rs'),
+    find: '        if next.scheme() != "https" || trackers::by_url(&next).is_some() {',
+    replace: '        if next.scheme() != "https" {',
+    scenarios: FETCH,
+  },
+  {
+    name: 'a redirect away from https is followed',
+    file: body('fetch.rs'),
+    find: '        if next.scheme() != "https" || trackers::by_url(&next).is_some() {',
+    replace: '        if trackers::by_url(&next).is_some() {',
+    scenarios: FETCH,
+  },
+  {
+    name: 'what a server sends is passed on whatever its type',
+    file: body('fetch.rs'),
+    find: '            Fetched::Body { mime, bytes } if mime.starts_with("image/") => return Ok((mime, bytes)),',
+    replace: '            Fetched::Body { mime, bytes } => return Ok((mime, bytes)),',
+    scenarios: FETCH,
   },
   {
     name: 'a quote offset counts bytes, which JavaScript does not',
@@ -139,31 +206,10 @@ export const BODY_MUTATIONS: Mutation[] = [
     scenarios: QUOTES,
   },
   {
-    name: 'a blocked image shows without its alt text',
-    file: body('html.rs'),
-    find: '                html_escape::encode_text(alt.trim())',
-    replace: '                html_escape::encode_text(&alt[..0])',
-    scenarios: IMAGES,
-  },
-  {
-    name: 'a quote is said to hold one message however deep it nests',
-    file: body('quote.rs'),
-    find: '        depth.unwrap_or(0).max(dividers).max(1)',
-    replace: '        drop(depth);\n        dividers.max(1)',
-    scenarios: QUOTES,
-  },
-  {
-    name: 'a plain text quote is said to hold one message however many levels of > it has',
-    file: body('quote.rs'),
-    find: '.map(|(_, line)| marks(line))',
-    replace: '.map(|(_, line)| marks(line).min(1))',
-    scenarios: QUOTES,
-  },
-  {
     name: 'a quote is said to repeat this conversation without looking at what it replies to',
     file: body('mod.rs'),
-    find: '    references.len() as u64 >= earlier && !references.is_empty() && references.iter().all(held)',
-    replace: '    let _ = (references, held, earlier);\n    true',
+    find: '    !references.is_empty() && references.iter().all(held)',
+    replace: '    let _ = (references, held);\n    true',
     scenarios: QUOTES,
   },
   {
@@ -183,8 +229,22 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'an http List-Unsubscribe URL is offered',
     file: body('unsubscribe.rs'),
-    find: '    let web = urls.iter().find(|url| url.scheme() == "https").map(Url::to_string);',
-    replace: '    let web = urls.iter().find(|url| url.scheme().starts_with("http")).map(Url::to_string);',
+    find: '        .filter(|url| matches!(url.scheme(), "https" | "mailto"))',
+    replace: '        .filter(|url| matches!(url.scheme(), "https" | "http" | "mailto"))',
+    scenarios: UNSUBSCRIBE,
+  },
+  {
+    name: 'List-Unsubscribe is read past an entry outside brackets',
+    file: body('unsubscribe.rs'),
+    find: "    while let Some(inner) = rest.strip_prefix('<') {",
+    replace: "    while let Some(inner) = rest.find('<').map(|at| &rest[at + 1..]) {",
+    scenarios: UNSUBSCRIBE,
+  },
+  {
+    name: 'a comment in List-Unsubscribe ends the reading',
+    file: body('unsubscribe.rs'),
+    find: "    while rest.starts_with('(') {",
+    replace: "    while rest.starts_with('(') && false {",
     scenarios: UNSUBSCRIBE,
   },
   {
@@ -207,5 +267,26 @@ export const BODY_MUTATIONS: Mutation[] = [
     find: '    "List-Unsubscribe-Post",\n',
     replace: '    "X-List-Unsubscribe-Post",\n',
     scenarios: UNSUBSCRIBE,
+  },
+  {
+    name: 'the store forgets each reading, so a restart processes every body again',
+    file: body('mod.rs'),
+    find: '    #[serde(default, skip_serializing_if = "Option::is_none")]\n    processed: Option<Processed>,',
+    replace: '    #[serde(skip)]\n    processed: Option<Processed>,',
+    scenarios: PROCESSING,
+  },
+  {
+    name: 'a stored body the rules changed for is never processed again',
+    file: 'crates/core/src/subscriptions.rs',
+    find: '        self.reprocess(unprocessed);',
+    replace: '        drop(unprocessed);',
+    scenarios: PROCESSING,
+  },
+  {
+    name: 'a large forward is processed before its send is accepted',
+    file: body('mod.rs'),
+    find: '        if size > SEND_LIMIT {',
+    replace: '        if size > SEND_LIMIT && false {',
+    scenarios: 'a large sent body',
   },
 ]

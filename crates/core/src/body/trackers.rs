@@ -300,14 +300,14 @@ fn unescape(raw: &str) -> String {
     out
 }
 
-/// Replaces the given spans of `css`, which `css_urls` found in order, with `none`.
-pub fn blank(css: &str, spans: &[&CssUrl]) -> String {
+/// `css` with each span `css_urls` found, in order, replaced: (start, end, replacement).
+pub fn replace(css: &str, changes: &[(usize, usize, String)]) -> String {
     let mut out = String::with_capacity(css.len());
     let mut from = 0;
-    for span in spans {
-        out.push_str(&css[from..span.start]);
-        out.push_str("none");
-        from = span.end;
+    for (start, end, replacement) in changes {
+        out.push_str(&css[from..*start]);
+        out.push_str(replacement);
+        from = *end;
     }
     out.push_str(&css[from..]);
     out

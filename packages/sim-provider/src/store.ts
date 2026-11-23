@@ -48,6 +48,8 @@ export type Stored = {
    * their bytes. A sent copy's files are the bytes the core sent, kept as they came.
    */
   contents: readonly (() => Buffer)[]
+  /** Its Authentication-Results headers, topmost first, as its seed gave them. The fake Gmail writes them. */
+  authentication?: readonly string[]
   unread: boolean
   flagged: boolean
   /** Mailbox keys. */
@@ -143,6 +145,24 @@ const listUnsubscribeOf = (seed: SeedMessage): string => {
   return given ? '<mailto:unsubscribe@list.example>' : ''
 }
 
+/**
+ * True when a seed's topmost Authentication-Results header comes from mx.google.com and says
+ * DMARC passed for its From domain: the rule crates/gmail (message.rs) applies, so the sim's
+ * dialects verify a seed the way the fake Gmail's adapter does.
+ */
+export const senderVerified = (seed: SeedMessage): boolean => {
+  const [top] = seed.headers?.authenticationResults ?? []
+  const domain = addressOf(seed.from).address.split('@')[1]?.toLowerCase()
+  if (top === undefined || !domain) return false
+  const [authserv, ...results] = top.split(';')
+  if (authserv?.trim().split(/\s+/)[0]?.toLowerCase() !== 'mx.google.com') return false
+  return results.some((result) => {
+    const words = result.trim().split(/\s+/)
+    const named = words.flatMap((word) => (word.startsWith('header.from=') ? [word.slice(12).toLowerCase()] : []))
+    return words[0]?.toLowerCase() === 'dmarc=pass' && named.includes(domain)
+  })
+}
+
 /** The facts a seed message reports. `references` and `bulk` come from the caller, which knows the dialect. */
 export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean | null): RemoteFacts => ({
   messageId: bareMessageId(seed),
@@ -164,6 +184,7 @@ export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean |
     ...(seed.headers?.listUnsubscribePost !== undefined && { listUnsubscribePost: seed.headers.listUnsubscribePost }),
   },
   bulk,
+  ...(senderVerified(seed) && { senderVerified: true }),
 })
 
 /** The body a seed message returns when someone opens it. */

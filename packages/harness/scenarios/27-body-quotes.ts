@@ -1,8 +1,8 @@
 // Quoted history (crates/core/src/body/quote.rs). The core finds where the quote at the end of
 // a body starts, in its text and in its html, as an offset a UI slices at to fold it. The
-// body stays whole, replies written between quoted lines stay in view, and the html offset
-// follows the html of the state its images are in. It also says how many earlier messages the
-// quote holds, whether they are all in the conversation, and previews the new part alone.
+// body stays whole, with the quote's enclosing markup, and replies written between quoted lines
+// stay in view. It also hints whether the quote only repeats this conversation, and previews
+// the new part alone.
 
 import type { Seed, SeedMessage } from '@letterbox/sim-provider/contract'
 import type { Body } from '@letterbox/protocol'
@@ -143,7 +143,6 @@ const folded = (body: Ready) => {
 
 /** What the quote line of a folded quote says, and the preview a folded row shows. */
 const told = (body: Ready) => ({
-  earlier: body.quote?.earlier ?? null,
   inConversation: body.quote?.inConversation ?? null,
   preview: body.preview,
 })
@@ -160,8 +159,8 @@ scenario('the quote at the end of a body is found in its text and its html, and 
   t.check(plain.text.endsWith('> Lunch on Friday?\n'), 'and the text itself is whole')
   t.equal(
     told(plain),
-    { earlier: 1, inConversation: false, preview: 'Grüße 👋, see you at noon.' },
-    'it quotes one earlier message this conversation does not hold, and previews the new text alone',
+    { inConversation: false, preview: 'Grüße 👋, see you at noon.' },
+    'it quotes a message this conversation does not hold, and previews the new text alone',
   )
   t.equal(
     folded(await bodyOf(core, 'Inline reply')),
@@ -181,13 +180,17 @@ scenario('the quote at the end of a body is found in its text and its html, and 
   t.equal(
     folded(blocked.body).html,
     '<div dir="ltr">Thanks! <span data-letterbox-image="0">:)</span></div><br>',
-    'Gmail html folds at gmail_quote, here in the html with images blocked',
+    'Gmail html folds at gmail_quote, its image a placeholder',
   )
-  t.check(blocked.body.html?.endsWith(GMAIL_QUOTE) === true, 'and the html still holds the quote')
+  t.check(blocked.body.html?.endsWith(GMAIL_QUOTE) === true, 'and the html still holds the quote, markup and all')
   const answer = await core.command({ kind: 'set-images', messageId: blocked.id, show: 'message' })
   if (answer.kind === 'accepted') await core.settled(answer.change)
   const shown = gmail.latest()?.messages[0]?.body
-  t.equal(shown?.state === 'ready' && folded(shown).html, GMAIL_NEW, 'with images shown, the offset follows that html')
+  t.equal(
+    shown?.state === 'ready' && shown.html === blocked.body.html && shown.quote?.html === blocked.body.quote?.html,
+    true,
+    'with images shown, the html and its fold are the same: the images come from the core',
+  )
 
   const apple = await bodyOf(core, 'Apple html')
   t.equal(folded(apple).html, '<div>Yes, Friday.</div>', 'Apple Mail html folds at its attribution')
@@ -204,13 +207,13 @@ scenario('the quote at the end of a body is found in its text and its html, and 
   if (third?.state !== 'ready' || lunch?.state !== 'ready') return t.check(false, 'the lunch messages load')
   t.equal(
     told(third),
-    { earlier: 2, inConversation: true, preview: "Noon at Rosa's?" },
-    'plain text quoted two levels deep holds two earlier messages, both in this conversation',
+    { inConversation: true, preview: "Noon at Rosa's?" },
+    'a reply whose quote holds only messages of this conversation says so',
   )
   t.equal(
     told(lunch),
-    { earlier: 3, inConversation: true, preview: 'See you there.' },
-    'html quoted three levels deep holds three earlier messages, all in this conversation',
+    { inConversation: true, preview: 'See you there.' },
+    'so does one whose html quotes three of them',
   )
   t.equal(folded(lunch).html, '<div dir="ltr">See you there.</div>', 'and its html folds at the outer quote')
 })

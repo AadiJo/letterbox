@@ -86,7 +86,7 @@ const summaryFields = {
   pending: 'boolean',
 } as const
 
-const unsubscribe = type({ method: "'one-click'", url: 'string' })
+const unsubscribe = type({ method: "'one-click'", url: 'string', verified: 'boolean' })
   .or({ method: "'mailto'", to: 'string', uri: 'string' })
   .or({ method: "'web'", url: 'string', from: "'header' | 'body'" })
 
@@ -115,9 +115,7 @@ const body = type({
   text: 'string',
   html: 'string | null',
   images,
-  quote: type({ text: 'number | null', html: 'number | null', earlier: 'number', inConversation: 'boolean' }).or(
-    'null',
-  ),
+  quote: type({ text: 'number | null', html: 'number | null', inConversation: 'boolean' }).or('null'),
   preview: 'string',
 })
   .or({ state: "'loading'" })
@@ -130,6 +128,7 @@ const delivery = type({ state: "'held'", change: 'string', until: 'string' })
 const message = type({
   id: 'string',
   from: person,
+  senderVerified: 'boolean',
   to: person.array(),
   cc: person.array(),
   sentAt: 'string',
@@ -171,6 +170,8 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
   .or({ method: "'attachment'", ok: 'false', error: "'offline' | 'gone' | 'too-large'" })
   .or({ method: "'position'", ok: 'true', result: { offset: 'number | null' } })
   .or({ method: "'position'", ok: 'false', error: 'never' })
+  .or({ method: "'image'", ok: 'true', result: { mime: 'string', size: 'number' } })
+  .or({ method: "'image'", ok: 'false', error: "'gone' | 'blocked' | 'refused' | 'too-large' | 'unreachable'" })
 
 const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' })
   .or(type({ kind: "'update'", sub: 'string', rev: 'number' }).and(update))

@@ -233,6 +233,7 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
                 list_unsubscribe_post: String::new(),
             },
             bulk: None,
+            sender_verified: false,
         },
         body: RemoteBody {
             text,

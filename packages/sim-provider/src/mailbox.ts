@@ -172,6 +172,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       facts: factsOf(message, references, dialect === 'labels' ? (message.bulk ?? false) : null),
       body: bodyOf(message),
       contents: contentsOf(message),
+      ...(message.headers?.authenticationResults && { authentication: message.headers.authenticationResults }),
       unread: message.unread ?? true,
       flagged: message.flagged ?? false,
       mailboxes,

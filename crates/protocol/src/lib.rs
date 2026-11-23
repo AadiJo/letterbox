@@ -40,7 +40,10 @@ mod your_turn;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
-pub use body::{Body, Images, Quote, ShowImages, Tracker, TrackerReason, Unavailable, Unsubscribe, UnsubscribeSource};
+pub use body::{
+    Body, ImageError, ImageFile, Images, Quote, ShowImages, Tracker, TrackerReason, Unavailable, Unsubscribe,
+    UnsubscribeSource,
+};
 pub use command::{Command, TurnChoice};
 pub use holder::ChangeHolder;
 pub use ids::{
@@ -216,6 +219,9 @@ pub struct ThreadDetail {
 pub struct Message {
     pub id: MessageId,
     pub from: Person,
+    /// True when the provider verified that the sender's domain sent it (for Gmail, DMARC
+    /// passed for the From domain). Only then does `set-images` take `sender` for it.
+    pub sender_verified: bool,
     pub to: Vec<Person>,
     pub cc: Vec<Person>,
     pub sent_at: Time,
@@ -266,6 +272,9 @@ pub enum Request {
     Attachment { blob_id: BlobId },
     /// Where a conversation sits in the list `filter` gives right now (position.rs). Answers at once.
     Position { filter: ThreadFilter, thread_id: ThreadId },
+    /// The bytes of a message's remote image `index` (`Images::remote`), which the core fetches
+    /// once the message's images are shown. They come in `chunk` messages, in order, then the response.
+    Image { message_id: MessageId, index: u64 },
 }
 
 /// The answer to one request, by method.
@@ -278,6 +287,7 @@ pub enum Response {
     Blob(Answer<BlobUrl, BlobError>),
     Attachment(Answer<AttachmentFile, AttachmentError>),
     Position(Answer<Position, Never>),
+    Image(Answer<ImageFile, ImageError>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]

@@ -1,7 +1,7 @@
-// Unsubscribe targets (crates/core/src/body/unsubscribe.rs). The core picks one way, best
-// first: RFC 8058 one-click, then a mailto from List-Unsubscribe, then a page to open from the
-// header or from a link in the body once it has loaded. It shows it on the message and on its
-// sender's row in Updates, and never acts on one.
+// Unsubscribe targets (crates/core/src/body/unsubscribe.rs). The core picks one way: RFC 8058
+// one-click, not yet verified, else the first mailto or https URI of List-Unsubscribe in the
+// header's own order, read as RFC 2369 writes it, else a link in the body once it has loaded.
+// It shows it on the message and on its sender's row in Updates, and never acts on one.
 
 import type { Seed, SeedMessage } from '@letterbox/sim-provider/contract'
 import type { SenderPage, Unsubscribe } from '@letterbox/protocol'
@@ -28,7 +28,9 @@ const mail = (
 
 /**
  *   one-click   a mailto and an https target, and List-Unsubscribe-Post: one-click wins
- *   mailto      a mailto and an https target, without one-click: the mailto wins
+ *   mailto      a comment, then a mailto and an https target: the mailto comes first
+ *   order       an https target, then a mailto: the header's order wins
+ *   malformed   an entry outside angle brackets ends the reading, before the https target
  *   web-only    an https target alone, without one-click
  *   http-only   only an http target, which is not offered
  *   body-link   no header: a link whose text says unsubscribe beats one whose address does
@@ -50,7 +52,16 @@ const seed = (): Seed => ({
       },
     }),
     mail('mailto', 'weekly@list.example', 'Weekly notes', '2025-12-05T12:00:00.000Z', {
-      headers: { listUnsubscribe: '<https://list.example/u/4>, <mailto:leave@list.example?subject=unsubscribe>' },
+      headers: {
+        listUnsubscribe:
+          "(the list's own address) <mailto:leave@list.example?subject=unsubscribe>, <https://list.example/u/4>",
+      },
+    }),
+    mail('order', 'order@list.example', 'Order news', '2025-12-05T11:00:00.000Z', {
+      headers: { listUnsubscribe: '<https://list.example/u/5>, <mailto:leave@list.example>' },
+    }),
+    mail('malformed', 'bad@list.example', 'Bad header', '2025-12-05T10:00:00.000Z', {
+      headers: { listUnsubscribe: 'mailto:leave@list.example, <https://list.example/u/6>' },
     }),
     mail('web-only', 'digest@list.example', 'Daily digest', '2025-12-05T09:00:00.000Z', {
       headers: { listUnsubscribe: '<https://list.example/u/2>' },
@@ -77,7 +88,8 @@ const seed = (): Seed => ({
   ],
 })
 
-const ONE_CLICK: Unsubscribe = { method: 'one-click', url: 'https://list.example/u/1' }
+const ONE_CLICK: Unsubscribe = { method: 'one-click', url: 'https://list.example/u/1', verified: false }
+const ORDER: Unsubscribe = { method: 'web', url: 'https://list.example/u/5', from: 'header' }
 const MAILTO: Unsubscribe = {
   method: 'mailto',
   to: 'leave@list.example',
@@ -106,12 +118,14 @@ scenario(
       [
         ['lists@list.example', ONE_CLICK],
         ['weekly@list.example', MAILTO],
+        ['order@list.example', ORDER],
+        ['bad@list.example', null],
         ['digest@list.example', WEB_ONLY],
         ['old@list.example', null],
         ['promo@deals.example', null],
         ['notes@plain.example', null],
       ],
-      'before any body loads, Updates shows the header targets: one-click only with List-Unsubscribe-Post, then a mailto, then a page, and no http',
+      'before any body loads, Updates shows the header targets: one-click only with List-Unsubscribe-Post and unverified, else the first in the header, none past a bad entry, and no http',
     )
 
     t.equal(await opened(core, 'Weekly list'), ONE_CLICK, 'the message carries the same target as its row')
@@ -124,7 +138,7 @@ scenario(
     t.equal(await opened(core, 'Notes'), TEXT_LINK, 'in plain text, the URL on the line after "unsubscribe"')
     t.equal(await opened(core, 'Seen this?'), null, 'a link in the quoted part is not offered for the message')
     t.equal(
-      rows(await core.query(query)).slice(4),
+      rows(await core.query(query)).slice(6),
       [
         ['promo@deals.example', BODY_LINK],
         ['notes@plain.example', TEXT_LINK],

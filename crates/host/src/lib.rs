@@ -17,12 +17,16 @@ use std::time::Duration;
 use letterbox_core::adapter::AdapterFactory;
 use letterbox_core::clock::{Environment, SystemEnvironment};
 use letterbox_core::secrets::Secrets;
+use letterbox_core::web::Web;
 use letterbox_core::{Core, CoreOptions, StoreError};
 use letterbox_gmail::{GmailConfig, gmail_factory};
 use letterbox_keychain::SystemKeychain;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::task::LocalSet;
+
+mod web;
+pub use web::HttpsWeb;
 
 /// Everything the core gets from its host except the transport, which `run` adds.
 pub struct Parts {
@@ -33,6 +37,8 @@ pub struct Parts {
     pub secrets: Box<dyn Secrets>,
     /// One per way to add an account.
     pub factories: Vec<Rc<dyn AdapterFactory>>,
+    /// Carries the remote images the user chose to show (crates/core/src/web.rs).
+    pub web: Box<dyn Web>,
     /// How long a send waits before it goes out, so the user can undo it.
     pub undo_window: Duration,
     /// How long the core looks for a send whose answer was lost before it says so.
@@ -62,6 +68,7 @@ pub fn app_parts(data_path: PathBuf, gmail: GmailClient) -> Result<Parts, StoreE
         data_path,
         env: Box::new(SystemEnvironment),
         factories: vec![gmail_factory(GmailConfig::google(gmail.id, gmail.secret))],
+        web: Box::new(HttpsWeb::new(None)),
         undo_window: UNDO_WINDOW,
         confirm_window: CONFIRM_WINDOW,
     })
@@ -85,6 +92,7 @@ pub async fn run(
         env: parts.env,
         secrets: parts.secrets,
         factories: parts.factories,
+        web: parts.web,
         undo_window: parts.undo_window,
         confirm_window: parts.confirm_window,
         send: Box::new(move |message| {

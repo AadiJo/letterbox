@@ -5,12 +5,14 @@ import type { Body as MessageBody } from '@letterbox/protocol'
 import { useState } from 'react'
 
 /**
- * The iframe's own policy. It loads nothing from the network: images only from `data:` and
- * `cid:`, fonts only from `data:`, and inline styles. The sandbox blocks script, forms,
- * popups and meta refresh. `allow-same-origin` without `allow-scripts` only lets this page
- * read the frame's height. Nothing in the frame can run.
+ * The iframe's own policy. It loads nothing from the network, in any state: images only from
+ * `data:` and `cid:`, fonts only from `data:`, and inline styles. Shown remote images come from
+ * the core, which fetches them (protocol `image` request). `base-uri 'none'` keeps a `<base>`
+ * from moving where a relative URL points. The sandbox blocks script, forms, popups and meta
+ * refresh. `allow-same-origin` without `allow-scripts` only lets this page read the frame's
+ * height. Nothing in the frame can run.
  */
-const POLICY = "default-src 'none'; img-src data: cid:; font-src data:; style-src 'unsafe-inline'"
+const POLICY = "default-src 'none'; img-src data: cid:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'"
 
 /**
  * The document an HTML body renders in. The policy comes first, so nothing in the body loads

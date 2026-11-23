@@ -18,14 +18,10 @@
 //!     solid top border whose text starts "From:". Everything after it is the quote.
 //!
 //! Either way the quote needs something before it: a body that is all quote is not folded.
-//!
-//! How many earlier messages a quote holds is read from its markup: the deepest nesting of its
-//! levels (`>` marks in text, `blockquote`s in HTML), or the number of Outlook dividers in it
-//! (`divRplyFwdMsg`, a bordered "From:" `div`, an "Original Message" line), whichever is more.
 
-/// The byte offset in `text` of the line where its quote starts, if it ends in one, and how
-/// many earlier messages the quote holds.
-pub fn text(text: &str) -> Option<(usize, u64)> {
+/// The byte offset in `text` of the line where its quote starts, if it ends in one. Linear in
+/// the text: each pass over its lines looks at each line once.
+pub fn text(text: &str) -> Option<usize> {
     let mut lines = Vec::new();
     let mut start = 0;
     for line in text.split('\n') {
@@ -57,38 +53,24 @@ pub fn text(text: &str) -> Option<(usize, u64)> {
         }
         found.push(boundary);
     }
-    // Outlook dividers.
-    let dividers: Vec<usize> = (0..lines.len())
-        .filter(|&index| {
-            let line = lines[index].1.trim();
-            let rule = line.len() >= 10 && line.chars().all(|c| c == '_');
-            let from_next = ((index + 1)..lines.len())
-                .find(|&next| !blank(next))
-                .is_some_and(|next| lines[next].1.trim_start().starts_with("From:"));
-            line.eq_ignore_ascii_case("-----Original Message-----") || rule && from_next
-        })
-        .collect();
-    found.extend(dividers.first());
-    let boundary = found.into_iter().min()?;
-    if !(0..boundary).any(|index| !blank(index)) {
-        return None;
-    }
-    let depth = lines[boundary..].iter().map(|(_, line)| marks(line)).max().unwrap_or(0);
-    let divided = dividers.iter().filter(|&&index| index >= boundary).count() as u64;
-    Some((lines[boundary].0, depth.max(divided).max(1)))
-}
-
-/// How many `>` marks a line starts with, spaces between them allowed.
-fn marks(line: &str) -> u64 {
-    let mut count = 0;
-    for c in line.chars() {
-        match c {
-            '>' => count += 1,
-            ' ' => {}
-            _ => break,
+    // The first Outlook divider. `from_next` walks back once: whether the next line that is
+    // not blank, after each line, starts "From:".
+    let mut from_next = vec![false; lines.len()];
+    let mut next_is_from = false;
+    for index in (0..lines.len()).rev() {
+        from_next[index] = next_is_from;
+        if !blank(index) {
+            next_is_from = lines[index].1.trim_start().starts_with("From:");
         }
     }
-    count
+    let divider = (0..lines.len()).find(|&index| {
+        let line = lines[index].1.trim();
+        let rule = line.len() >= 10 && line.chars().all(|c| c == '_');
+        line.eq_ignore_ascii_case("-----Original Message-----") || rule && from_next[index]
+    });
+    found.extend(divider);
+    let boundary = found.into_iter().min()?;
+    (0..boundary).any(|index| !blank(index)).then(|| lines[boundary].0)
 }
 
 /// Where an element sits in the first pass over an HTML body: the count of elements started
@@ -111,8 +93,6 @@ enum Kind {
 
 struct Candidate {
     kind: Kind,
-    /// False for Outlook's `appendonsend`, which sits just before the divider it belongs to.
-    counts: bool,
     start: Place,
     /// The pos of its end tag. u32::MAX until one is seen, as when the body ends inside it.
     end: u32,
@@ -131,9 +111,8 @@ pub struct Scan {
     block_text: String,
     first_content: Option<u32>,
     last_content: Option<u32>,
-    /// How many `blockquote`s are open, and the pos and nesting of each one that started.
-    depth: u64,
-    levels: Vec<(u32, u64)>,
+    /// The Border candidates whose text is still being read: open, and not yet 16 bytes long.
+    reading: Vec<usize>,
 }
 
 /// The attributes of an element that the quote rules read, with their entities decoded.
@@ -169,24 +148,18 @@ impl Scan {
             self.block = Some(at);
             self.block_text.clear();
         }
-        if tag.name == "blockquote" {
-            self.depth += 1;
-            self.levels.push((at.pos, self.depth));
-        }
         let (kind, start) = found?;
         self.candidates.push(Candidate {
-            counts: tag.id != "appendonsend",
             kind,
             start,
             end: u32::MAX,
             text: String::new(),
         });
-        Some(self.candidates.len() - 1)
-    }
-
-    /// The end tag of a `blockquote`.
-    pub fn left_blockquote(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        let index = self.candidates.len() - 1;
+        if kind == Kind::Border {
+            self.reading.push(index);
+        }
+        Some(index)
     }
 
     /// The end tag of candidate `index`, at `pos`.
@@ -194,6 +167,7 @@ impl Scan {
         if let Some(candidate) = self.candidates.get_mut(index) {
             candidate.end = candidate.end.min(pos);
         }
+        self.reading.retain(|open| *open != index);
     }
 
     /// An image, or text that is not blank, at `pos`.
@@ -212,35 +186,18 @@ impl Scan {
             }
             self.block_text.drain(..cut);
         }
-        for candidate in &mut self.candidates {
-            let open = candidate.start.pos <= pos && pos < candidate.end;
-            if candidate.kind == Kind::Border && open && candidate.text.len() < 16 {
-                let piece = if candidate.text.is_empty() {
-                    text.trim_start()
-                } else {
-                    text
-                };
-                candidate.text.push_str(piece);
-            }
+        for &index in &self.reading {
+            let candidate = &mut self.candidates[index];
+            let piece = if candidate.text.is_empty() {
+                text.trim_start()
+            } else {
+                text
+            };
+            candidate.text.push_str(piece);
         }
-    }
-
-    /// How many earlier messages the quote that starts at `boundary` holds.
-    pub fn earlier(&self, boundary: Place) -> u64 {
-        let after = |pos: u32| pos >= boundary.pos;
-        let depth = self
-            .levels
-            .iter()
-            .filter(|(pos, _)| after(*pos))
-            .map(|(_, depth)| *depth)
-            .max();
-        let dividers = self
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.counts && after(candidate.start.pos) && self.qualifies(candidate))
-            .filter(|candidate| candidate.kind != Kind::Container)
-            .count() as u64;
-        depth.unwrap_or(0).max(dividers).max(1)
+        let candidates = &self.candidates;
+        self.reading
+            .retain(|&index| candidates[index].text.len() < 16 && pos >= candidates[index].start.pos);
     }
 
     /// True when a Border candidate's text starts "From:". Every other candidate qualifies by its kind.
