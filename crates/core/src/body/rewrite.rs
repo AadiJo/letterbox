@@ -98,12 +98,12 @@ impl Found {
         (!changes.is_empty()).then(|| trackers::replace(css, &changes))
     }
 
-    /// CSS as pass 2 writes it: each remote image a placeholder (`css`), then each color named
-    /// (paint.rs), text against `on`, the background its element sets, for a style attribute.
-    /// None when it is unchanged.
-    fn restyle(&mut self, css: &str, on: Option<Rgba>) -> Option<String> {
+    /// CSS as pass 2 writes it, a style sheet when `sheet` is true and else a style attribute:
+    /// each remote image a placeholder (`css`), then each color named (paint.rs), text against
+    /// `on`, the background its element sets, for a style attribute. None when it is unchanged.
+    fn restyle(&mut self, css: &str, on: Option<Rgba>, sheet: bool) -> Option<String> {
         let images = self.css(css);
-        let colored = self.paint.css(images.as_deref().unwrap_or(css), on);
+        let colored = self.paint.css(images.as_deref().unwrap_or(css), on, sheet);
         colored.or(images)
     }
 
@@ -206,7 +206,7 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         let name = el.tag_name();
         let style = attribute(el, "style");
         let on = Painter::background(el, &name, style.as_deref());
-        if let Some(css) = style.and_then(|style| found.restyle(&style, on)) {
+        if let Some(css) = style.and_then(|style| found.restyle(&style, on, false)) {
             set(el, "style", &css);
         }
         found.paint.attributes(el, &name, on);
@@ -246,7 +246,7 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         style.push_str(chunk.as_str());
         if chunk.last_in_text_node() {
             let css = std::mem::take(&mut style);
-            let rewritten = found.borrow_mut().restyle(&css, None).unwrap_or(css);
+            let rewritten = found.borrow_mut().restyle(&css, None, true).unwrap_or(css);
             chunk.replace(&rewritten, ContentType::Html);
         } else {
             chunk.remove();

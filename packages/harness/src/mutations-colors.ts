@@ -55,14 +55,6 @@ export const COLOR_MUTATIONS: Mutation[] = [
     scenarios: RENDERED,
   },
   {
-    name: 'rgb() with an alpha after a space, and no slash, is read as a color, so it hides the color before it',
-    file: body('color.rs'),
-    find: '        [a, b, c] => Some(Arguments {\n            values: [a, b, c],\n            alpha,\n            legacy: false,\n        }),',
-    replace:
-      '        [a, b, c] => Some(Arguments {\n            values: [a, b, c],\n            alpha,\n            legacy: false,\n        }),\n        [a, b, c, d] => Some(Arguments {\n            values: [a, b, c],\n            alpha: Some(d),\n            legacy: false,\n        }),',
-    scenarios: RENDERED,
-  },
-  {
     name: 'the comma form of rgb() mixes numbers and percentages, which a browser drops',
     file: body('color.rs'),
     find: 'if legacy && !numbers && !percents {',
@@ -77,16 +69,9 @@ export const COLOR_MUTATIONS: Mutation[] = [
     scenarios: COLORS,
   },
   {
-    name: 'a color longhand is wrapped whatever else its value holds, so an invalid one hides the one before it',
-    file: body('paint.rs'),
-    find: 'if !wrappable(name, &read) {',
-    replace: 'if false {',
-    scenarios: COLORS,
-  },
-  {
     name: 'text set beside a background in one rule is read on the reader, not on that background',
     file: body('paint.rs'),
-    find: 'let beside = backgrounds.get(block).copied().flatten().unwrap_or(on);',
+    find: 'let beside = backgrounds.get(&declaration.rule).copied().flatten().unwrap_or(on);',
     replace: 'let beside = on;',
     scenarios: COLORS,
   },
@@ -95,49 +80,6 @@ export const COLOR_MUTATIONS: Mutation[] = [
     file: body('rewrite.rs'),
     find: 'let on = Painter::background(el, &name, style.as_deref());',
     replace: 'let on: Option<Rgba> = None;',
-    scenarios: COLORS,
-  },
-  {
-    name: 'a no-break space passes for CSS whitespace, so a color a browser drops hides the one before it',
-    file: body('color.rs'),
-    find: 'pub fn css_trim(text: &str) -> &str {\n    text.trim_matches(|c: char| c.is_ascii_whitespace())',
-    replace: 'pub fn css_trim(text: &str) -> &str {\n    text.trim()',
-    scenarios: RENDERED,
-  },
-  {
-    name: 'a var() in a comment counts as a call, so a value a browser drops is wrapped and hides the color before it',
-    file: body('css.rs'),
-    find: 'fn reads_var(value: &str) -> bool {\n    let bytes = value.as_bytes();',
-    replace:
-      'fn reads_var(value: &str) -> bool {\n    if value.to_ascii_lowercase().contains("var(") {\n        return true;\n    }\n    let bytes = value.as_bytes();',
-    scenarios: RENDERED,
-  },
-  {
-    name: 'an important background loses to a later plain one, so text is read on a background the browser does not paint',
-    file: body('css.rs'),
-    find: 'if read.important {',
-    replace: 'if false && read.important {',
-    scenarios: RENDERED,
-  },
-  {
-    name: 'a background-color a browser drops still counts, so text is read on the reader instead of the navy painted',
-    file: body('css.rs'),
-    find: '_ if name == "background-color" && !read.colors.is_empty() => None,',
-    replace: '_ if name == "background-color" && !read.colors.is_empty() => Some(Paints::Unknown),',
-    scenarios: RENDERED,
-  },
-  {
-    name: 'a background shorthand is wrapped whatever else it holds, so one a browser drops hides the navy before it',
-    file: body('css.rs'),
-    find: '"background" | "color" => count == 1 && words.is_empty(),',
-    replace: '"background" | "color" => count == 1,',
-    scenarios: RENDERED,
-  },
-  {
-    name: 'a border with two styles is wrapped, so one a browser drops hides the border before it',
-    file: body('css.rs'),
-    find: '            if style {\n                return false;',
-    replace: '            if false && style {\n                return false;',
     scenarios: COLORS,
   },
   {
@@ -181,29 +123,6 @@ export const COLOR_MUTATIONS: Mutation[] = [
     find: 'format!("var({}color-{index}, {written})", self.prefix),',
     replace: 'format!("var(--letterbox-color-{index}, {written})"),',
     scenarios: RENDERED,
-  },
-  {
-    name: 'a selector with a colon hides the colors in its block',
-    file: body('css.rs'),
-    find: '            at = end;\n        } else {\n            at = until(bytes, at, b";{}");',
-    replace:
-      '            at = until(bytes, end + 1, b"}");\n        } else {\n            at = until(bytes, at, b";{}");',
-    scenarios: COLORS,
-  },
-  {
-    name: 'a color name inside a string is restyled, which garbles the string',
-    file: body('css.rs'),
-    find: "quote @ (b'\"' | b'\\'') => at = string_end(bytes, at, quote),\n            b'/' if bytes.get(at + 1) == Some(&b'*') => at = comment_end(bytes, at),\n            b'#' => {",
-    replace:
-      "b'\"' | b'\\'' => at += 1,\n            b'/' if bytes.get(at + 1) == Some(&b'*') => at = comment_end(bytes, at),\n            b'#' => {",
-    scenarios: COLORS,
-  },
-  {
-    name: 'a color name inside a url() is restyled, which breaks the url',
-    file: body('css.rs'),
-    find: 'if matches!(function.as_str(), "url" | "rgb" | "rgba" | "hsl" | "hsla") {',
-    replace: 'if matches!(function.as_str(), "rgb" | "rgba" | "hsl" | "hsla") {',
-    scenarios: COLORS,
   },
   {
     name: 'hidden text with no alpha gets a dark value, which shows it',
@@ -265,8 +184,8 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: "the colour pass reads the sender's css, not the rewritten one, and brings a remote image back",
     file: body('rewrite.rs'),
-    find: 'let colored = self.paint.css(images.as_deref().unwrap_or(css), on);',
-    replace: 'let colored = self.paint.css(css, on);',
+    find: 'let colored = self.paint.css(images.as_deref().unwrap_or(css), on, sheet);',
+    replace: 'let colored = self.paint.css(css, on, sheet);',
     scenarios: COLORS,
   },
   {
@@ -303,5 +222,85 @@ export const COLOR_MUTATIONS: Mutation[] = [
     find: '    if !safe(&html) {',
     replace: '    if !safe(&html) && false {',
     scenarios: SEEDS,
+  },
+  {
+    name: 'a lone color form takes more than a color, so a value a browser drops is wrapped and hides the one before it',
+    file: body('css.rs'),
+    find: '"background" | "color" => only_colors && colors == 1,',
+    replace: '"background" | "color" => colors == 1,',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a color longhand with two colors passes for one, so a value a browser drops is wrapped',
+    file: body('css.rs'),
+    find: '_ if name.ends_with("-color") => only_colors && colors == 1,',
+    replace: '_ if name.ends_with("-color") => only_colors && colors >= 1,',
+    scenarios: COLORS,
+  },
+  {
+    name: 'border-color takes five colors, which a browser drops',
+    file: body('css.rs'),
+    find: '"border-color" => only_colors && (1..=4).contains(&colors),',
+    replace: '"border-color" => only_colors && (1..=5).contains(&colors),',
+    scenarios: COLORS,
+  },
+  {
+    name: 'a border takes two styles, which a browser drops',
+    file: body('css.rs'),
+    find: 'widths <= 1 && styled <= 1',
+    replace: 'widths <= 1',
+    scenarios: COLORS,
+  },
+  {
+    name: "an outline takes a border's styles, hidden too, which a browser drops for an outline",
+    file: body('css.rs'),
+    find: '"outline" => colors == 1 && line(parts, &OUTLINE_STYLES),',
+    replace: '"outline" => colors == 1 && line(parts, &BORDER_STYLES),',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a text-decoration takes a line keyword twice, which a browser drops',
+    file: body('css.rs'),
+    find: '.all(|(at, word)| !words[..at].contains(word))',
+    replace: '.all(|_| true)',
+    scenarios: COLORS,
+  },
+  {
+    name: 'rgb() takes an alpha after a space with no slash, so a value a browser drops hides the one before it',
+    file: body('css.rs'),
+    find: '        [Arg::Value(a), Arg::Value(b), Arg::Value(c)] => ([*a, *b, *c], None, false),',
+    replace:
+      '        [Arg::Value(a), Arg::Value(b), Arg::Value(c)] => ([*a, *b, *c], None, false),\n        [Arg::Value(a), Arg::Value(b), Arg::Value(c), Arg::Value(alpha)] => ([*a, *b, *c], Some(*alpha), false),',
+    scenarios: RENDERED,
+  },
+  {
+    name: '!important is not read, so an important color is left as written',
+    file: body('css.rs'),
+    find: '.try_parse(|input| parse_important(input).and_then(|()| input.expect_exhausted()))',
+    replace:
+      '.try_parse(|input| parse_important(input).and_then(|()| input.expect_exhausted()).and(Err(input.new_basic_error(cssparser::BasicParseErrorKind::EndOfInput))))',
+    scenarios: COLORS,
+  },
+  {
+    name: 'an important background loses to a later plain one, so text is read on a background the browser does not paint',
+    file: body('css.rs'),
+    find: 'if declaration.reading.important() {',
+    replace: 'if false && declaration.reading.important() {',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a background the core cannot read is passed over, so text is read on a navy a later declaration may hide',
+    file: body('css.rs'),
+    find: 'declarations.filter(|declaration| matches!(declaration.name.as_str(), "background" | "background-color"))',
+    replace:
+      'declarations.filter(|declaration| matches!(declaration.name.as_str(), "background" | "background-color") && matches!(declaration.reading, Reading::Known { .. }))',
+    scenarios: COLORS,
+  },
+  {
+    name: "the rules inside @media go unread, so their colors keep the sender's value in dark",
+    file: body('css.rs'),
+    find: '"media" | "supports" | "layer"',
+    replace: '"supports" | "layer"',
+    scenarios: COLORS,
   },
 ]

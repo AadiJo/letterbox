@@ -204,10 +204,11 @@ pub enum UnsubscribeSource {
 /// How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
 /// with `var(<cssPrefix>color-N, <its own color>)`, where N is the color's index in `palette`:
 /// in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
-/// (`background`) and borders (`border*`, `outline`), in the forms a browser keeps: a color
-/// alone, a border or outline with at most one width and one style, a `text-decoration` with
-/// line keywords. Any other form stays as written, unless it already calls `var()`, so a browser
-/// still drops an invalid one and the declaration before it holds. An element whose `bgcolor` (on body, table parts and cells), `<font color>`,
+/// (`background`) and borders (`border*`, `outline`), in the forms the core reads (with
+/// cssparser, as a browser reads CSS): a color alone, a border or outline with at most one width
+/// and one style, a `text-decoration` with line keywords. Any other form stays as written, a
+/// `var()` or `inherit` too, so a browser still drops an invalid one and the declaration before
+/// it holds. A color left as written keeps the sender's value in both schemes. An element whose `bgcolor` (on body, table parts and cells), `<font color>`,
 /// or `<body text>`, `link`, `vlink` or `alink` set one carries `data-letterbox-bg`, `-text`,
 /// `-link`, `-vlink` or `-alink` naming its N. A `<style>` at the start of `html` applies it
 /// from an anonymous cascade layer, so every rule of the sender's still wins where it did over
@@ -266,8 +267,9 @@ pub struct Swatch {
     /// Its value for the dark reader (crates/core/src/body/dark.rs), in the same form. The same
     /// hue, with its lightness turned over against the reader's background where the original
     /// was meant for a light page. Text keeps a contrast of at least 4.5:1 (WCAG AA), made more
-    /// opaque if it must be, on the dark value of the background set beside it, else on the
-    /// reader's background (#1b1b1e). A background keeps 4.5:1 under the reader's text
+    /// opaque if it must be, on the dark value of the background its rule or element paints, else
+    /// on the reader's background (#1b1b1e). When a background the core cannot read could win
+    /// there, it reads the text on the reader's background, and promises nothing about the other. A background keeps 4.5:1 under the reader's text
     /// (#e4e4e4). A border has no floor.
     pub dark: String,
 }

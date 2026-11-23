@@ -36,6 +36,9 @@ const INVALID_SHOWN = [
   '<p class="kept" style="color:var(<prefix>color-0, #0563c1);color:red blue /* var(--accent) */">Blue past a commented var</p>',
   '<p class="shorthand" style="background:var(<prefix>color-3, #000038);background:red no-repeat repeat-x">Navy past a bad shorthand</p>',
   '<p style="border:1px solid var(<prefix>color-4, #cc0000);border:2px solid solid #0000cc">Red border past two styles</p>',
+  '<p class="kept" style="color:var(<prefix>color-0, #0563c1);color:red #var(--x)">Blue past a hash</p>',
+  '<p class="outlined" style="outline:2px solid var(<prefix>color-4, #cc0000);outline:2px hidden #0000cc">Red outline past hidden</p>',
+  '<p style="border-color:red red red red red;text-decoration:underline underline #cc0000">Five colors, two underlines</p>',
 ].join('')
 
 const INVALID_PALETTE = [
@@ -59,13 +62,19 @@ const PAIRS_SHOWN = [
   '<p style="background:var(<prefix>color-7, #fff3c4);color:var(<prefix>color-8, #8a6d00)">A note</p>',
   '<p><span class="badge">New</span></p>',
   '<table><tr><td style="background-color:var(<prefix>color-5, #000038)!important;background:var(<prefix>color-3, #fff);color:var(<prefix>color-4, #888888)">Important navy</td>',
-  '<td style="background:var(<prefix>color-5, #000038);background-color:red blue;color:var(<prefix>color-9, #808080)">Navy past a dropped one</td></tr></table>',
+  '<td class="unpaired" style="background:var(<prefix>color-5, #000038);background-color:red blue;color:var(<prefix>color-9, #808080)">Navy past a dropped one</td></tr></table>',
+  '<table><tr><td style="background-color:var(<prefix>color-5, #000038)!/**/important;background:var(<prefix>color-3, #fff);color:var(<prefix>color-4, #888888)">Important past a comment</td>',
+  '<td class="unpaired" style="background:var(<prefix>color-5, #000038);background:red no-repeat repeat-x;color:var(<prefix>color-10, #7a7a7a)">Navy past a dropped shorthand</td>',
+  '<td class="unpaired" style="background-color:var(<prefix>color-5, #000038);background-color:rgb(0 0 0 .35);color:var(<prefix>color-10, #7a7a7a)">Navy past a dropped rgb</td>',
+  '<td class="unpaired" style="background:var(<prefix>color-5, #000038);background-color:inherit;color:var(<prefix>color-10, #7a7a7a)">Inherited</td></tr></table>',
 ].join('')
 
 /**
  * PAIRS_HTML's palette. Text set beside a background, in a rule or on its element, is read on
- * the dark value of the background a browser paints there, the important one or the last it
- * keeps: grey on navy is lighter than the same grey alone (#979797).
+ * the dark value of the background a browser paints there, the important one (behind a comment
+ * too) or the last: grey on navy is lighter than the same grey alone (#979797). Where a later or
+ * important declaration the core cannot read could win (a background-color it does not read,
+ * a dropped shorthand or rgb(), inherit), it does not guess: that text is read on the reader.
  */
 const PAIRS_PALETTE = [
   ['background', '#00ff00', '#002700'],
@@ -77,7 +86,8 @@ const PAIRS_PALETTE = [
   ['background', '#ff0000', '#690000'],
   ['background', '#fff3c4', '#221b00'],
   ['text', '#8a6d00', '#c8aa53'],
-  ['text', '#808080', '#bdbdbc'],
+  ['text', '#808080', '#9f9f9f'],
+  ['text', '#7a7a7a', '#a4a4a4'],
 ]
 
 /**
@@ -101,7 +111,7 @@ const LUMEN_SHOWN = [
   '<body bgcolor="#F4EFE6" text="#2f3a38" link="#c8552b" vlink="#6b716f" alink="#a84520" data-letterbox-bg="0" data-letterbox-text="1" data-letterbox-link="2" data-letterbox-vlink="3" data-letterbox-alink="4">',
   '<style>:root{--letterbox-color-0:#ff0000}.essay a:hover{color:var(<prefix>color-4, #a84520)}',
   '.button{background:var(<prefix>color-5, #12423d);color:var(<prefix>color-6, #f4efe6)}@media (max-width:600px){.story{border-top:1px solid var(<prefix>color-7, #e2dacb)}}',
-  '.hero{background:var(<prefix>image-0, none) var(<prefix>color-5, #12423d)}.mark::before{content:"#ffffff"}</style>',
+  '.hero{background:var(<prefix>image-0, none) #12423d}.mark::before{content:"#ffffff"}</style>',
   '<div style="display:none;color:rgba(0,0,0,0)">The quiet web.</div>',
   '<table role="presentation" width="100%" bgcolor="f4efe6" data-letterbox-bg="0"><tr><td>',
   '<table width="600"><tr><td style="color:var(<prefix>color-3, #6B716F)">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
@@ -112,11 +122,12 @@ const LUMEN_SHOWN = [
   '<h1 style="color:var(<prefix>color-9, #1d2b29)">The quiet web</h1>',
   '<p style="color:var(<prefix>color-1, rgb(47, 58, 56))">On slow mornings I read small sites.</p>',
   '<p><a class="button" href="https://lumen.example/essay" style="border:1px solid var(<prefix>color-10, hsl(173, 57%, 17%))">Read the essay</a></p></td></tr>',
-  '<tr><td class="story" style="border-top:1px solid var(<prefix>color-7, #e2dacb);background-color:transparent">Seed swaps are back. <span style="color:var(--accent, var(<prefix>color-2, #c8552b))">Read</span></td></tr>',
+  '<tr><td class="story" style="border-top:1px solid var(<prefix>color-7, #e2dacb);background-color:transparent">Seed swaps are back. <span class="as-written" style="color:var(--accent, #c8552b)">Read</span></td></tr>',
   '</table></td></tr></table>',
   '<p style="color:var(<prefix>color-3, #6b716f)">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
   ' <span style="color:var(<prefix>color-11, rgba(0,0,0,.35))">Lumen Media, Bristol</span></p>',
-  `<p style="background:var(--sender-bg, url(cid:red) var(<prefix>color-5, #12423d))">Lumen</p><p style="color:var(--note, 'red')">Note</p>`,
+  // A value that calls var() is no form the pass reads, so it stays as written, colors and all.
+  `<p style="background:var(--sender-bg, url(cid:red) #12423d)">Lumen</p><p style="color:var(--note, 'red')">Note</p>`,
   '</body>',
 ].join('')
 

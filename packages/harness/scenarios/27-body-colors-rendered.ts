@@ -58,7 +58,7 @@ async function paint(page: Page, { html, palette, prefix }: Painted, scheme: Sch
 }
 
 /** The computed `property` of each element `selector` finds. */
-const computed = (page: Page, selector: string, property: 'color' | 'backgroundColor') =>
+const computed = (page: Page, selector: string, property: 'color' | 'backgroundColor' | 'outlineColor') =>
   page.$$eval(selector, (elements, name) => elements.map((element) => getComputedStyle(element)[name]), property)
 
 /** A computed CSS color as its four channels, alpha from 0 to 1. */
@@ -85,7 +85,11 @@ function luminance(rgb: readonly number[]) {
 
 /**
  * Each element whose own text is shown with a contrast under 4.5:1 on what it is painted on: its
- * ancestors' backgrounds laid over the canvas, then its color over them, as WCAG reckons it.
+ * ancestors' backgrounds laid over the canvas, then its color over them, as WCAG reckons it. Two
+ * kinds are left out, since the core promises nothing for them: text in an `.unpaired` element,
+ * whose rule has a background the core cannot read that could win, so it reads that text on the
+ * reader, and an `.as-written` color, a value the core cannot read (a `var()`), which keeps the
+ * sender's color in dark.
  */
 async function unreadable(page: Page): Promise<string[]> {
   const shown = await page.evaluate(() =>
@@ -93,6 +97,7 @@ async function unreadable(page: Page): Promise<string[]> {
       .filter(
         (element) =>
           element.getClientRects().length > 0 &&
+          element.closest('.unpaired, .as-written') === null &&
           [...element.childNodes].some(
             (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? '').trim() !== '',
           ),
@@ -143,11 +148,17 @@ scenario(
     await paint(page, invalid, 'original')
     const originalBlue = await computed(page, 'p.kept', 'color')
     const originalNavy = await computed(page, 'p.shorthand', 'backgroundColor')
+    const originalOutline = await computed(page, 'p.outlined', 'outlineColor')
     await paint(page, invalid, 'dark')
     t.equal(
       [originalBlue, await computed(page, 'p.kept', 'color')],
-      [Array(3).fill('rgb(5, 99, 193)'), Array(3).fill('rgb(132, 186, 255)')],
-      "a value a browser drops, past a no-break space or a commented var() too, leaves the blue before it in effect, in the sender's colors and in dark",
+      [Array(4).fill('rgb(5, 99, 193)'), Array(4).fill('rgb(132, 186, 255)')],
+      "a value a browser drops, past a no-break space, a commented var() or a hash token too, leaves the blue before it in effect, in the sender's colors and in dark",
+    )
+    t.equal(
+      [originalOutline, await computed(page, 'p.outlined', 'outlineColor')],
+      [['rgb(204, 0, 0)'], ['rgb(220, 35, 25)']],
+      'an outline a browser drops (hidden is no outline style) leaves the red before it in effect, in both schemes',
     )
     t.equal(
       [originalNavy, await computed(page, 'p.shorthand', 'backgroundColor')],
@@ -157,10 +168,21 @@ scenario(
 
     const pairs = body('Pairs')
     await paint(page, pairs, 'original')
+    const originalUnpaired = await computed(page, 'td.unpaired', 'backgroundColor')
     t.equal(
-      [await computed(page, 'div', 'backgroundColor'), await computed(page, 'td', 'backgroundColor')],
-      [['rgba(0, 0, 0, 0)'], ['rgb(0, 0, 56)', 'rgb(0, 255, 0)', 'rgb(0, 0, 56)', 'rgb(0, 0, 56)']],
+      [await computed(page, 'div', 'backgroundColor'), await computed(page, 'table[bgcolor] td', 'backgroundColor')],
+      [['rgba(0, 0, 0, 0)'], ['rgb(0, 0, 56)', 'rgb(0, 255, 0)']],
       "in the sender's colors a div's bgcolor stays ignored, a cell's applies, and a rule in the sender's own layer beats it",
+    )
+
+    await paint(page, pairs, 'dark')
+    t.equal(
+      [originalUnpaired, await computed(page, 'td.unpaired', 'backgroundColor')],
+      [
+        ['rgb(0, 0, 56)', 'rgb(0, 0, 56)', 'rgb(0, 0, 56)', 'rgba(0, 0, 0, 0)'],
+        ['rgb(46, 74, 135)', 'rgb(46, 74, 135)', 'rgb(46, 74, 135)', 'rgba(0, 0, 0, 0)'],
+      ],
+      "a background a browser drops leaves the navy before it in effect, and inherit takes the row's, in both schemes",
     )
 
     const unread: Record<string, string[]> = {}

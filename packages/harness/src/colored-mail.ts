@@ -31,11 +31,11 @@ export const LUMEN_HTML = [
   '<h1 style="color:#1d2b29">The quiet web</h1>',
   '<p style="color:rgb(47, 58, 56)">On slow mornings I read small sites.</p>',
   '<p><a class="button" href="https://lumen.example/essay" style="border:1px solid hsl(173, 57%, 17%)">Read the essay</a></p></td></tr>',
-  '<tr><td class="story" style="border-top:1px solid #e2dacb;background-color:transparent">Seed swaps are back. <span style="color:var(--accent, #c8552b)">Read</span></td></tr>',
+  '<tr><td class="story" style="border-top:1px solid #e2dacb;background-color:transparent">Seed swaps are back. <span class="as-written" style="color:var(--accent, #c8552b)">Read</span></td></tr>',
   '</table></td></tr></table>',
   '<p style="color:#6b716f">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
   ' <span style="color:rgba(0,0,0,.35)">Lumen Media, Bristol</span></p>',
-  // Values that call var(), which the pass wraps: the color names in their url() and string stay.
+  // Values that call var(), which the pass leaves as written, color names in a url() and a string too.
   `<p style="background:var(--sender-bg, url(cid:red) #12423d)">Lumen</p><p style="color:var(--note, 'red')">Note</p>`,
   '</body>',
 ].join('')
@@ -79,6 +79,10 @@ export const INVALID_HTML = [
   // A later shorthand a browser drops: two repeats, or two border styles.
   '<p class="shorthand" style="background:#000038;background:red no-repeat repeat-x">Navy past a bad shorthand</p>',
   '<p style="border:1px solid #cc0000;border:2px solid solid #0000cc">Red border past two styles</p>',
+  // A hash token is no var() call, hidden is no outline style, and five colors are one too many.
+  '<p class="kept" style="color:#0563c1;color:red #var(--x)">Blue past a hash</p>',
+  '<p class="outlined" style="outline:2px solid #cc0000;outline:2px hidden #0000cc">Red outline past hidden</p>',
+  '<p style="border-color:red red red red red;text-decoration:underline underline #cc0000">Five colors, two underlines</p>',
 ].join('')
 
 /**
@@ -92,10 +96,16 @@ export const PAIRS_HTML = [
   '<td class="layered" bgcolor="#ff0000">Layered</td></tr></table>',
   '<p style="background:#fff3c4;color:#8a6d00">A note</p>',
   '<p><span class="badge">New</span></p>',
-  // The background a browser paints: the important navy over a later white, and the navy past a
-  // later background-color it drops.
+  // The background a browser paints: the important navy over a later white. A later
+  // background-color the core cannot read leaves it unsure, so its text is read on the reader.
   '<table><tr><td style="background-color:#000038!important;background:#fff;color:#888888">Important navy</td>',
-  '<td style="background:#000038;background-color:red blue;color:#808080">Navy past a dropped one</td></tr></table>',
+  '<td class="unpaired" style="background:#000038;background-color:red blue;color:#808080">Navy past a dropped one</td></tr></table>',
+  // An important background behind a comment, and backgrounds the core cannot read: one a
+  // browser drops (so navy shows) and one that inherits, whose color it does not know.
+  '<table><tr><td style="background-color:#000038!/**/important;background:#fff;color:#888888">Important past a comment</td>',
+  '<td class="unpaired" style="background:#000038;background:red no-repeat repeat-x;color:#7a7a7a">Navy past a dropped shorthand</td>',
+  '<td class="unpaired" style="background-color:#000038;background-color:rgb(0 0 0 .35);color:#7a7a7a">Navy past a dropped rgb</td>',
+  '<td class="unpaired" style="background:#000038;background-color:inherit;color:#7a7a7a">Inherited</td></tr></table>',
 ].join('')
 
 /** One message from `from`, its text its subject. */

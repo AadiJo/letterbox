@@ -354,7 +354,8 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
     name: definition.name,
     dialect,
     passed: failure === null,
-    tool: tool && failure !== null,
+    // A tool's failure only when the run broke no rule of its own: a rule it broke is the code's.
+    tool: tool && failure !== null && broken.length === 0,
     failure,
     edges: cycle.edges,
     transcript: `${lines}\n`,

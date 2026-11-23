@@ -1477,6 +1477,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "cssparser",
  "foldhash",
  "fs4",
  "getrandom 0.4.3",
