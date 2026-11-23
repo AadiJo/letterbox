@@ -43,6 +43,12 @@ pub enum Query {
         #[serde(default, deserialize_with = "present")]
         #[ts(optional)]
         zone: Option<String>,
+        /// Only the sender at this address, compared without case: its one row, or none. A UI
+        /// reads one sender's row by it, such as where an unsubscribe from it has got, wherever
+        /// the sender sits in Updates. Leave out for every sender.
+        #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
+        address: Option<String>,
         offset: u64,
         limit: NonZeroU64,
     },

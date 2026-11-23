@@ -36,11 +36,14 @@ scenario('a one-click unsubscribe whose DKIM signature verifies is posted once',
 
   const command = { kind: 'unsubscribe', messageId: await messageOf(core, 'Weekly news') } as const
   const again = await core.command(command)
-  t.equal(again.kind, 'accepted', 'a new unsubscribe after one is done is accepted')
-  t.equal((await core.settled(again.change)).result, 'done', 'it settles done')
-  const resent = await core.command(command, again.change)
+  t.equal(
+    again.kind === 'rejected' && again.reason,
+    'already-unsubscribed',
+    'a new unsubscribe after one is done is refused already-unsubscribed (30-unsubscribe-once.ts)',
+  )
+  const resent = await core.command(command, change)
   t.equal(resent.kind, 'accepted', 'the same command sent again is answered again')
-  t.equal(t.web.posted().length, 2, 'the command sent twice posted once')
+  t.equal(t.web.posted().length, 1, 'the command sent twice, and refused once, posted once')
   t.equal(
     (await core.command({ kind: 'undo', change })).kind,
     'rejected',

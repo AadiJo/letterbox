@@ -6,7 +6,7 @@
 // renderer has no sign-in screen yet, and the real core's store starts empty.
 
 import type { Client } from '@letterbox/client'
-import type { Attachment, SignInError, ThreadId } from '@letterbox/protocol'
+import type { Attachment, ShowImages, SignInError, ThreadId } from '@letterbox/protocol'
 
 /** The query parameter that asks for startOauth. packages/dev-host adds it to the page URL. */
 const SIGN_IN_PARAM = 'sign-in'
@@ -35,6 +35,12 @@ declare global {
       threadOf(subject: string): Promise<ThreadId>
       /** Marks the conversation with this subject read, and resolves once the core has answered everything before. */
       markRead(subject: string): Promise<void>
+      /**
+       * Sends set-images for the newest message of the conversation with this subject, once for
+       * each choice in `shows`, in order, back to back. Resolves once they are sent, not answered,
+       * so a check can hold the core's answers and release them together.
+       */
+      setImages(subject: string, shows: readonly ShowImages[]): Promise<void>
       /** What the page's own OAuth sign-in came to, on a page loaded with `?sign-in=oauth`. Undefined on any other. */
       oauth: Promise<OauthStart> | undefined
     }
@@ -105,6 +111,16 @@ export function installDevHooks(client: Client) {
       const answer = await client.command({ kind: 'set-flags', threadIds: [threadId], unread: false })
       if (answer.kind !== 'accepted') throw new Error(`marking read was rejected: ${answer.reason}`)
       await window.letterboxDev?.settle()
+    },
+    setImages: async (subject, shows) => {
+      const threadId = await window.letterboxDev?.threadOf(subject)
+      if (threadId === undefined) throw new Error('the dev hooks are gone')
+      const open = client.subscribe({ view: 'thread', threadId })
+      const detail = open.latest() ?? (await open.next())
+      open.close()
+      const message = detail?.messages.at(-1)
+      if (!message) throw new Error(`"${subject}" has no message`)
+      for (const show of shows) void client.command({ kind: 'set-images', messageId: message.id, show }).catch(() => {})
     },
     attachments: async (subject) => {
       await window.letterboxDev?.sync()

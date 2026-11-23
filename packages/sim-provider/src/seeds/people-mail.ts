@@ -383,7 +383,10 @@ const THEIRS: Conversation[] = [
     subject: 'Choir rota for April',
     age: 12 * DAY,
     says: [
-      { text: 'Robin, could you take the first two Sundays in April? Elif is away and I’m short of altos.' },
+      // A person's mail with an unsubscribe link in it: it has no row in Updates, so the reader offers no Unsubscribe.
+      {
+        text: 'Robin, could you take the first two Sundays in April? Elif is away and I’m short of altos.\n\nThe rota tool sends these. To unsubscribe from rota emails: https://rota.example/unsubscribe?c=4',
+      },
       { me: true, text: 'The first one, yes. The second clashes with a wedding. Is the 26th any use instead?' },
     ],
   },

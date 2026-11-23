@@ -13,6 +13,7 @@ import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
 import { useLost } from './core.ts'
 import { useShowImagesKey } from './images.ts'
+import { ColorsSwitch } from './ColorsSwitch.tsx'
 import { ImagesChip } from './ImagesChip.tsx'
 import { cx } from './cx.ts'
 import { useNow } from './clock.ts'
@@ -20,6 +21,8 @@ import { rangeFor } from './MailScreen.tsx'
 import type { Chrome } from './Screen.tsx'
 import { type Entry, threadRecord, useThread, useThreadDetail, useThreadSection, useThreadWindow } from './threads.ts'
 import { clockTime, dayOf, listTime, messageTime } from './time.ts'
+import { SenderUnsubscribe } from './Unsubscribe.tsx'
+import { senderKey } from './unsubscribe.ts'
 import { rate, Strip } from './Volume.tsx'
 
 /** The newest conversations the reader groups into Today and Yesterday. More in two days is rare. */
@@ -49,32 +52,37 @@ export function SenderReader({ sender, inbox, most, chrome, onMarkRead, onArchiv
   const unread = sender?.unread ?? 0
   return (
     <>
-      {/* The toolbar band, as Toolbar.tsx draws it for a conversation. */}
-      <div className="top-band relative z-20 bg-reader px-6 wide:px-10">
+      {/* The toolbar band, as Toolbar.tsx draws it for a conversation. In a reader under 480 px,
+          as at the narrowest window, Mark read and Archive all keep their mark and count. */}
+      <div className="top-band @container relative z-20 bg-reader px-6 wide:px-10">
         <div className="reading-column flex items-center gap-2">
           <button
             type="button"
             disabled={lost || unread === 0}
             onClick={() => sender && onMarkRead(sender)}
+            aria-label={unread > 0 ? `Mark ${unread} read` : 'All read'}
             className={`mr-2 ${outlined}`}
           >
             <MailOpen className="size-4" strokeWidth={1.75} aria-hidden />
-            {unread > 0 ? `Mark ${unread} read` : 'All read'}
+            <span className="@max-[480px]:hidden">{unread > 0 ? `Mark ${unread} read` : 'All read'}</span>
+            {unread > 0 && <span className="hidden tabular-nums @max-[480px]:inline">{unread}</span>}
           </button>
           <button
             type="button"
             disabled={lost || !sender}
             onClick={() => sender && onArchive(sender)}
+            aria-label={sender ? `Archive all ${sender.threads} conversations` : 'Archive all'}
             className={outlined}
           >
             <Archive className="size-4" strokeWidth={1.75} aria-hidden />
-            Archive all
+            <span className="@max-[480px]:hidden">Archive all</span>
             {sender && (
               <span className="font-normal text-muted tabular-nums" data-field="archive-count">
                 {sender.threads}
               </span>
             )}
           </button>
+          {sender && <ToolbarUnsubscribe sender={sender} inbox={inbox} mail={chrome.mail} />}
           <span className="flex-1" />
           {chrome.search}
         </div>
@@ -89,6 +97,17 @@ export function SenderReader({ sender, inbox, most, chrome, onMarkRead, onArchiv
 }
 
 type MailProps = { sender: SenderSummary; inbox: MailboxId; most: number; mail: Mail }
+
+/** Unsubscribe, 8 px after Archive all, from the sender's newest conversation. */
+function ToolbarUnsubscribe({ sender, inbox, mail }: Omit<MailProps, 'most'>) {
+  const newest = useThreadSection({ mailboxId: inbox, sender: sender.id }, RECENT)?.entries[0]?.id
+  return newest ? (
+    <span className="ml-2 inline-flex">
+      {/* One per sender, so another sender's target never shows here while this one's loads. */}
+      <SenderUnsubscribe key={senderKey(sender)} sender={sender} newest={newest} mail={mail} />
+    </span>
+  ) : null
+}
 
 function SenderMail({ sender, inbox, most, mail }: MailProps) {
   const now = useNow()
@@ -301,6 +320,7 @@ function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary;
           <div className="flex min-w-0 items-center gap-1.5 text-addr text-muted">
             <span className="truncate">{message.from.address} · to you</span>
             <ImagesChip key={message.id} message={message} />
+            <ColorsSwitch key={`colors ${message.id}`} message={message} />
           </div>
         </div>
       </div>

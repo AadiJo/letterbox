@@ -11,5 +11,13 @@
  *   attachment:open    the same, to open the file instead.
  *   conversation:open  main to preload, with a thread id: the person chose the notification
  *                      for that conversation, so the page should open it.
+ *   url:open           preload to main, invoked with a url the person chose to open in the
+ *                      browser, such as a sender's unsubscribe page. Answers a PageOutcome.
  */
-export type Channel = 'core:connect' | 'core:port' | 'attachment:save' | 'attachment:open' | 'conversation:open'
+export type Channel =
+  | 'core:connect'
+  | 'core:port'
+  | 'attachment:save'
+  | 'attachment:open'
+  | 'conversation:open'
+  | 'url:open'

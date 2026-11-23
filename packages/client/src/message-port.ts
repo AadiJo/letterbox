@@ -41,7 +41,20 @@ export type ShellBridge = {
    * Returns a function that stops listening.
    */
   onOpenConversation(listener: (threadId: ThreadId) => void): () => void
+  /**
+   * Opens `url` in the person's browser, as when they choose to open a sender's unsubscribe
+   * page. Main opens https only, with no user name or password, a few at a time per window,
+   * through the OS, and says which.
+   */
+  openPage(url: string): Promise<PageOutcome>
 }
+
+/**
+ * What main did with a page the person chose to open: opened it in the browser, refused it as
+ * too soon after others or as a URL it opens for no one, or failed, when the OS could not
+ * start the browser.
+ */
+export type PageOutcome = 'opened' | 'refused-rate' | 'refused-url' | 'failed'
 
 /**
  * Asks the shell for a port to a core and resolves with it. It listens before it asks, so

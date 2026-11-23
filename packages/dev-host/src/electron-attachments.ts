@@ -28,6 +28,8 @@ type Stubs = {
   warned: string[]
   /** Each path handed to the OS to open. */
   opened: string[]
+  /** Each url main handed the OS to open in the browser. */
+  external: string[]
 }
 
 declare global {
@@ -71,7 +73,7 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       attachments: FILES,
     })
     await app.evaluate(({ dialog, shell }) => {
-      const stubs: Stubs = { saveTo: null, warningAnswer: 0, offered: [], warned: [], opened: [] }
+      const stubs: Stubs = { saveTo: null, warningAnswer: 0, offered: [], warned: [], opened: [], external: [] }
       globalThis.letterboxStubs = stubs
       dialog.showSaveDialog = async (...args: unknown[]) => {
         const options = args.at(-1)
@@ -88,6 +90,11 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       shell.openPath = async (path: string) => {
         stubs.opened.push(path)
         return ''
+      }
+      // A URL with `fails` in it stands for a page the OS cannot start a browser for.
+      shell.openExternal = async (url: string) => {
+        if (url.includes('fails')) throw new Error('no browser')
+        stubs.external.push(url)
       }
     })
     /** Sets what the stubs answer next. */
@@ -124,6 +131,55 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
         'an open',
       )
     const bytesOf = (index: number) => sim.mailbox.attachmentBytes(KEY, index)
+
+    // A frame that is not our page cannot ask at all. It asks first, so no limit stops it but that.
+    // Electron keeps the handler main gave `handle` in `_invokeHandlers`, and replies with what it returns.
+    const foreign = await within(
+      app.evaluate(({ ipcMain }) => {
+        const handlers: unknown = Reflect.get(ipcMain, '_invokeHandlers')
+        const handler: unknown = handlers instanceof Map ? handlers.get('url:open') : undefined
+        if (typeof handler !== 'function') return 'no handler for url:open'
+        return Promise.resolve(handler({ sender: null, senderFrame: null }, 'https://elsewhere.example/u'))
+      }),
+      'main’s answer to a frame that is not ours',
+    )
+    equal(foreign, 'refused-url', 'pages: main refuses a page asked for by a frame that is not ours')
+    // A page the person chose, as an unsubscribe page: main opens https with no user name or
+    // password, at most one a second, and says which it did. The last two go inside one second.
+    const outcomes = await within(
+      page.evaluate(() =>
+        Promise.all(
+          [
+            'http://plain.example/u',
+            'file:///etc/hosts',
+            'https://member:secret@bramblebooks.example/unsubscribe',
+            'https://bramblebooks.example/unsubscribe?u=9',
+            'https://bramblebooks.example/unsubscribe?u=10',
+          ].map((url) => window.letterbox?.openPage(url)),
+        ),
+      ),
+      'the pages',
+    )
+    equal(
+      outcomes,
+      ['refused-url', 'refused-url', 'refused-url', 'opened', 'refused-rate'],
+      'pages: main says which pages it opened, and why it refused the rest',
+    )
+    equal(
+      (await asked()).external,
+      ['https://bramblebooks.example/unsubscribe?u=9'],
+      'pages: main opens only an https page with no user name or password, one a second, and only for our page',
+    )
+    // Past the second, a page the browser cannot be started for: main says it failed, not that it opened.
+    await page.waitForTimeout(1100)
+    equal(
+      await within(
+        page.evaluate(() => window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?fails')),
+        'the page that fails',
+      ),
+      'failed',
+      'pages: main waits for the browser to start, and says when it could not',
+    )
 
     const target = join(saved, 'chosen.pdf')
     await answer(target, 0)

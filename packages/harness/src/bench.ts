@@ -227,6 +227,21 @@ async function run(size: number): Promise<Phases> {
     phases['sign-in and first sync (ms)'] = now() - at
     if (!synced.ok) throw new Error('the first sync failed')
 
+    // A conversation's toolbar reads its sender's Updates row through a view of that one
+    // address, which opens from the rows' address lookup, not by reading every row.
+    at = now()
+    const oneSender = core.subscribe({
+      view: 'senders',
+      zone: 'America/Chicago',
+      address: 'person0@example.com',
+      offset: 0,
+      limit: 1,
+    })
+    const sender = await oneSender.next()
+    phases['open a one-sender Updates view (ms)'] = now() - at
+    if (sender.senders.length !== 1) throw new Error('the one-sender view holds no row for person0@example.com')
+    oneSender.close()
+
     const page = await core.query({ view: 'threads', filter: {}, offset: 0, limit: COMMANDS * 2 })
     if (page.total !== conversations) throw new Error(`expected ${conversations} threads, the core lists ${page.total}`)
     const threadIds: ThreadId[] = page.threads.map((thread) => thread.id)

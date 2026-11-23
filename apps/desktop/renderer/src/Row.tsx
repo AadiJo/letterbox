@@ -2,8 +2,8 @@
 // height, selected or not. Unread rows are bright and their subject is the row's only
 // semibold line. Read rows step down in brightness. The selected row is raised above the list.
 
-import type { Person, SenderId, SenderSummary, ThreadId, ThreadSummary } from '@letterbox/protocol'
-import { Archive, Flag, Hourglass, MailOpen } from 'lucide-react'
+import type { MailboxId, Person, SenderId, SenderSummary, ThreadId, ThreadSummary } from '@letterbox/protocol'
+import { Archive, Flag, Hourglass, MailOpen, MailX } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import { Avatar } from './Avatar.tsx'
 import { useNow } from './clock.ts'
@@ -13,6 +13,8 @@ import { trackRow, useExit } from './motion.ts'
 import { useThread } from './threads.ts'
 import { age, isLate, listTime } from './time.ts'
 import { rate, Strip } from './Volume.tsx'
+import { RowUnsubscribed } from './Unsubscribe.tsx'
+import { useSenderRow } from './unsubscribe.ts'
 
 /** Every row's height in px. The windowed list sizes its scroll area by it. */
 export const ROW_HEIGHT = 78
@@ -143,24 +145,42 @@ function RowButton({ label, Glyph, run }: { label: string; Glyph: typeof Archive
 
 type SenderRowProps = {
   sender: SenderSummary
+  /** The inbox the list is of: the sender's unsubscribe state comes from its own view in it. */
+  inbox: MailboxId
   /** The busiest day of any row in the list, so the strips compare. */
   most: number
   selected: boolean
   divider: boolean
   onSelect: (id: SenderId) => void
-  /** Marks all of the sender's mail read, and archives all of it: the hovered row's buttons. */
+  /** Marks all of the sender's mail read, archives all of it, and unsubscribes: the hovered row's buttons. */
   onMarkRead: (sender: SenderSummary) => void
   onArchive: (sender: SenderSummary) => void
+  onUnsubscribe: (sender: SenderSummary) => void
 }
 
 /**
  * One sender in Updates: its square mark, its name and unread count, its newest subject, and
- * its volume. On hover, Mark read and Archive all take the time's place.
+ * its volume. On hover, Mark read, Archive all and Unsubscribe take the time's place. Once the
+ * user unsubscribes, its volume line says where that has got, and Unsubscribe goes.
  */
-export function SenderRow({ sender, most, selected, divider, onSelect, onMarkRead, onArchive }: SenderRowProps) {
+export function SenderRow({
+  sender,
+  inbox,
+  most,
+  selected,
+  divider,
+  onSelect,
+  onMarkRead,
+  onArchive,
+  onUnsubscribe,
+}: SenderRowProps) {
   const now = useNow()
   const unread = sender.unread > 0 && !selected
   const bright = unread || selected
+  // Where an unsubscribe has got, from the sender's shared view, as the toolbar and toast read it.
+  // Nothing until it answers.
+  const live = useSenderRow({ accountId: sender.accountId, address: sender.address, inbox })
+  const unsubscribed = live?.unsubscribed ?? null
   return (
     <div
       role="option"
@@ -198,6 +218,9 @@ export function SenderRow({ sender, most, selected, divider, onSelect, onMarkRea
           <span className="-my-[5px] ml-auto hidden flex-none items-center gap-0.5 group-hover:flex">
             {sender.unread > 0 && <RowButton label="Mark read" Glyph={MailOpen} run={() => onMarkRead(sender)} />}
             <RowButton label="Archive all" Glyph={Archive} run={() => onArchive(sender)} />
+            {sender.unsubscribe && live && !unsubscribed && (
+              <RowButton label="Unsubscribe" Glyph={MailX} run={() => onUnsubscribe(sender)} />
+            )}
           </span>
         </div>
         <div
@@ -209,6 +232,7 @@ export function SenderRow({ sender, most, selected, divider, onSelect, onMarkRea
         <div className="mt-[5px] flex h-3.5 items-center gap-2 text-meta whitespace-nowrap text-muted">
           <Strip days={sender.days} most={most} />
           <span data-field="rate">{rate(sender.days)}</span>
+          {unsubscribed && <RowUnsubscribed state={unsubscribed} />}
         </div>
       </div>
     </div>

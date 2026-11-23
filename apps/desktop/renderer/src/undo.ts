@@ -109,6 +109,9 @@ export function sayTooLate(threadId: ThreadId) {
   })
 }
 
+/** The newest notice's serial. Another toast that began at it gives way to any newer notice. */
+export const noticeSerial = () => serial
+
 /** Whether the toast shows a notice. While it does, z and Undo act on it, not on a reply in its undo window (sending.ts). */
 export const hasNotice = () => notice !== null
 

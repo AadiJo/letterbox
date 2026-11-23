@@ -18,6 +18,7 @@ import { useNow } from './clock.ts'
 import { useLost } from './core.ts'
 import { useComposer } from './drafts.ts'
 import { imagesOff, useShowImagesKey } from './images.ts'
+import { ColorsSwitch } from './ColorsSwitch.tsx'
 import { ImagesChip } from './ImagesChip.tsx'
 import { LabelChip, useLabels } from './Label.tsx'
 import { useShownPending, useUndone } from './sending.ts'
@@ -316,6 +317,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
               {[from.address, ...(to.length > 0 ? [`to ${to.join(', ')}`] : [])].join(' · ')}
             </span>
             <ImagesChip key={message.id} message={message} />
+            <ColorsSwitch key={`colors ${message.id}`} message={message} />
           </div>
         </div>
       </div>

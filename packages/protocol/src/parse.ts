@@ -35,7 +35,7 @@ const turnReason = type(
   "'they-wrote-last' | 'i-wrote-last' | 'automated' | 'not-addressed-to-me' | 'asks-nothing' | 'set-by-user'",
 )
 const refusal = type(
-  "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed' | 'not-public'",
+  "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed' | 'not-public' | 'already-unsubscribed'",
 )
 const undoField = type({ kind: "'mailbox'", messageId: 'string', mailboxId: 'string' })
   .or({ kind: "'unread'", messageId: 'string' })

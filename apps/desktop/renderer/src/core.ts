@@ -7,7 +7,7 @@
 import { createClient, type Subscription, type Transport } from '@letterbox/client'
 import { messagePortTransport, shellPort, type ShellBridge } from '@letterbox/client/message-port'
 import { webSocketTransport } from '@letterbox/client/websocket'
-import type { ChangeId, Command, Queries, Query, Request, RequestId, Requests } from '@letterbox/protocol'
+import type { ChangeId, ChangeResult, Command, Queries, Query, Request, RequestId, Requests } from '@letterbox/protocol'
 import { useState, useSyncExternalStore } from 'react'
 
 type View = keyof Queries
@@ -38,6 +38,8 @@ const transport: Transport = {
       receive: listener.receive,
       end: (error) => {
         listener.end(error)
+        // No `settled` comes now, so every wait for one ends with none.
+        for (const take of settledTakers.values()) take(null)
         lost = error.message
         console.error('lost the core:', error)
         for (const watcher of lostWatchers) watcher()
@@ -53,6 +55,8 @@ const newId = (kind: 'sub' | 'req' | 'change') => `${kind}-${randomId()}`
 
 /** Where each request this page started with `requestBytes` takes its `chunk` messages, by request id. */
 const chunkTakers = new Map<RequestId, (data: string) => void>()
+/** Who waits for each change's `settled` (`commandSettled`), by change id. Null ends a wait with no result. */
+const settledTakers = new Map<ChangeId, (result: ChangeResult | null) => void>()
 
 export const client = createClient(transport, {
   newId,
@@ -60,6 +64,7 @@ export const client = createClient(transport, {
   // the request it belongs to, if this page is collecting its bytes.
   unclaimed: (message) => {
     if (message.kind === 'chunk') chunkTakers.get(message.id)?.(message.data)
+    if (message.kind === 'settled') settledTakers.get(message.change)?.(message.result)
   },
 })
 
@@ -92,6 +97,28 @@ export function command(sent: Command, change?: ChangeId) {
   // The client makes change ids (ClientMessage `command`), so this is where one is branded.
   const id = change ?? (newId('change') as ChangeId)
   return { change: id, answer: client.command(sent, id) }
+}
+
+/**
+ * Sends `sent` as `command` does, and also waits for the core's last word on it: the answer, and
+ * a promise of its `settled` result. That is null for a command the core refused, which never
+ * settles, once the connection ends, and after `cancel`. The wait is in place before the command
+ * goes, so no `settled` comes unheard, and it is gone once it ends. `cancel` drops both waits,
+ * for a caller that has given up on them: a late answer or `settled` then reaches nobody.
+ */
+export function commandSettled(sent: Command) {
+  const change = newId('change') as ChangeId
+  const settled = new Promise<ChangeResult | null>((resolve) => settledTakers.set(change, resolve)).finally(() =>
+    settledTakers.delete(change),
+  )
+  const answer = client.command(sent, change)
+  const none = () => settledTakers.get(change)?.(null)
+  answer.then((first) => first.kind === 'rejected' && none(), none)
+  const cancel = () => {
+    client.forget(change)
+    none()
+  }
+  return { change, answer, settled, cancel }
 }
 
 // A failed hello ends the connection, which `useLost` reports.
