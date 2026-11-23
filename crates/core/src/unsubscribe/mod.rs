@@ -12,15 +12,17 @@
 //!     The window is the promise that nothing goes out before it ends, and a restart is not
 //!     the user's doing, so it neither cuts the window short nor drops the unsubscribe.
 //!   - Then it is `Due`, and a job in its account's queue carries it out by its way:
-//!     - web: one commit marks it `Opened` and settles it done, then `open-url` goes out with it.
+//!     - web: one commit keeps the page, `Page`, and settles it done. The core opens nothing:
+//!       Updates offers the page, and opening it is the user's own action in the shell. A page
+//!       the core opened by itself, after a restart say, would visit an unverified URL unasked.
 //!     - mailto: the change becomes a send of the email the URI describes, due at once
 //!       (`store_send` in outbox.rs). The outbox delivers it once (adapter rule 10), and it
 //!       settles as that send does.
 //!     - one-click: the core fetches the raw message, once, and checks its DKIM signature
 //!       (dkim.rs). If the check holds, it saves `Posting`, then POSTs once. If it does not,
 //!       or the source cannot be had, it goes out as the header's mailto when the account can
-//!       send (`without_one_click` in body/unsubscribe.rs), else as web: the one-click URL is
-//!       an https URI of the header, so a page to open always remains.
+//!       send (`without_one_click` in body/unsubscribe.rs), else it keeps the page: the
+//!       one-click URL is an https URI of the header, so a page always remains.
 //!   - A POST that may have reached the server is never sent again: a restart that finds one
 //!     `Posting` fails it `unconfirmed`. One that surely did not go, as when no connection
 //!     could be made, goes out as mailto or web instead.
@@ -35,7 +37,7 @@ mod mailto;
 use std::rc::Rc;
 
 use letterbox_protocol::{
-    AccountId, ChangeId, ChangeResult, CoreMessage, MessageId, OpenUrl, Refusal, Time, Unsubscribe, UnsubscribeMethod,
+    AccountId, ChangeId, ChangeResult, CoreMessage, MessageId, Refusal, Time, Unsubscribe, UnsubscribeMethod,
     Unsubscribed,
 };
 use serde::{Deserialize, Serialize};
@@ -52,6 +54,11 @@ use crate::outbox;
 use crate::sync::Pull;
 use crate::web::Posted;
 use crate::world::{ChangeOutcome, ChangeRecord, World, put_change, scoped};
+
+/// The most of a message's raw source the core reads for its DKIM check. A signature covers the
+/// headers and a hash of the body, so the body must be read whole: a larger message, which its
+/// attachments make, goes out another way.
+const RAW_LIMIT: usize = 2 * 1024 * 1024;
 
 /// An unsubscribe on its way, as its change carries it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,8 +102,8 @@ pub enum Stage {
     /// A POST to `url` has started. Saved before the call, so a core that stops during it
     /// finds it here and never sends it again.
     Posting { url: String },
-    /// Its page went to the shell. It settled done in the same commit.
-    Opened,
+    /// Only its page is left, kept for the user to open. It settled done in the same commit.
+    Page { url: String },
 }
 
 impl Unsubscription {
@@ -104,7 +111,7 @@ impl Unsubscription {
     fn method(&self) -> UnsubscribeMethod {
         match self.stage {
             Stage::Posting { .. } => UnsubscribeMethod::OneClick,
-            Stage::Opened => UnsubscribeMethod::Web,
+            Stage::Page { .. } => UnsubscribeMethod::Web,
             Stage::Held { .. } | Stage::Due => self.way.method(),
         }
     }
@@ -121,23 +128,25 @@ pub fn state(world: &World, account_id: &AccountId, address: &str) -> Option<Uns
     let id = world.unsubscribes.get(&sender_key(account_id, address))?;
     let record = world.changes.get(id)?;
     let change = record.id.clone();
-    let (method, until) = match &record.effect {
-        Effect::Unsubscribe(unsubscription) => {
-            let until = match &unsubscription.stage {
-                Stage::Held { until } => Some(until.clone()),
-                _ => None,
-            };
-            (unsubscription.method(), until)
-        }
+    let (method, stage) = match &record.effect {
+        Effect::Unsubscribe(unsubscription) => (unsubscription.method(), Some(&unsubscription.stage)),
         // It went out as mail (see `mail`).
         Effect::Send(_) => (UnsubscribeMethod::Mailto, None),
         _ => return None,
     };
-    match (record.outcome.map(|outcome| outcome.result), until) {
+    match (record.outcome.map(|outcome| outcome.result), stage) {
+        (Some(ChangeResult::Done), Some(Stage::Page { url })) => Some(Unsubscribed::Page {
+            change,
+            url: url.clone(),
+        }),
         (Some(ChangeResult::Done), _) => Some(Unsubscribed::Done { change, method }),
         (Some(_), _) => None,
-        (None, Some(until)) => Some(Unsubscribed::Held { change, until, method }),
-        (None, None) => Some(Unsubscribed::Sending { change, method }),
+        (None, Some(Stage::Held { until })) => Some(Unsubscribed::Held {
+            change,
+            until: until.clone(),
+            method,
+        }),
+        (None, _) => Some(Unsubscribed::Sending { change, method }),
     }
 }
 
@@ -231,7 +240,9 @@ impl Inner {
         for (record, stage) in waiting {
             match stage {
                 Stage::Held { until } => self.hold_unsubscribe(record.id, &until),
-                Stage::Due | Stage::Posting { .. } | Stage::Opened => self.carry_out(&record.account_id, record.id),
+                Stage::Due | Stage::Posting { .. } | Stage::Page { .. } => {
+                    self.carry_out(&record.account_id, record.id)
+                }
             }
         }
     }
@@ -304,10 +315,10 @@ impl Inner {
             return;
         };
         match (&unsubscription.stage, unsubscription.way.clone()) {
-            (Stage::Held { .. } | Stage::Opened, _) => {}
+            (Stage::Held { .. } | Stage::Page { .. }, _) => {}
             // It may have reached the server before the core stopped.
             (Stage::Posting { .. }, _) => self.settle(record, ChangeResult::Failed(Refusal::Unconfirmed)),
-            (Stage::Due, Way::Web { url }) => self.open_page(record, &unsubscription, url),
+            (Stage::Due, Way::Web { url }) => self.keep_page(record, &unsubscription, url),
             (Stage::Due, Way::Mailto { uri }) => self.mail(record, &unsubscription, &uri),
             (Stage::Due, Way::OneClick { .. }) => {
                 let url = self.verified(&record.account_id, &unsubscription.message_id).await;
@@ -326,15 +337,17 @@ impl Inner {
     /// The one-click URL the message's raw source vouches for, or None when the source cannot
     /// be had or no DKIM signature over both headers verifies (dkim.rs). One `raw` call.
     async fn verified(&self, account_id: &AccountId, message_id: &MessageId) -> Option<String> {
-        let (adapter, r#ref) = {
+        let (adapter, r#ref, from) = {
             let state = self.state.borrow();
-            let r#ref = state.world.messages.get(message_id)?.provider_ref()?.clone();
-            (Rc::clone(&state.adapters.get(account_id)?.adapter), r#ref)
+            let message = state.world.messages.get(message_id)?;
+            let (r#ref, from) = (message.provider_ref()?.clone(), message.facts.from.address.clone());
+            (Rc::clone(&state.adapters.get(account_id)?.adapter), r#ref, from)
         };
-        let Ok(RawResult::Raw(raw)) = adapter.raw(r#ref).await else {
+        let Ok(RawResult::Raw(raw)) = adapter.raw(r#ref, RAW_LIMIT).await else {
             return None;
         };
-        dkim::one_click(&raw, self.web.as_ref()).await
+        let (_, from_domain) = from.rsplit_once('@')?;
+        dkim::one_click(&raw, from_domain, self.web.as_ref()).await
     }
 
     /// POSTs a verified one-click, once, and settles it by the answer.
@@ -374,16 +387,17 @@ impl Inner {
         };
         match (mailto, &unsubscription.way) {
             (Some(uri), _) => self.mail(record, unsubscription, &uri),
-            (None, Way::OneClick { url } | Way::Web { url }) => self.open_page(record, unsubscription, url.clone()),
+            (None, Way::OneClick { url } | Way::Web { url }) => self.keep_page(record, unsubscription, url.clone()),
             (None, Way::Mailto { .. }) => self.settle(record, ChangeResult::Failed(Refusal::NotPermitted)),
         }
     }
 
-    /// Settles a web unsubscribe done, then tells the shell to open its page.
-    fn open_page(self: &Rc<Self>, record: ChangeRecord, unsubscription: &Unsubscription, url: String) {
+    /// Keeps the page of a web unsubscribe for the user to open, and settles it done in the same
+    /// commit. Nothing goes to the shell (see the module docs).
+    fn keep_page(self: &Rc<Self>, record: ChangeRecord, unsubscription: &Unsubscription, url: String) {
         let change = record.id.clone();
         let effect = Effect::Unsubscribe(Unsubscription {
-            stage: Stage::Opened,
+            stage: Stage::Page { url },
             ..unsubscription.clone()
         });
         let rev = self.commit(|world, tx, at| {
@@ -401,11 +415,6 @@ impl Inner {
                 },
             );
         });
-        let page = OpenUrl::Unsubscribe {
-            change: change.clone(),
-            url,
-        };
-        self.send(CoreMessage::OpenUrl(page));
         let result = ChangeResult::Done;
         self.send(CoreMessage::Settled { change, rev, result });
     }

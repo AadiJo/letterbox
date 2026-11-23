@@ -57,13 +57,14 @@ pub enum Command {
     ///     signature that verifies and covers List-Unsubscribe and List-Unsubscribe-Post, as
     ///     RFC 8058 asks. If one does, it POSTs `List-Unsubscribe=One-Click` to the URL those
     ///     signed headers name, once, with no cookies or credentials, and follows no redirect.
-    ///     If none does, or the source cannot be fetched, it goes out as the header's mailto,
-    ///     else as its https page.
+    ///     If none does, or the source cannot be fetched, or the URL carries a user name or
+    ///     password, it goes out as the header's mailto, else it leaves the page.
     ///   - mailto: it sends the email the URI describes from the account, through the outbox,
     ///     once. It shows in Sent like any send.
-    ///   - web: it sends `open-url` with the change and the page, for the shell to open.
+    ///   - web: the core opens nothing. The page is kept on the sender's row in Updates
+    ///     (`Unsubscribed::Page`), for the user to open.
     ///
-    /// It settles `done` once carried out. It fails `not-public` when the one-click URL's host
+    /// It settles `done` once carried out, or once its page is kept. It fails `not-public` when the one-click URL's host
     /// is not on the public internet, so nothing was sent, `refused-by-provider` when the
     /// sender's server answered with an error or a redirect, `unconfirmed` when the POST went
     /// out and no answer came (it is not sent again), and as its email's send fails for mailto.

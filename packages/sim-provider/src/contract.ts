@@ -65,6 +65,12 @@ export type SeedMessage = {
     listUnsubscribe?: boolean | string
     /** List-Unsubscribe-Post's value, for example "List-Unsubscribe=One-Click". */
     listUnsubscribePost?: string
+    /**
+     * List-Unsubscribe's name as the raw source writes it, such as `List-Unsubscribe ` (a space
+     * before the colon), for a provider whose parser reads that as the field. Defaults to
+     * `List-Unsubscribe`. The facts report the value under the field either way.
+     */
+    listUnsubscribeField?: string
     listId?: boolean
     precedence?: string
     autoSubmitted?: string

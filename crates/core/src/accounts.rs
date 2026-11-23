@@ -6,8 +6,8 @@
 use std::rc::Rc;
 
 use letterbox_protocol::{
-    AccountId, Answer, ChangeId, ChangeResult, CoreMessage, Empty, OpenUrl, PasswordInput, Refusal, RequestId,
-    Response, SignInError, SignInOptionId, SignedIn,
+    AccountId, Answer, ChangeId, ChangeResult, CoreMessage, Empty, PasswordInput, Refusal, RequestId, Response,
+    SignInError, SignInOptionId, SignedIn,
 };
 
 use crate::adapter::{Connection, SignInInput};
@@ -35,10 +35,7 @@ impl Inner {
                 let open_url = {
                     let core = Rc::clone(&core);
                     let id = id.clone();
-                    Box::new(move |url| {
-                        let page = OpenUrl::SignIn { id: id.clone(), url };
-                        core.send(CoreMessage::OpenUrl(page));
-                    })
+                    Box::new(move |url| core.send(CoreMessage::OpenUrl { id: id.clone(), url }))
                 };
                 let input = SignInInput {
                     password,

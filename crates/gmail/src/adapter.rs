@@ -242,12 +242,22 @@ impl GmailAdapter {
         }
     }
 
-    /// The whole message, from a format=raw get on the transfer budget: it is as large as the
-    /// message, attachments and all. Only an unsubscribe asks for it (crates/core/src/unsubscribe).
-    async fn raw_of(&self, r#ref: MessageRef) -> Outcome<RawResult> {
+    /// The whole message, from a format=raw get on the transfer budget, read no further than
+    /// `limit` bytes of message: its base64url in a JSON answer takes a third more, and a little
+    /// besides. Only an unsubscribe asks for it (crates/core/src/unsubscribe).
+    async fn raw_of(&self, r#ref: MessageRef, limit: usize) -> Outcome<RawResult> {
         let path = format!("messages/{}?format=raw", r#ref.as_str());
-        match self.api.get_transfer::<RawMessage>(&path).await {
-            Ok(message) => Ok(RawResult::Raw(decode_bytes(&message.raw))),
+        let encoded = limit.saturating_mul(4) / 3 + 4096;
+        match self.api.get_transfer_capped::<RawMessage>(&path, encoded).await {
+            Ok(Some(message)) => {
+                let raw = decode_bytes(&message.raw);
+                Ok(if raw.len() > limit {
+                    RawResult::TooLarge
+                } else {
+                    RawResult::Raw(raw)
+                })
+            }
+            Ok(None) => Ok(RawResult::TooLarge),
             Err(error) if error.is_not_found() => Ok(RawResult::Gone),
             Err(error) => Err(error.failure()),
         }
@@ -404,8 +414,8 @@ impl Adapter for GmailAdapter {
         Box::pin(self.attachment_of(r#ref, index))
     }
 
-    fn raw(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<RawResult>> {
-        Box::pin(self.raw_of(r#ref))
+    fn raw(&self, r#ref: MessageRef, limit: usize) -> LocalFuture<'_, Outcome<RawResult>> {
+        Box::pin(self.raw_of(r#ref, limit))
     }
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {

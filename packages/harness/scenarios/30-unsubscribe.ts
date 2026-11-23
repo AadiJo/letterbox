@@ -49,6 +49,13 @@ const oneClick = (url: string, dkim: NonNullable<SeedMessage['dkim']>): Partial<
  *   private      signed one-click only, at a host that resolves to a private address
  *   moved        signed one-click only, whose server answers the POST with a redirect
  *   web-only     an https page alone
+ * and one-click with a mailto beside it, where the signature does not plainly vouch for the URL:
+ *   no-from      signed over both unsubscribe fields, but not over From
+ *   unaligned    signed by esp.example, whose key the DNS serves, for mail from brand.example
+ *   spaced       its field is written `List-Unsubscribe :`, which a signature naming
+ *                List-Unsubscribe does not cover, though a lenient parser reads it as one
+ *   userinfo     signed, but its URL carries a user name and password
+ *   big          signed, and over the 2 MB the core reads of a raw source
  */
 const seed = (): Seed => ({
   address: ME,
@@ -94,6 +101,56 @@ const seed = (): Seed => ({
     list('web-only', 'digest@list.example', 'Daily digest', '2025-12-02T09:00:00.000Z', {
       headers: { listUnsubscribe: '<https://list.example/u/5>' },
     }),
+    list(
+      'no-from',
+      'weekly@list.example',
+      'Weekly digest',
+      '2025-11-30T09:00:00.000Z',
+      oneClick('https://list.example/u/7', {
+        domain: 'list.example',
+        selector: 'sel',
+        signs: ['subject', 'list-unsubscribe', 'list-unsubscribe-post'],
+      }),
+    ),
+    list(
+      'unaligned',
+      'offers@brand.example',
+      'Offers',
+      '2025-11-29T09:00:00.000Z',
+      oneClick('https://brand.example/u/8', { domain: 'esp.example', selector: 'sel' }),
+    ),
+    {
+      ...list(
+        'spaced',
+        'spaced@list.example',
+        'Spaced list',
+        '2025-11-28T09:00:00.000Z',
+        oneClick('https://list.example/u/9', { domain: 'list.example', selector: 'sel' }),
+      ),
+      headers: {
+        listUnsubscribe:
+          '<mailto:leave@list.example?subject=Leave%20weekly+news&body=Remove%20me>, <https://list.example/u/9>',
+        listUnsubscribePost: ONE_CLICK,
+        listUnsubscribeField: 'List-Unsubscribe ',
+      },
+    },
+    list(
+      'userinfo',
+      'members@list.example',
+      'Members',
+      '2025-11-27T09:00:00.000Z',
+      oneClick('https://member:secret@list.example/u/10', { domain: 'list.example', selector: 'sel' }),
+    ),
+    {
+      ...list(
+        'big',
+        'archive@list.example',
+        'Archive',
+        '2025-11-26T09:00:00.000Z',
+        oneClick('https://list.example/u/11', { domain: 'list.example', selector: 'sel' }),
+      ),
+      text: `Archive.\n${`${'x'.repeat(76)}\n`.repeat(30_000)}`,
+    },
   ],
 })
 
@@ -103,8 +160,10 @@ function web(t: Scenario) {
   t.web.txt('sel._domainkey.shop.example', [SIM_DKIM_RECORD])
   t.web.txt('k1._domainkey.other.example', [OTHER_DKIM_RECORD])
   t.web.txt('sel._domainkey.intranet.example', [SIM_DKIM_RECORD])
+  t.web.txt('sel._domainkey.esp.example', [SIM_DKIM_RECORD])
   t.web.resolve('intranet.example', ['10.0.0.5'])
-  for (const page of ['list.example/u/1', 'shop.example/u/2', 'other.example/u/3', 'intranet.example/u/4'])
+  const pages = ['list.example/u/1', 'shop.example/u/2', 'other.example/u/3', 'intranet.example/u/4']
+  for (const page of [...pages, 'list.example/u/7', 'brand.example/u/8', 'list.example/u/9', 'list.example/u/11'])
     t.web.serve(`https://${page}`, { kind: 'status', status: 200 })
   t.web.serve('https://list.example/u/6', { kind: 'redirect', location: 'https://list.example/elsewhere' })
   t.web.serve('https://list.example/elsewhere', { kind: 'status', status: 200 })
@@ -297,17 +356,21 @@ scenario("an unsubscribe's POST cut off by a stopped core is never sent again", 
   t.equal((await row(core, 'news@list.example'))?.unsubscribed, null, 'the row offers the button again')
 })
 
-scenario('a web unsubscribe opens its page once its window ends', async (t) => {
-  const { core, box } = await begin(t)
-  const change = await unsubscribe(t, core, 'Daily digest')
-  const opened = await core.take('open-url')
-  t.equal(opened, { kind: 'open-url', change, url: 'https://list.example/u/5' }, 'the shell is told to open the page')
-  t.equal((await core.settled(change)).result, 'done', 'it settles done')
-  t.equal(traffic(t, box), { posted: 0, lookups: 0, raw: 0, sent: 0 }, 'the core itself sent nothing')
+scenario('a web unsubscribe keeps its page for the user, and the core opens nothing', async (t) => {
+  const first = await begin(t)
+  const change = await unsubscribe(t, first.core, 'Daily digest')
+  t.equal((await first.core.settled(change)).result, 'done', 'it settles done once its page is kept')
+  const page = { state: 'page', change, url: 'https://list.example/u/5' } as const
+  t.equal((await row(first.core, 'digest@list.example'))?.unsubscribed, page, 'the row offers the page, not done')
+  t.equal(traffic(t, first.box), { posted: 0, lookups: 0, raw: 0, sent: 0 }, 'the core itself sent nothing')
+  // An open-url naming a change is no message the protocol has, so the schema check fails any.
+  await first.core.stop()
+  const core = t.startCore()
+  await core.hello()
   t.equal(
     (await row(core, 'digest@list.example'))?.unsubscribed,
-    { state: 'done', change, method: 'web' },
-    'the row shows it done by web',
+    page,
+    'after a restart the page is still only offered',
   )
 })
 
@@ -343,3 +406,55 @@ scenario(
     t.equal(t.web.posted().length, 1, 'it was posted once')
   },
 )
+
+scenario('a one-click unsubscribe without an aligned signature over its fields goes out as mail', async (t) => {
+  const { core, box } = await begin(t)
+  const subjects = ['Weekly digest', 'Offers', 'Spaced list', 'Members', 'Archive']
+  const ids = []
+  for (const subject of subjects) ids.push(await messageOf(core, subject))
+  const results = []
+  for (const messageId of ids) {
+    const change = await accept(t, core, { kind: 'unsubscribe', messageId }, 'the unsubscribe')
+    results.push((await core.settled(change)).result)
+  }
+  t.equal(results, ['done', 'done', 'done', 'done', 'done'], 'each settles done once the provider holds its mail')
+  t.equal(
+    [t.web.posted(), t.web.lookups(), t.web.requested()],
+    [[], [], []],
+    'nothing was posted, no key was looked up, and no URL was asked for, so no Authorization header went anywhere',
+  )
+  t.equal(
+    [box.calls().raw, box.sent().map((copy) => copy.recipients)],
+    [5, Array.from({ length: 5 }, () => ['leave@list.example'])],
+    'each raw source was asked for once, the big one cut off, and each sent one email to the mailto address',
+  )
+})
+
+scenario("an unsubscribe's mail cut off by a stopped core is looked up, not sent again", async (t) => {
+  const first = await begin(t)
+  first.box.holdSends()
+  const change = await unsubscribe(t, first.core, 'Deals')
+  await first.box.sendHeld()
+  await first.core.kill()
+
+  const core = t.startCore({ holdWaits: true })
+  await core.hello()
+  await sync(core)
+  t.equal(first.box.sent(), [], 'the restarted core looked it up, found nothing, and did not send it again')
+  t.check(first.box.calls().find >= 1, 'it looked the mail up by its Message-ID')
+  first.box.releaseSends()
+  await sync(core)
+  t.equal((await core.settled(change)).result, 'done', 'the sync that brings its copy settles it done')
+  t.equal([first.box.sent().length, first.box.calls().send], [1, 1], 'the provider was asked to send it once')
+})
+
+scenario('a second core on the same store is refused, so one unsubscribe goes out from one core', async (t) => {
+  const { core } = await begin(t)
+  const second = t.startCore()
+  await second.stop()
+  t.equal(second.exitCode(), 1, 'the second core exits with an error')
+  t.check(second.log().includes('another core has this store open'), 'it says another core has the store')
+  const change = await unsubscribe(t, core, 'Weekly news')
+  t.equal((await core.settled(change)).result, 'done', 'the first core carries on')
+  t.equal(t.web.posted().length, 1, 'one POST went out')
+})

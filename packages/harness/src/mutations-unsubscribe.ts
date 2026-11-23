@@ -10,9 +10,11 @@ const HELD = 'an unsubscribe held for its window is undone'
 const POSTED = 'a one-click unsubscribe whose DKIM signature verifies is posted once'
 const FALLBACK = 'a one-click unsubscribe whose DKIM check fails goes out once as mail'
 const REFUSED = 'a one-click unsubscribe at a private address is refused'
-const WEB = 'a web unsubscribe opens its page'
+const WEB = 'a web unsubscribe keeps its page'
 const RESTART = 'an unsubscribe held across a restart'
 const CUT_OFF = "an unsubscribe's POST cut off by a stopped core"
+const NOT_VOUCHED = 'a one-click unsubscribe without an aligned signature'
+const SECOND_CORE = 'a second core on the same store is refused'
 
 export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
   {
@@ -101,10 +103,11 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
     scenarios: POSTED,
   },
   {
-    name: 'a web unsubscribe never tells the shell to open its page',
+    name: 'a web unsubscribe that only kept its page shows as done',
     file: unsubscribe('mod.rs'),
-    find: '        self.send(CoreMessage::OpenUrl(page));',
-    replace: '        drop(page);',
+    find: '        (Some(ChangeResult::Done), Some(Stage::Page { url })) => Some(Unsubscribed::Page {',
+    replace:
+      '        (Some(ChangeResult::Done), Some(Stage::Page { url })) if url.is_empty() => Some(Unsubscribed::Page {',
     scenarios: WEB,
   },
   {
@@ -121,5 +124,68 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
     replace:
       '            (Stage::Posting { url }, _) => self.post_one_click(record, unsubscription.clone(), url.clone()).await,',
     scenarios: CUT_OFF,
+  },
+  {
+    name: 'a second core opens a store another core has open, so both act on its changes',
+    file: 'crates/core/src/store.rs',
+    find: '            Err(fs4::TryLockError::WouldBlock) => return Err(StoreError::Locked),',
+    replace: '            Err(fs4::TryLockError::WouldBlock) => {}',
+    scenarios: SECOND_CORE,
+  },
+  {
+    name: 'a field named `List-Unsubscribe :` is read as List-Unsubscribe, though no signature covers it',
+    file: unsubscribe('dkim.rs'),
+    find: '            .filter(|(found, _)| found.eq_ignore_ascii_case(name.as_bytes()));',
+    replace: '            .filter(|(found, _)| String::from_utf8_lossy(found).trim().eq_ignore_ascii_case(name));',
+    scenarios: NOT_VOUCHED,
+  },
+  {
+    name: 'a signature that does not cover From vouches for a one-click',
+    file: unsubscribe('dkim.rs'),
+    find: '    names("From") && names("List-Unsubscribe") && names("List-Unsubscribe-Post")',
+    replace: '    names("List-Unsubscribe") && names("List-Unsubscribe-Post")',
+    scenarios: NOT_VOUCHED,
+  },
+  {
+    name: "a signature by any domain vouches for a one-click in another's mail",
+    file: unsubscribe('dkim.rs'),
+    find: '    let usable = |signature: &Signature| covers(signature) && aligned(signature, &from_domain);',
+    replace: '    let usable = |signature: &Signature| covers(signature) || aligned(signature, &from_domain);',
+    scenarios: NOT_VOUCHED,
+  },
+  {
+    name: 'a one-click URL with a user name and password is posted',
+    file: unsubscribe('dkim.rs'),
+    find: '    if !parsed.username().is_empty() || parsed.password().is_some() {\n        return None;\n    }',
+    replace: '    drop(parsed);',
+    also: [
+      {
+        file: 'crates/host/src/web.rs',
+        find: '        if userinfo.unwrap_or(true) {\n            return Posted::NotSent;\n        }',
+        replace: '        drop(userinfo);',
+      },
+    ],
+    scenarios: NOT_VOUCHED,
+  },
+  {
+    name: 'the gmail adapter reads a raw source of any size',
+    file: 'crates/gmail/src/adapter.rs',
+    find: '        let encoded = limit.saturating_mul(4) / 3 + 4096;',
+    replace: '        let encoded = usize::MAX;',
+    also: [
+      {
+        file: 'crates/gmail/src/adapter.rs',
+        find: '                Ok(if raw.len() > limit {',
+        replace: '                Ok(if raw.len() > usize::MAX {',
+      },
+    ],
+    scenarios: NOT_VOUCHED,
+  },
+  {
+    name: 'the sim adapter passes on a raw source of any size',
+    file: 'crates/sim-client/src/wire.rs',
+    find: '            if bytes.len() > limit {',
+    replace: '            if bytes.len() > usize::MAX {',
+    scenarios: NOT_VOUCHED,
   },
 ]

@@ -294,11 +294,12 @@ impl Adapter for SimAdapter {
         })
     }
 
-    fn raw(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<RawResult>> {
+    /// The sim sends the message whole in one line, so the limit applies once it is read.
+    fn raw(&self, r#ref: MessageRef, limit: usize) -> LocalFuture<'_, Outcome<RawResult>> {
         Box::pin(async move {
             let _in_flight = self.calls.token();
             match self.forward(Call::Raw(r#ref)).await {
-                Some(result) if result.method == "raw" => raw_outcome(result.outcome),
+                Some(result) if result.method == "raw" => raw_outcome(result.outcome, limit),
                 _ => Err(AdapterFailure::Offline),
             }
         })

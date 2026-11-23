@@ -1,10 +1,10 @@
-//! Unsubscribing from a sender: what Updates shows of it, and the page a web unsubscribe opens.
-//! The `unsubscribe` command (command.rs) starts one, and `undo` takes it back while it is held.
+//! Unsubscribing from a sender: what Updates shows of it. The `unsubscribe` command
+//! (command.rs) starts one, and `undo` takes it back while it is held.
 
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::{ChangeId, RequestId, Time};
+use crate::{ChangeId, Time};
 
 /// How an unsubscribe goes out, or went out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
@@ -14,7 +14,7 @@ pub enum UnsubscribeMethod {
     OneClick,
     /// An email from the account to the sender's unsubscribe address, through the outbox.
     Mailto,
-    /// The sender's page, opened in the system browser.
+    /// The sender's page, which the user opens in the browser. The core never opens it.
     Web,
 }
 
@@ -27,7 +27,7 @@ pub enum UnsubscribeMethod {
 pub enum Unsubscribed {
     /// In the undo window until `until`. An `undo` naming `change` cancels it, and nothing has
     /// left the device. `method` is the way the core will try first: a one-click that fails its
-    /// DKIM check goes out as mailto, or else as web.
+    /// DKIM check goes out as mailto, or else leaves its page.
     Held {
         change: ChangeId,
         until: Time,
@@ -38,20 +38,16 @@ pub enum Unsubscribed {
         change: ChangeId,
         method: UnsubscribeMethod,
     },
-    /// Carried out by `method`: the sender's server took the POST, the provider holds the
-    /// email, or the page was sent to the browser.
+    /// Carried out by `method`, `one-click` or `mailto`: the sender's server took the POST, or
+    /// the provider holds the email.
     Done {
         change: ChangeId,
         method: UnsubscribeMethod,
     },
-}
-
-/// A page the UI opens in the system browser, https only, in an `open-url` message.
-#[derive(Clone, Debug, PartialEq, Serialize, TS)]
-#[serde(untagged)]
-pub enum OpenUrl {
-    /// A sign-in's consent page. The token goes to the core, never the UI.
-    SignIn { id: RequestId, url: String },
-    /// The page a web unsubscribe names, sent once its undo window ends. The change then settles `done`.
-    Unsubscribe { change: ChangeId, url: String },
+    /// Only the sender's page is left: the message names no other way, or its one-click failed
+    /// its DKIM check and there is no mailto the account can send. The core opens nothing. The
+    /// UI offers "Open unsubscribe page" with `url`'s host, and opening it is the user's own
+    /// action, through the shell's https-only `openExternal`. Whether the page unsubscribed is
+    /// unknown, so it never becomes `done`.
+    Page { change: ChangeId, url: String },
 }

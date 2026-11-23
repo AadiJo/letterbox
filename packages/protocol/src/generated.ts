@@ -266,17 +266,12 @@ export type Attachment = { blobId: BlobId, name: string, mime: string, size: num
  * which mail arrives. A row has none before the user unsubscribes, and again once that try was
  * undone or failed, so the UI offers the button again then.
  */
-export type Unsubscribed = { "state": "held", change: ChangeId, until: string, method: UnsubscribeMethod, } | { "state": "sending", change: ChangeId, method: UnsubscribeMethod, } | { "state": "done", change: ChangeId, method: UnsubscribeMethod, };
+export type Unsubscribed = { "state": "held", change: ChangeId, until: string, method: UnsubscribeMethod, } | { "state": "sending", change: ChangeId, method: UnsubscribeMethod, } | { "state": "done", change: ChangeId, method: UnsubscribeMethod, } | { "state": "page", change: ChangeId, url: string, };
 
 /**
  * How an unsubscribe goes out, or went out.
  */
 export type UnsubscribeMethod = "one-click" | "mailto" | "web";
-
-/**
- * A page the UI opens in the system browser, https only, in an `open-url` message.
- */
-export type OpenUrl = { id: RequestId, url: string, } | { change: ChangeId, url: string, };
 
 export type ThreadFilter = { 
 /**
@@ -542,7 +537,7 @@ export type Position = { offset: number | null, };
 
 export type ClientMessage = { "kind": "hello", protocol: number, } | { "kind": "subscribe", sub: SubscriptionId, query: Query, } | { "kind": "unsubscribe", sub: SubscriptionId, } | { "kind": "command", change: ChangeId, command: Command, } | { "kind": "request", id: RequestId, request: Request, };
 
-export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError> | { "method": "position" } & Answer<Position, Never> | { "method": "network-back" } & Answer<Empty, Never> | { "method": "image" } & Answer<ImageFile, ImageError>) | { "kind": "open-url" } & OpenUrl | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
+export type CoreMessage = { "kind": "welcome", protocol: number, rev: number, } | { "kind": "update", sub: SubscriptionId, rev: number, } & ({ "view": "accounts", data: Array<Account>, } | { "view": "sign-in-options", data: Array<SignInOption>, } | { "view": "mailboxes", data: Array<Mailbox>, } | { "view": "threads", data: ThreadPage, } | { "view": "thread", data: ThreadDetail | null, } | { "view": "senders", data: SenderPage, } | { "view": "recipients", data: Array<Recipient>, } | { "view": "change", data: ChangeHolder, }) | { "kind": "accepted", change: ChangeId, rev: number, } | { "kind": "rejected", change: ChangeId, reason: Refusal, conflict?: UndoConflict, } | { "kind": "settled", change: ChangeId, rev: number, result: ChangeResult, } | { "kind": "response", id: RequestId, } & ({ "method": "sign-in" } & Answer<SignedIn, SignInError> | { "method": "sign-out" } & Answer<Empty, Never> | { "method": "sync-now" } & Answer<Empty, SyncNowError> | { "method": "blob" } & Answer<BlobUrl, BlobError> | { "method": "attachment" } & Answer<AttachmentFile, AttachmentError> | { "method": "position" } & Answer<Position, Never> | { "method": "network-back" } & Answer<Empty, Never> | { "method": "image" } & Answer<ImageFile, ImageError>) | { "kind": "open-url", id: RequestId, url: string, } | { "kind": "chunk", id: RequestId, data: string, } | { "kind": "your-turn" } & YourTurn | { "kind": "protocol-error", reason: ProtocolErrorReason, detail: string, };
 
 /**
  * A sync brought a message from a person, in the inbox, that leaves this conversation the

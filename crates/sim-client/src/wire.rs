@@ -169,8 +169,9 @@ pub fn apply_outcome(value: Value) -> Outcome<ApplyResult> {
     )
 }
 
-/// Reads the outcome of a raw call: `{"kind": "raw", "base64": ...}` or `{"kind": "gone"}`.
-pub fn raw_outcome(value: Value) -> Outcome<RawResult> {
+/// Reads the outcome of a raw call: `{"kind": "raw", "base64": ...}` or `{"kind": "gone"}`, and
+/// answers `TooLarge` for a message over `limit` bytes.
+pub fn raw_outcome(value: Value, limit: usize) -> Outcome<RawResult> {
     #[derive(Deserialize)]
     #[serde(tag = "kind", rename_all = "kebab-case")]
     enum Found {
@@ -180,7 +181,12 @@ pub fn raw_outcome(value: Value) -> Outcome<RawResult> {
     Ok(match outcome::<Found>(value)? {
         Found::Raw { base64 } => {
             let bytes = STANDARD.decode(base64);
-            RawResult::Raw(bytes.unwrap_or_else(|error| panic!("sim provider: raw message is not base64: {error}")))
+            let bytes = bytes.unwrap_or_else(|error| panic!("sim provider: raw message is not base64: {error}"));
+            if bytes.len() > limit {
+                RawResult::TooLarge
+            } else {
+                RawResult::Raw(bytes)
+            }
         }
         Found::Gone => RawResult::Gone,
     })

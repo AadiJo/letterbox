@@ -22,6 +22,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "time"] }
 tokio-util.workspace = true
+# Locks the store's folder for one core at a time (src/store.rs), on Linux, macOS and Windows.
+fs4 = "1.1.0"
 # Checks the DKIM signature RFC 8058 asks for before a one-click unsubscribe (src/unsubscribe/dkim.rs).
 # Stalwart's, kept up with its mail server. Its DNS goes through the host, so its own resolver gets no servers.
 mail-auth = { version = "0.16.0", default-features = false, features = ["dns-hickory", "rust-crypto"] }

@@ -94,6 +94,7 @@ const method = type("'one-click' | 'mailto' | 'web'")
 const unsubscribed = type({ state: "'held'", change: 'string', until: 'string', method })
   .or({ state: "'sending'", change: 'string', method })
   .or({ state: "'done'", change: 'string', method })
+  .or({ state: "'page'", change: 'string', url: 'string' })
 
 const sender = type({
   id: 'string',
@@ -188,7 +189,6 @@ const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' 
   .or({ kind: "'settled'", change: 'string', rev: 'number', result: type("'done' | 'undone'").or({ failed: refusal }) })
   .or(type({ kind: "'response'", id: 'string' }).and(response))
   .or({ kind: "'open-url'", id: 'string', url: 'string' })
-  .or({ kind: "'open-url'", change: 'string', url: 'string' })
   .or({ kind: "'chunk'", id: 'string', data: 'string' })
   .or({ kind: "'your-turn'", threadId: 'string', from: person, subject: 'string' })
   .or({ kind: "'protocol-error'", reason: "'version-mismatch' | 'malformed'", detail: 'string' })

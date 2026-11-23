@@ -110,7 +110,7 @@ export const rawOf = (seed: SeedMessage, references: string[]): string => {
   ]
   if (references.length > 0) headers.push(['References', references.map((id) => `<${id}>`).join(' ')])
   const list = listUnsubscribeOf(seed)
-  if (list !== null) headers.push(['List-Unsubscribe', list])
+  if (list !== null) headers.push([seed.headers?.listUnsubscribeField ?? 'List-Unsubscribe', list])
   const post = seed.headers?.listUnsubscribePost
   if (post !== undefined) headers.push(['List-Unsubscribe-Post', post])
   headers.push(['MIME-Version', '1.0'], ['Content-Type', 'text/plain; charset=utf-8'])

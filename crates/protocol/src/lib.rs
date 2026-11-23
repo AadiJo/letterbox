@@ -59,7 +59,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub use sign_in::{PasswordInput, SignInError, SignInMethod, SignInOption, SignedIn};
 pub use subscribe::{Query, ThreadPage, Update};
 use ts_rs::TS;
-pub use unsubscribe::{OpenUrl, UnsubscribeMethod, Unsubscribed};
+pub use unsubscribe::{UnsubscribeMethod, Unsubscribed};
 pub use your_turn::YourTurn;
 
 pub const PROTOCOL: u32 = 0;
@@ -365,9 +365,11 @@ pub enum CoreMessage {
         #[serde(flatten)]
         response: Response,
     },
-    /// The UI opens this in the system browser, https only: a sign-in's consent page, or the
-    /// page of a web unsubscribe once its undo window ends.
-    OpenUrl(OpenUrl),
+    /// The UI opens this in the system browser. The token goes to the core, never the UI.
+    OpenUrl {
+        id: RequestId,
+        url: String,
+    },
     /// The next bytes of the file an `attachment` request asked for: at most 64 KiB, as base64.
     Chunk {
         id: RequestId,

@@ -269,6 +269,8 @@ pub enum RawResult {
     Raw(Vec<u8>),
     /// The message is gone.
     Gone,
+    /// The message is over the limit `raw` was given. The adapter stopped reading there.
+    TooLarge,
 }
 
 /// One change to push. Values are absolute: "set unread to false", never "toggle".
@@ -396,7 +398,8 @@ pub trait Adapter {
     /// The whole message as the provider holds it (RFC 5322), DKIM-Signature headers included.
     /// The core asks for it only when the user unsubscribes from the message's sender, to check
     /// the signature RFC 8058 asks for (crates/core/src/unsubscribe), never when mail is read.
-    fn raw(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<RawResult>>;
+    /// It reads no more than `limit` bytes of it, and answers `TooLarge` past that.
+    fn raw(&self, r#ref: MessageRef, limit: usize) -> LocalFuture<'_, Outcome<RawResult>>;
     /// Pushes one change. The core calls this one at a time, in the order the user acted.
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>>;
     /// Delivers one message (rule 10). The core calls it in the account's order, like `apply`.

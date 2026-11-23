@@ -70,8 +70,7 @@ scenario('a second sign-in ends the first one, and each gets its own answer', as
   const firstAnswer = await first.done
   t.equal(firstAnswer.ok === false && firstAnswer.error, 'superseded', 'the first attempt is told it was superseded')
   const secondUrl = await core.take('open-url')
-  const ids = [firstUrl, secondUrl].map((url) => ('id' in url ? url.id : null))
-  t.equal(ids, [first.id, second.id], 'each url names the request it belongs to')
+  t.equal([firstUrl.id, secondUrl.id], [first.id, second.id], 'each url names the request it belongs to')
   t.provider.approveSignIn(secondUrl.url, ME)
   const secondAnswer = await second.done
   t.check(secondAnswer.ok, 'the second attempt signs in')

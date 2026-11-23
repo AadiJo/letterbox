@@ -3,6 +3,12 @@
 //! writes every change through here in a transaction, so what is on disk is
 //! always a state the core was really in.
 //!
+//! One core at a time: opening takes an exclusive OS lock on `core.lock` in the folder, before
+//! anything is read, and holds it while the store is open. Every core decides from its own
+//! memory, so two over one store could both act on one change, such as an unsubscribe's POST,
+//! or miss each other's undo. A second core fails to open with `StoreError::Locked`. The OS
+//! drops the lock when the process ends, even when it is killed.
+//!
 //! Each store also has an id of its own, 32 random hex digits that SQLite makes the first
 //! time the store opens. It lives in the database, so a copy or a restore of the store keeps
 //! it, and two cores that open one store at once both read the one that was saved. The host
@@ -10,6 +16,7 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::fs::File;
 use std::path::Path;
 
 use letterbox_protocol::{AccountId, MailboxId, MessageId, Rev, ThreadId};
@@ -54,6 +61,8 @@ minted!(AccountId => "account", MailboxId => "mailbox", MessageId => "message", 
 #[derive(Debug)]
 pub enum StoreError {
     Folder(std::io::Error),
+    /// Another core has the store open.
+    Locked,
     Database(rusqlite::Error),
 }
 
@@ -61,6 +70,10 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::Folder(error) => write!(f, "cannot make the store's folder: {error}"),
+            StoreError::Locked => write!(
+                f,
+                "another core has this store open. Stop it first: two cores on one store would each act on the same changes"
+            ),
             StoreError::Database(error) => write!(f, "cannot open the store: {error}"),
         }
     }
@@ -83,6 +96,8 @@ pub fn store_id(data_path: &Path) -> Result<String, StoreError> {
 
 pub struct Store {
     db: Connection,
+    /// Holds the folder's lock while the store is open. Never read.
+    _lock: File,
     rev: Cell<Rev>,
     counter: Cell<u64>,
 }
@@ -96,6 +111,18 @@ impl Store {
     /// Opens the store in `data_path`, creating the folder and the tables when they are missing.
     pub fn open(data_path: &Path) -> Result<Store, StoreError> {
         std::fs::create_dir_all(data_path).map_err(StoreError::Folder)?;
+        let lock = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(data_path.join("core.lock"))
+            .map_err(StoreError::Folder)?;
+        // Called by its path: std's File has a try_lock of its own, newer than this crate's MSRV.
+        match fs4::FileExt::try_lock(&lock) {
+            Ok(()) => {}
+            Err(fs4::TryLockError::WouldBlock) => return Err(StoreError::Locked),
+            Err(fs4::TryLockError::Error(error)) => return Err(StoreError::Folder(error)),
+        }
         let db = Connection::open(data_path.join("letterbox.sqlite"))?;
         db.execute_batch(
             "pragma journal_mode = wal;
@@ -131,6 +158,7 @@ impl Store {
         let counter = meta("counter")?;
         Ok(Store {
             db,
+            _lock: lock,
             rev: Cell::new(rev),
             counter: Cell::new(counter),
         })

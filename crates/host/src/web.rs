@@ -245,8 +245,14 @@ impl HttpsWeb {
 impl HttpsWeb {
     /// One POST of `List-Unsubscribe=One-Click`, form-encoded (RFC 8058 section 3.2). Only the
     /// status is read. A request that never connected is `NotSent`, one that may have gone out
-    /// and got no whole answer `NoAnswer`.
+    /// and got no whole answer `NoAnswer`. A URL with a user name or password is not sent at
+    /// all: reqwest would send them as an Authorization header, which RFC 8058 forbids. The
+    /// core refuses one before it gets here (dkim.rs); this keeps the rule where the request goes.
     async fn post(&self, url: &str) -> Posted {
+        let userinfo = Url::parse(url).map(|url| !url.username().is_empty() || url.password().is_some());
+        if userinfo.unwrap_or(true) {
+            return Posted::NotSent;
+        }
         let target = match self.target(url).await {
             Ok(target) => target,
             Err(Stop::Refused) => return Posted::Refused,
