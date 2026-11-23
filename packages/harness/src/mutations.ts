@@ -333,8 +333,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a pending change does not mark its threads, so open lists show them unchanged',
     file: core('world.rs'),
-    find: '    touch_effect(&mut world.touched, &world.messages, Some(&record.effect));\n    world.changes.0.insert',
-    replace: '    world.changes.0.insert',
+    find: '    touch_effect(&mut world.touched, &world.messages, Some(&record.effect));\n    note_unsubscribe(world, &record);',
+    replace: '    note_unsubscribe(world, &record);',
     scenarios: 'each list filter agrees',
   },
   {

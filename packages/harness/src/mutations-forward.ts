@@ -30,7 +30,7 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   },
   {
     name: 'every file of a forward is fetched from the place of the first',
-    file: core('outbox.rs'),
+    file: core('forward.rs'),
     find: 'linked.adapter.attachment(r#ref.clone(), index).await?',
     replace: 'linked.adapter.attachment(r#ref.clone(), 0).await?',
     scenarios: 'the right MIME',
@@ -73,12 +73,12 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a forward whose files are gone goes out without them',
-    file: core('outbox.rs'),
+    file: core('forward.rs'),
     find: '                AttachmentResult::Gone => return Ok(Contents::Gone),',
     replace: '                AttachmentResult::Gone => continue,',
     also: [
       {
-        file: core('outbox.rs'),
+        file: core('forward.rs'),
         find: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),',
         replace: '                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Ready(Vec::new())),',
       },
@@ -94,7 +94,7 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a forward that leaves out a file fetches the others by their places among those it carries',
-    file: core('outbox.rs'),
+    file: core('forward.rs'),
     find: '        for (index, _) in forward.carried() {',
     replace: '        for (index, _) in forward.carried().enumerate().map(|(at, (_, file))| (at, file)) {',
     scenarios: 'a forward without some of the original files',
@@ -228,7 +228,7 @@ export const FORWARD_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a forward of a send the provider may not hold yet fails as if its original were gone',
-    file: core('outbox.rs'),
+    file: core('forward.rs'),
     find: '                    return Ok(if pending { Contents::Waiting } else { Contents::Gone });',
     replace: '                    return Ok(if pending { Contents::Gone } else { Contents::Gone });',
     scenarios: 'may not hold yet',
