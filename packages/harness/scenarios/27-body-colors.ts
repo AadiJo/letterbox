@@ -8,94 +8,98 @@
 import type { Seed, SeedMessage } from '@letterbox/sim-provider/contract'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import type { Body, ColorScheme, Colors, Command, Message } from '@letterbox/protocol'
-import { ME, openThread, PASSWORD, start, sync, thread } from '../src/fixtures.ts'
+import { ME, openThread, PASSWORD, signIn, start, sync, thread } from '../src/fixtures.ts'
+import {
+  ANA,
+  DESIGNED,
+  HANA,
+  HANA_HTML,
+  INVALID_HTML,
+  LIST,
+  LUMEN,
+  LUMEN_HTML,
+  mail,
+  PAIRS_HTML,
+} from '../src/colored-mail.ts'
 import { scenario, type Scenario } from '../src/scenario.ts'
 import type { CoreClient, Subscription } from '../src/client.ts'
 
-const LUMEN = { name: 'Lumen Weekly', address: 'news@lumen.example' }
-const HANA = { name: 'Hana Sato', address: 'hana@inkwell.example' }
+/** INVALID_HTML as the core passes it on: only what a browser keeps is wrapped. */
+const INVALID_SHOWN = [
+  '<p style="color:var(--letterbox-color-0, #0563c1);color:rgb(0 0 0 .35)">Blue</p>',
+  '<p style="color:red blue">Dropped</p>',
+  '<p style="color:hsl(120, 50, 50)">Legacy hsl without percents</p>',
+  '<p style="color:rgb(100%, 0, 0)">Mixed legacy rgb</p>',
+  '<p style="color:var(--letterbox-color-1, rgba(0, 0, 0, .5)) !important">Comma alpha</p>',
+  '<p style="color:var(--letterbox-color-2, hsl(120deg 50% 50% / 50%))">Space hsl</p>',
+].join('')
+
+const INVALID_PALETTE = [
+  ['text', '#0563c1', '#84baff'],
+  ['text', '#00000080', '#f5f5f580'],
+  ['text', '#40bf4080', '#b0ffab80'],
+]
+
+/** PAIRS_HTML as the core passes it on: the div's bgcolor, which a browser ignores, stays bare. */
+const PAIRS_SHOWN = [
+  '<style>@layer{:where([data-letterbox-bg="1"]){background-color:var(--letterbox-color-1, #ffffff)}',
+  ':where([data-letterbox-bg="3"]){background-color:var(--letterbox-color-3, #000038)}',
+  ':where([data-letterbox-bg="4"]){background-color:var(--letterbox-color-4, #ff0000)}}</style>',
+  '<style>@layer sender{td.layered{background-color:var(--letterbox-color-0, #00ff00)}}</style>',
+  '<div bgcolor="#ff0000">Ignored</div>',
+  '<table bgcolor="#ffffff" data-letterbox-bg="1"><tr><td bgcolor="#000038" style="color:var(--letterbox-color-2, #888888)" data-letterbox-bg="3">On navy</td>',
+  '<td class="layered" bgcolor="#ff0000" data-letterbox-bg="4">Layered</td></tr></table>',
+  '<p style="background:var(--letterbox-color-5, #fff3c4);color:var(--letterbox-color-6, #8a6d00)">A note</p>',
+].join('')
 
 /**
- * A branded newsletter, built as such mail is: a layout table inside a table, colors in
- * attributes (`<body>`'s, a `bgcolor` with no `#`, a `<font>`), in a `<style>` block (behind a
- * selector with a colon, inside `@media`, beside a remote image) and inline, written as hex,
- * `rgb()`, `hsl()` and names in any case, and a faint footer whose dark value needs more alpha
- * to read. It also tries what the pass must leave: a custom property named like the core's own,
- * color names in a string, a `url()` and an `image-set()`, `inherit`, `transparent`, and hidden
- * text with no alpha.
+ * PAIRS_HTML's palette. Grey text on navy is read on the navy's dark value, so it is lighter than
+ * the same grey alone (#979797), and the note's olive on its cream likewise.
  */
-const LUMEN_HTML = [
-  '<body bgcolor="#F4EFE6" text="#2f3a38" link="#c8552b">',
-  '<style>:root{--letterbox-color-0:#ff0000}.essay a:hover{color:#a84520}',
-  '.button{background:#12423d;color:#f4efe6}@media (max-width:600px){.story{border-top:1px solid #e2dacb}}',
-  '.hero{background:url(https://cdn.lumen.example/hero.jpg) #12423d}.mark::before{content:"#ffffff"}</style>',
-  '<div style="display:none;color:rgba(0,0,0,0)">The quiet web.</div>',
-  '<table role="presentation" width="100%" bgcolor="f4efe6"><tr><td>',
-  '<table width="600"><tr><td style="color:#6B716F">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
-  '<tr><td style="background:url(cid:red) #12423d no-repeat;color:WHITE">LUMEN</td></tr>',
-  `<tr><td style="background-image:image-set('red.png' 1x)">Spring</td></tr>`,
-  '<tr><td class="essay"><font color="#c8552b">THIS WEEK</font>',
-  '<h1 style="color:#1d2b29">The quiet web</h1>',
-  '<p style="color:rgb(47, 58, 56)">On slow mornings I read small sites.</p>',
-  '<p><a class="button" href="https://lumen.example/essay" style="border:1px solid hsl(173, 57%, 17%)">Read the essay</a></p></td></tr>',
-  '<tr><td class="story" style="border-top:1px solid #e2dacb;background-color:transparent">Seed swaps are back. <span style="color:var(--accent, #c8552b)">Read</span></td></tr>',
-  '</table></td></tr></table>',
-  '<p style="color:#6b716f">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
-  ' <span style="color:rgba(0,0,0,.35)">Lumen Media, Bristol</span></p>',
-  '</body>',
-].join('')
+const PAIRS_PALETTE = [
+  ['background', '#00ff00', '#002700'],
+  ['background', '#ffffff', '#1b1b1b'],
+  ['text', '#888888', '#bdbdbc'],
+  ['background', '#000038', '#2e4a87'],
+  ['background', '#ff0000', '#690000'],
+  ['background', '#fff3c4', '#221b00'],
+  ['text', '#8a6d00', '#c8aa53'],
+]
 
-/** A person's mail, as Outlook writes it: inline colors, a data table, a link and a signature. */
-const HANA_HTML = [
-  '<div style="font:14.5px/21px Arial,sans-serif;color:#222">',
-  '<p>Hi Robin,</p><p>The cover lock moved to <b>Thursday at noon</b>.</p>',
-  '<table style="border-collapse:collapse"><tr><th style="border:1px solid #c8c8c8;background:#f2f2f2">Step</th>',
-  '<th style="border:1px solid #c8c8c8;background:#f2f2f2">Date</th></tr>',
-  '<tr><td style="border:1px solid #c8c8c8">Cover file locked</td><td style="border:1px solid #c8c8c8">Thu, noon</td></tr></table>',
-  `<p>The quote is on <a href="https://printer.example/portal" style="color:#0563C1">the printer's portal</a>.</p>`,
-  '<div style="color:#555"><b style="color:#222">Hana Sato</b><br><span style="color:#888">For the named recipients only.</span></div>',
-  '</div>',
-].join('')
-
-const ANA = { name: 'Ana', address: 'ana@example.com' }
-
-/** A person's mail that is designed all the same, each for one reason, so it keeps its own type. */
-const DESIGNED = [
-  ['Nested', '<table><tr><td><table><tr><td>Agenda</td></tr></table></td></tr></table>'],
-  ['Presented', '<table role="presentation"><tr><td>Lunch?</td></tr></table>'],
-  ['Gradient', '<div style="background:linear-gradient(white, #eee)">Card</div>'],
-  ['Hues', '<p style="color:#c00">Red</p><p style="color:#080">Green</p><p style="color:#00c">Blue</p>'],
-] as const
-
-/** The rules the core writes for the color attributes, at the start of the html. */
+/**
+ * The rules the core writes for the color attributes, at the start of the html, in an anonymous
+ * cascade layer. `<body text>` and `<font color>` share one swatch.
+ */
 const ATTRIBUTE_RULES = [
-  '<style>',
+  '<style>@layer{',
   ':where([data-letterbox-bg="0"]){background-color:var(--letterbox-color-0, #f4efe6)}',
   ':where([data-letterbox-text="1"]){color:var(--letterbox-color-1, #2f3a38)}',
   ':where([data-letterbox-link="2"] :link){color:var(--letterbox-color-2, #c8552b)}',
+  ':where([data-letterbox-vlink="3"] :visited){color:var(--letterbox-color-3, #6b716f)}',
+  ':where([data-letterbox-alink="4"] :link:active, [data-letterbox-alink="4"] :visited:active){color:var(--letterbox-color-4, #a84520)}',
   ':where([data-letterbox-text="2"]){color:var(--letterbox-color-2, #c8552b)}',
-  '</style>',
+  '}</style>',
 ].join('')
 
 /** LUMEN_HTML as the core passes it on, part for part. */
 const LUMEN_SHOWN = [
   ATTRIBUTE_RULES,
-  '<body bgcolor="#F4EFE6" text="#2f3a38" link="#c8552b" data-letterbox-bg="0" data-letterbox-text="1" data-letterbox-link="2">',
-  '<style>:root{--sender-letterbox-color-0:#ff0000}.essay a:hover{color:var(--letterbox-color-3, #a84520)}',
-  '.button{background:var(--letterbox-color-4, #12423d);color:var(--letterbox-color-5, #f4efe6)}@media (max-width:600px){.story{border-top:1px solid var(--letterbox-color-6, #e2dacb)}}',
-  '.hero{background:var(--letterbox-image-0, none) var(--letterbox-color-4, #12423d)}.mark::before{content:"#ffffff"}</style>',
+  '<body bgcolor="#F4EFE6" text="#2f3a38" link="#c8552b" vlink="#6b716f" alink="#a84520" data-letterbox-bg="0" data-letterbox-text="1" data-letterbox-link="2" data-letterbox-vlink="3" data-letterbox-alink="4">',
+  '<style>:root{--sender-letterbox-color-0:#ff0000}.essay a:hover{color:var(--letterbox-color-4, #a84520)}',
+  '.button{background:var(--letterbox-color-5, #12423d);color:var(--letterbox-color-6, #f4efe6)}@media (max-width:600px){.story{border-top:1px solid var(--letterbox-color-7, #e2dacb)}}',
+  '.hero{background:var(--letterbox-image-0, none) var(--letterbox-color-5, #12423d)}.mark::before{content:"#ffffff"}</style>',
   '<div style="display:none;color:rgba(0,0,0,0)">The quiet web.</div>',
   '<table role="presentation" width="100%" bgcolor="f4efe6" data-letterbox-bg="0"><tr><td>',
-  '<table width="600"><tr><td style="color:var(--letterbox-color-7, #6B716F)">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
-  '<tr><td style="background:url(cid:red) var(--letterbox-color-4, #12423d) no-repeat;color:var(--letterbox-color-8, WHITE)">LUMEN</td></tr>',
+  '<table width="600"><tr><td style="color:var(--letterbox-color-3, #6B716F)">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
+  '<tr><td style="background:url(cid:red) var(--letterbox-color-5, #12423d) no-repeat;color:var(--letterbox-color-8, WHITE)">LUMEN</td></tr>',
   `<tr><td style="background-image:image-set('red.png' 1x)">Spring</td></tr>`,
   '<tr><td class="essay"><font color="#c8552b" data-letterbox-text="2">THIS WEEK</font>',
   '<h1 style="color:var(--letterbox-color-9, #1d2b29)">The quiet web</h1>',
   '<p style="color:var(--letterbox-color-1, rgb(47, 58, 56))">On slow mornings I read small sites.</p>',
   '<p><a class="button" href="https://lumen.example/essay" style="border:1px solid var(--letterbox-color-10, hsl(173, 57%, 17%))">Read the essay</a></p></td></tr>',
-  '<tr><td class="story" style="border-top:1px solid var(--letterbox-color-6, #e2dacb);background-color:transparent">Seed swaps are back. <span style="color:var(--accent, var(--letterbox-color-2, #c8552b))">Read</span></td></tr>',
+  '<tr><td class="story" style="border-top:1px solid var(--letterbox-color-7, #e2dacb);background-color:transparent">Seed swaps are back. <span style="color:var(--accent, var(--letterbox-color-2, #c8552b))">Read</span></td></tr>',
   '</table></td></tr></table>',
-  '<p style="color:var(--letterbox-color-7, #6b716f)">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
+  '<p style="color:var(--letterbox-color-3, #6b716f)">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
   ' <span style="color:var(--letterbox-color-11, rgba(0,0,0,.35))">Lumen Media, Bristol</span></p>',
   '</body>',
 ].join('')
@@ -103,21 +107,21 @@ const LUMEN_SHOWN = [
 /**
  * LUMEN_HTML's palette: each color once per role, whatever its spelling, in the order the html
  * first sets it. The page goes to the reader, text and the brand's accent lighten with their hue
- * kept, the button's teal lifts a step, and light text on it stays.
+ * kept, the button's teal lifts a step, light text on it stays, and the faint footer gains alpha.
  */
 const LUMEN_PALETTE = [
   ['background', '#f4efe6', '#1f1b15'],
   ['text', '#2f3a38', '#cfddda'],
   ['text', '#c8552b', '#f17a51'],
+  ['text', '#6b716f', '#a9b0ad'],
   ['text', '#a84520', '#ff936e'],
   ['background', '#12423d', '#285651'],
   ['text', '#f4efe6', '#f4efe6'],
   ['border', '#e2dacb', '#342e22'],
-  ['text', '#6b716f', '#a9b0ad'],
   ['text', '#ffffff', '#ffffff'],
   ['text', '#1d2b29', '#d5e7e4'],
   ['border', '#13443e', '#7caca4'],
-  ['text', '#00000059', '#ffffff74'],
+  ['text', '#00000059', '#ffffff75'],
 ]
 
 /** HANA_HTML as the core passes it on. */
@@ -141,18 +145,6 @@ const HANA_PALETTE = [
   ['text', '#555555', '#c4c4c4'],
   ['text', '#888888', '#979797'],
 ]
-
-const mail = (
-  key: string,
-  from: SeedMessage['from'],
-  subject: string,
-  html: string,
-  sentAt: string,
-  more: Partial<SeedMessage> = {},
-): SeedMessage => ({ key, mailboxes: ['inbox'], from, to: [ME], subject, text: `${subject}.`, html, sentAt, ...more })
-
-/** A newsletter's headers. */
-const LIST = { headers: { listUnsubscribe: true } }
 
 const seed = (): Seed => ({
   address: ME,
@@ -182,6 +174,16 @@ const seed = (): Seed => ({
       '2025-12-08T11:00:00.000Z',
     ),
     ...DESIGNED.map(([subject, html], index) => mail(subject, ANA, subject, html, `2025-12-09T0${index}:00:00.000Z`)),
+    mail('invalid', ANA, 'Invalid colors', INVALID_HTML, '2025-12-10T09:00:00.000Z'),
+    mail('pairs', ANA, 'Pairs', PAIRS_HTML, '2025-12-10T10:00:00.000Z'),
+    // A From the provider could not read has no address, so it names no sender to choose for.
+    mail(
+      'nobody',
+      { name: 'Nobody', address: '' },
+      'From nowhere',
+      '<p style="color:#222">Who?</p>',
+      '2025-12-10T11:00:00.000Z',
+    ),
   ],
 })
 
@@ -260,6 +262,25 @@ scenario('html colors are named with a readable dark value, and each sender keep
     [HANA_SHOWN, HANA_PALETTE],
     "each color of the person's mail is named",
   )
+  const invalid = await openThread(core, (await thread(core, 'Invalid colors')).id)
+  t.equal(
+    [opened(invalid).body.html, swatches(invalid)],
+    [INVALID_SHOWN, INVALID_PALETTE],
+    'a value a browser drops stays as written, so the declaration before it still holds',
+  )
+  const pairs = await openThread(core, (await thread(core, 'Pairs')).id)
+  t.equal(
+    [opened(pairs).body.html, swatches(pairs)],
+    [PAIRS_SHOWN, PAIRS_PALETTE],
+    'a bgcolor is named only where a browser honours it, and text is read on the background set beside it',
+  )
+  t.equal(
+    [underFloor(opened(invalid).colors), underFloor(opened(pairs).colors)],
+    [[], []],
+    'these dark values keep the floor too',
+  )
+  invalid.close()
+  pairs.close()
   t.equal(
     [opened(earlier).body.html, swatches(earlier)],
     ['<p style="color:var(--letterbox-color-0, #2f3a38)">Last week.</p>', [['text', '#2f3a38', '#cfddda']]],
@@ -326,6 +347,48 @@ scenario('html colors are named with a readable dark value, and each sender keep
     'unknown-target',
     'a message that is not there is refused',
   )
+  const nobody = await openThread(again, (await thread(again, 'From nowhere')).id)
+  const fromNowhere = await again.command(choose(opened(nobody).message, 'original'))
+  t.equal(
+    [fromNowhere.kind === 'rejected' ? fromNowhere.reason : fromNowhere.kind, opened(nobody).colors.scheme],
+    ['not-permitted', 'dark'],
+    'a message with no From address is refused, and stays dark',
+  )
+})
+
+scenario("a sender's choice stays in its account, and goes with it at sign-out", async (t) => {
+  const first = await start(t, {
+    address: ME,
+    password: PASSWORD,
+    mailboxes: seed().mailboxes,
+    messages: [mail('mine', LUMEN, 'Issue 212 here', LUMEN_HTML, '2025-12-08T09:00:00.000Z', LIST)],
+  })
+  const { core } = first
+  const other = {
+    address: 'second@sim.test',
+    password: PASSWORD,
+    mailboxes: seed().mailboxes,
+    messages: [mail('theirs', LUMEN, 'Issue 212 there', LUMEN_HTML, '2025-12-08T09:00:00.000Z', LIST)],
+  }
+  t.mailbox(other)
+  await signIn(t, core, other.address, other.password)
+  await sync(core)
+  const here = await openThread(core, (await thread(core, 'Issue 212 here')).id)
+  const there = await openThread(core, (await thread(core, 'Issue 212 there')).id)
+  await done(t, core, choose(opened(here).message, 'original'), 'show the sender in its own colors in one account')
+  t.equal(schemes([here, there]), ['original', 'dark'], 'the same sender in the other account keeps its own choice')
+  const kept = () => t.sql('select count(*) as senders from senders').map((row) => row['senders'])
+  t.equal(kept(), [1], 'the store keeps one choice')
+  here.close()
+  there.close()
+
+  const signedOut = await core.request({ method: 'sign-out', accountId: first.accountId, deleteLocalMail: true })
+  t.check(signedOut.ok, 'sign-out is answered')
+  t.equal(kept(), [0], "signing out with deletion removes the account's choices")
+  await signIn(t, core, ME, PASSWORD)
+  await sync(core)
+  const back = await openThread(core, (await thread(core, 'Issue 212 here')).id)
+  t.equal(opened(back).colors.scheme, 'dark', 'signed in again, the sender starts dark')
 })
 
 scenario("every dev seed's html still passes the check on the core's output, with readable dark values", async (t) => {

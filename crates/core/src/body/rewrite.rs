@@ -10,6 +10,7 @@ use std::rc::Rc;
 use lol_html::html_content::{ContentType, Element};
 use lol_html::{RewriteStrSettings, element, end_tag, rewrite_str, text};
 
+use super::color::Rgba;
 use super::fetch::MAX_IMAGES;
 use super::html::{attribute, image_attribute, set};
 use super::paint::{self, Painter};
@@ -88,11 +89,12 @@ impl Found {
     }
 
     /// CSS as pass 2 writes it: the sender's `--letterbox-` names renamed, each remote image
-    /// a placeholder (`css`) and each color named (paint.rs). None when it is unchanged.
-    fn restyle(&mut self, css: &str) -> Option<String> {
+    /// a placeholder (`css`) and each color named (paint.rs), text against `on`, the background
+    /// its element sets, for a style attribute. None when it is unchanged.
+    fn restyle(&mut self, css: &str, on: Option<Rgba>) -> Option<String> {
         let own = paint::own(css);
         let images = self.css(&own);
-        let colored = self.paint.css(images.as_deref().unwrap_or(&own));
+        let colored = self.paint.css(images.as_deref().unwrap_or(&own), on);
         colored
             .or(images)
             .or_else(|| matches!(own, Cow::Owned(_)).then(|| own.into_owned()))
@@ -194,11 +196,13 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
                 set(el, "data-letterbox-background", &index.to_string());
             }
         }
-        if let Some(css) = attribute(el, "style").and_then(|style| found.restyle(&style)) {
+        let name = el.tag_name();
+        let style = attribute(el, "style");
+        let on = Painter::background(el, &name, style.as_deref());
+        if let Some(css) = style.and_then(|style| found.restyle(&style, on)) {
             set(el, "style", &css);
         }
-        let name = el.tag_name();
-        found.paint.attributes(el, &name);
+        found.paint.attributes(el, &name, on);
         if name == "table" {
             found.paint.table(el, tables.get() > 0);
             if let Some(handlers) = el.end_tag_handlers() {
@@ -235,7 +239,7 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         style.push_str(chunk.as_str());
         if chunk.last_in_text_node() {
             let css = std::mem::take(&mut style);
-            let rewritten = found.borrow_mut().restyle(&css).unwrap_or(css);
+            let rewritten = found.borrow_mut().restyle(&css, None).unwrap_or(css);
             chunk.replace(&rewritten, ContentType::Html);
         } else {
             chunk.remove();

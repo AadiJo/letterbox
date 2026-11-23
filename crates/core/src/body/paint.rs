@@ -2,12 +2,19 @@
 //! show it restyled for the dark reader or in the sender's own colors from one stored copy (see
 //! `Colors` in crates/protocol/src/body.rs):
 //!   - in CSS, inline or in `<style>`, each color of a text, background or border property
-//!     becomes `var(--letterbox-color-N, <as written>)`, N its index in the palette (`css`),
-//!   - a color attribute (`bgcolor`, `<font color>`, `<body text>` and `link`) stays, and the
-//!     element gets `data-letterbox-bg`, `-text` or `-link` naming its N, which a zero-specificity
-//!     rule in the `<style>` that `finish` writes applies, as the attribute did (`attributes`),
+//!     becomes `var(--letterbox-color-N, <as written>)`, N its index in the palette (`css`). A
+//!     color longhand is wrapped only when its value is colors the pass reads and nothing else
+//!     (`wrappable`): a `var()` makes a browser check a value only once it computes it, so a
+//!     wrapped invalid value would hide an earlier valid one instead of being dropped.
+//!   - a color attribute where a browser honours it (`HINTS`) stays, and the element gets
+//!     `data-letterbox-bg`, `-text`, `-link`, `-vlink` or `-alink` naming its N. A rule in an
+//!     anonymous cascade layer, in the `<style>` that `finish` puts first, applies it, so any
+//!     rule of the sender's, in a layer or not, still wins over it as it did over the attribute.
 //!   - a custom property the sender named `--letterbox-…` is renamed (`own`), so a sender cannot
 //!     set the core's own.
+//!
+//! Text set beside a background, in the same rule or on the same element, keeps its contrast on
+//! that background's dark value (dark.rs), as a swatch of its own when that changes its value.
 //!
 //! It writes only colors and `var()`s, never a URL, so nothing it adds can load anything, and
 //! html.rs checks the output all the same. It also tells designed mail from a person's plain
@@ -43,7 +50,11 @@ pub struct Painted {
 #[derive(Default)]
 pub struct Painter {
     palette: Vec<Swatch>,
-    places: HashMap<(ColorRole, Rgba), usize>,
+    /// Each swatch's index by role, color and, for text, the background set beside it.
+    places: HashMap<(ColorRole, Rgba, Option<Rgba>), usize>,
+    /// Each swatch's index by role, color and dark value, so text whose background leaves its
+    /// dark value as it is shares one swatch.
+    values: HashMap<(ColorRole, Rgba, Rgba), usize>,
     /// The rules that apply color attributes, each once, in the order they were met.
     rules: Vec<String>,
     ruled: HashSet<(&'static str, usize)>,
@@ -51,32 +62,108 @@ pub struct Painter {
     designed: bool,
 }
 
-/// The color attributes, by element: the attribute, the role its color plays, the
-/// `data-letterbox-` name the element gets, and the rule's selector and property.
-const ATTRIBUTES: [(&str, Option<&str>, ColorRole, &str, &str); 4] = [
-    ("bgcolor", None, ColorRole::Background, "bg", "background-color"),
-    ("color", Some("font"), ColorRole::Text, "text", "color"),
-    ("text", Some("body"), ColorRole::Text, "text", "color"),
-    ("link", Some("body"), ColorRole::Text, "link", "color"),
+/// A color attribute a browser honours, as the HTML standard's rendering section lists them.
+struct Hint {
+    attribute: &'static str,
+    /// The elements it is honoured on.
+    on: &'static [&'static str],
+    role: ColorRole,
+    /// The element's `data-letterbox-` name for it.
+    data: &'static str,
+    /// What the rule colors, after the element's selector: the element itself (`""`) or links in it.
+    targets: &'static [&'static str],
+    property: &'static str,
+}
+
+const HINTS: [Hint; 6] = [
+    Hint {
+        attribute: "bgcolor",
+        on: &["body", "table", "thead", "tbody", "tfoot", "tr", "td", "th"],
+        role: ColorRole::Background,
+        data: "bg",
+        targets: &[""],
+        property: "background-color",
+    },
+    Hint {
+        attribute: "color",
+        on: &["font"],
+        role: ColorRole::Text,
+        data: "text",
+        targets: &[""],
+        property: "color",
+    },
+    Hint {
+        attribute: "text",
+        on: &["body"],
+        role: ColorRole::Text,
+        data: "text",
+        targets: &[""],
+        property: "color",
+    },
+    Hint {
+        attribute: "link",
+        on: &["body"],
+        role: ColorRole::Text,
+        data: "link",
+        targets: &[" :link"],
+        property: "color",
+    },
+    Hint {
+        attribute: "vlink",
+        on: &["body"],
+        role: ColorRole::Text,
+        data: "vlink",
+        targets: &[" :visited"],
+        property: "color",
+    },
+    Hint {
+        attribute: "alink",
+        on: &["body"],
+        role: ColorRole::Text,
+        data: "alink",
+        targets: &[" :link:active", " :visited:active"],
+        property: "color",
+    },
 ];
 
+/// The background color a background declaration sets: Some(None) when it sets none or more
+/// than one (an image or a gradient), None when the property sets no background.
+fn background_in(name: &str, value: &str) -> Option<Option<Rgba>> {
+    if !matches!(name, "background" | "background-color") {
+        return None;
+    }
+    match colors_in(value).as_slice() {
+        [(_, _, color)] if color.a > 0 => Some(Some(*color)),
+        _ => Some(None),
+    }
+}
+
 impl Painter {
-    /// The palette index of a color in a role, added at first sight. None for a color with no
-    /// alpha, which shows nothing either way (hidden text stays hidden), or past MAX_SWATCHES.
-    fn place(&mut self, role: ColorRole, color: Rgba) -> Option<usize> {
+    /// The palette index of a color in a role, on a background for text, added at first sight.
+    /// None for a color with no alpha, which shows nothing either way (hidden text stays
+    /// hidden), or past MAX_SWATCHES.
+    fn place(&mut self, role: ColorRole, color: Rgba, on: Option<Rgba>) -> Option<usize> {
         if color.a == 0 {
             return None;
         }
-        if let Some(index) = self.places.get(&(role, color)) {
+        let on = on.filter(|_| role == ColorRole::Text);
+        if let Some(index) = self.places.get(&(role, color, on)) {
             return Some(*index);
+        }
+        let value = dark(role, color, on);
+        if let Some(index) = self.values.get(&(role, color, value)).copied() {
+            self.places.insert((role, color, on), index);
+            return Some(index);
         }
         if self.palette.len() >= MAX_SWATCHES {
             self.designed = true;
             return None;
         }
-        self.places.insert((role, color), self.palette.len());
-        self.palette.push((role, color, dark(role, color)));
-        Some(self.palette.len() - 1)
+        let index = self.palette.len();
+        self.places.insert((role, color, on), index);
+        self.values.insert((role, color, value), index);
+        self.palette.push((role, color, value));
+        Some(index)
     }
 
     /// Notes a table: one inside another, or marked as presentation, lays out designed mail.
@@ -91,28 +178,50 @@ impl Painter {
         self.designed = true;
     }
 
-    /// Names each color attribute `element` carries (see the module docs).
-    pub fn attributes(&mut self, element: &mut Element<'_, '_>, name: &str) {
-        for (attribute_name, on, role, data, property) in ATTRIBUTES {
-            if on.is_some_and(|on| on != name) {
+    /// The background an element sets for itself, which the text it sets is read against: its
+    /// style's, else its `bgcolor` where a browser honours one. Pass 2 asks before it rewrites
+    /// the element's style (`css`) and attributes (`attributes`).
+    pub fn background(element: &Element<'_, '_>, name: &str, style: Option<&str>) -> Option<Rgba> {
+        let declared = style.and_then(|css| {
+            let found = declarations(css);
+            found
+                .iter()
+                .rev()
+                .find_map(|(property, start, end, _)| background_in(property, &css[*start..*end]))
+        });
+        declared.unwrap_or_else(|| {
+            let honoured = HINTS[0].on.contains(&name);
+            honoured
+                .then(|| attribute(element, "bgcolor").and_then(|value| color::legacy(&value)))
+                .flatten()
+        })
+    }
+
+    /// Names each color attribute `element` carries where a browser honours it (see the module
+    /// docs). Text is read against `on`, the element's own background (`background`).
+    pub fn attributes(&mut self, element: &mut Element<'_, '_>, name: &str, on: Option<Rgba>) {
+        for hint in &HINTS {
+            if !hint.on.contains(&name) {
                 continue;
             }
-            let Some(color) = attribute(element, attribute_name).and_then(|value| color::legacy(&value)) else {
+            let Some(color) = attribute(element, hint.attribute).and_then(|value| color::legacy(&value)) else {
                 continue;
             };
-            let Some(index) = self.place(role, color) else {
+            let Some(index) = self.place(hint.role, color, on) else {
                 continue;
             };
+            let data = hint.data;
             set(element, &format!("data-letterbox-{data}"), &index.to_string());
             if self.ruled.insert((data, index)) {
-                let target = format!(r#"[data-letterbox-{data}="{index}"]"#);
-                let selector = if data == "link" {
-                    format!("{target} :link")
-                } else {
-                    target
-                };
+                let selectors: Vec<String> = hint
+                    .targets
+                    .iter()
+                    .map(|target| format!(r#"[data-letterbox-{data}="{index}"]{target}"#))
+                    .collect();
                 self.rules.push(format!(
-                    ":where({selector}){{{property}:var(--letterbox-color-{index}, {})}}",
+                    ":where({}){{{}:var(--letterbox-color-{index}, {})}}",
+                    selectors.join(", "),
+                    hint.property,
                     color.hex()
                 ));
             }
@@ -120,12 +229,20 @@ impl Painter {
     }
 
     /// The CSS with each color of a text, background or border property named (see the module
-    /// docs). Takes CSS that `own` has read. None when it names none.
-    pub fn css(&mut self, css: &str) -> Option<String> {
+    /// docs). Takes CSS that `own` has read. Text is read against the background set in its
+    /// rule, else against `on`, the element's own for a style attribute. None when it names none.
+    pub fn css(&mut self, css: &str, on: Option<Rgba>) -> Option<String> {
+        let found = declarations(css);
+        let mut backgrounds: HashMap<usize, Option<Rgba>> = HashMap::default();
+        for (name, start, end, block) in &found {
+            if let Some(background) = background_in(name, &css[*start..*end]) {
+                backgrounds.insert(*block, background);
+            }
+        }
         let mut changes = Vec::new();
-        for (name, start, end) in declarations(css) {
-            let value = &css[start..end];
-            let Some(role) = role_of(&name) else { continue };
+        for (name, start, end, block) in &found {
+            let value = &css[*start..*end];
+            let Some(role) = role_of(name) else { continue };
             if role == ColorRole::Background
                 && ["url(", "var(--letterbox-image-", "image-set(", "gradient("]
                     .iter()
@@ -133,8 +250,13 @@ impl Painter {
             {
                 self.designed = true;
             }
-            for (from, to, color) in colors_in(value) {
-                if let Some(index) = self.place(role, color) {
+            let colors = colors_in(value);
+            if !wrappable(name, value, &colors) {
+                continue;
+            }
+            let beside = backgrounds.get(block).copied().unwrap_or(on);
+            for (from, to, color) in colors {
+                if let Some(index) = self.place(role, color, beside) {
                     let written = &value[from..to];
                     changes.push((
                         start + from,
@@ -148,7 +270,8 @@ impl Painter {
     }
 
     /// The palette, whether the body is branded, and the `<style>` that applies the color
-    /// attributes, which goes at the very start of the HTML (empty when it has none).
+    /// attributes, which goes at the very start of the HTML (empty when it has none). Its rules
+    /// sit in an anonymous layer, which ranks below every other author rule.
     pub fn finish(self) -> (Painted, String) {
         let hues = {
             let mut hues: Vec<Rgba> = self
@@ -165,7 +288,7 @@ impl Painter {
         let style = if self.rules.is_empty() {
             String::new()
         } else {
-            format!("<style>{}</style>", self.rules.concat())
+            format!("<style>@layer{{{}}}</style>", self.rules.concat())
         };
         let painted = Painted {
             palette: self.palette,
@@ -173,6 +296,31 @@ impl Painter {
         };
         (painted, style)
     }
+}
+
+/// True when the pass may wrap the colors of a declaration. A shorthand's other parts it does
+/// not read, so it wraps them as they come. A color longhand (`color`, `*-color`) only when its
+/// value is colors the pass reads, one or up to four for `border-color`, and at most
+/// `!important`: anything else a browser may drop as invalid, which it must still do once
+/// wrapped. A value that already reads a `var()` a browser checks only as it computes it anyway.
+fn wrappable(name: &str, value: &str, colors: &[(usize, usize, Rgba)]) -> bool {
+    if !(name == "color" || name.ends_with("-color")) || value.to_ascii_lowercase().contains("var(") {
+        return true;
+    }
+    let most = if name == "border-color" { 4 } else { 1 };
+    let mut rest = String::new();
+    let mut from = 0;
+    for (start, end, _) in colors {
+        rest.push_str(&value[from..*start]);
+        rest.push(' ');
+        from = *end;
+    }
+    rest.push_str(&value[from..]);
+    let rest = rest.trim();
+    let flag = rest
+        .strip_prefix('!')
+        .is_some_and(|flag| flag.trim().eq_ignore_ascii_case("important"));
+    (1..=most).contains(&colors.len()) && (rest.is_empty() || flag)
 }
 
 /// True when a color has a clear hue: its channels spread by more than a fifth.
@@ -247,14 +395,17 @@ fn name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_') || byte >= 0x80
 }
 
-/// Every declaration in a style attribute or a `<style>` block: its property in lowercase and
-/// where its value starts and ends. A selector with a colon (`a:hover {`) reads at first like a
+/// Every declaration in a style attribute or a `<style>` block: its property in lowercase, where
+/// its value starts and ends, and which block it is in (one per pair of braces, so declarations
+/// with the same number share a rule). A selector with a colon (`a:hover {`) reads at first like a
 /// declaration; its `{` shows it is not, and the reading goes on inside the block. At-rules and
 /// other selectors are passed over up to their `{` or `;`.
-fn declarations(css: &str) -> Vec<(String, usize, usize)> {
+fn declarations(css: &str) -> Vec<(String, usize, usize, usize)> {
     let bytes = css.as_bytes();
     let mut found = Vec::new();
     let mut at = 0;
+    // Which block a declaration is in: a count of the braces passed.
+    let mut block = 0;
     while at < bytes.len() {
         while at < bytes.len() && (bytes[at].is_ascii_whitespace() || bytes[at] == b';') {
             at += 1;
@@ -275,12 +426,14 @@ fn declarations(css: &str) -> Vec<(String, usize, usize)> {
             let start = at + 1;
             let end = until(bytes, start, b";{}");
             if bytes.get(end) != Some(&b'{') {
-                found.push((name.to_ascii_lowercase(), start, end));
+                found.push((name.to_ascii_lowercase(), start, end, block));
             }
-            at = end + 1;
+            at = end;
         } else {
-            at = until(bytes, at, b";{}") + 1;
+            at = until(bytes, at, b";{}");
         }
+        block += usize::from(matches!(bytes.get(at), Some(b'{' | b'}')));
+        at += 1;
     }
     found
 }

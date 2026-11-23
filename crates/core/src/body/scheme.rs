@@ -44,8 +44,12 @@ pub struct SenderRecord {
     pub colors: ColorScheme,
 }
 
-/// The scheme a message's HTML shows in: its sender's choice, or dark.
+/// The scheme a message's HTML shows in: its sender's choice, or dark. A message with no From
+/// address has no sender to choose for, so it is always dark.
 pub fn of(world: &World, record: &MessageRecord) -> ColorScheme {
+    if record.facts.from.address.trim().is_empty() {
+        return ColorScheme::Dark;
+    }
     let key = SenderKey::of(&record.account_id, &record.facts.from.address);
     world
         .senders
@@ -61,6 +65,11 @@ impl Inner {
         let Some(record) = record else {
             return self.reject(change, Refusal::UnknownTarget);
         };
+        // A provider gives an empty address for a From it could not read, so a choice for one
+        // would reach every such message, whoever sent it.
+        if record.facts.from.address.trim().is_empty() {
+            return self.reject(change, Refusal::NotPermitted);
+        }
         let rev = self.commit_then(
             |world, tx, at| {
                 if of(world, &record) != colors {

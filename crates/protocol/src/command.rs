@@ -49,7 +49,8 @@ pub enum Command {
     /// Sets how the sender of one message has its HTML colored (`Colors::scheme`): by that
     /// message's From address, in its account, for all of that sender's mail, new mail too. It
     /// settles at once: it never leaves the device. Refused `unknown-target` for a message that
-    /// is not there, and `not-supported` for an undo.
+    /// is not there, `not-permitted` for one whose From has no address (a provider gives an empty
+    /// one for a From it could not read), and `not-supported` for an undo.
     SetColors {
         message_id: MessageId,
         scheme: ColorScheme,

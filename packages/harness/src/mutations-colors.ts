@@ -8,6 +8,8 @@ const body = (file: string) => `crates/core/src/body/${file}`
 
 const COLORS = 'html colors are named'
 const SEEDS = "every dev seed's html"
+const RENDERED = 'the colour pass paints as a browser reads it'
+const ACCOUNTS = "a sender's choice stays in its account"
 
 export const COLOR_MUTATIONS: Mutation[] = [
   {
@@ -32,25 +34,103 @@ export const COLOR_MUTATIONS: Mutation[] = [
     scenarios: COLORS,
   },
   {
-    name: 'a bgcolor is left as the sender set it, so a white table stays white in the dark reader',
+    name: "a color attribute is named on any element, so a div's bgcolor, which a browser ignores, paints",
     file: body('paint.rs'),
-    find: 'if on.is_some_and(|on| on != name) {',
-    replace: 'if on.is_none_or(|on| on != name) {',
+    find: 'if !hint.on.contains(&name) {',
+    replace: 'if false {',
     scenarios: COLORS,
   },
   {
     name: 'a bgcolor is read as CSS, so one written without # keeps its own color',
     file: body('paint.rs'),
-    find: '.and_then(|value| color::legacy(&value))',
-    replace: '.and_then(|value| color::color_of(&value))',
+    find: 'let Some(color) = attribute(element, hint.attribute).and_then(|value| color::legacy(&value)) else {',
+    replace: 'let Some(color) = attribute(element, hint.attribute).and_then(|value| color::color_of(&value)) else {',
     scenarios: COLORS,
   },
   {
-    name: "a color attribute's rule outranks the sender's own rules",
+    name: "the color attribute rules sit outside a cascade layer, so they beat a sender's layered rule",
     file: body('paint.rs'),
-    find: '":where({selector}){{{property}:var(--letterbox-color-{index}, {})}}",',
-    replace: '"{selector}{{{property}:var(--letterbox-color-{index}, {})}}",',
+    find: 'format!("<style>@layer{{{}}}</style>", self.rules.concat())',
+    replace: 'format!("<style>{}</style>", self.rules.concat())',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'rgb() with an alpha after a space, and no slash, is read as a color, so it hides the color before it',
+    file: body('color.rs'),
+    find: '        [a, b, c] => Some(Arguments {\n            values: [a, b, c],\n            alpha,\n            legacy: false,\n        }),',
+    replace:
+      '        [a, b, c] => Some(Arguments {\n            values: [a, b, c],\n            alpha,\n            legacy: false,\n        }),\n        [a, b, c, d] => Some(Arguments {\n            values: [a, b, c],\n            alpha: Some(d),\n            legacy: false,\n        }),',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'the comma form of rgb() mixes numbers and percentages, which a browser drops',
+    file: body('color.rs'),
+    find: 'if legacy && !numbers && !percents {',
+    replace: 'if false {',
     scenarios: COLORS,
+  },
+  {
+    name: 'the comma form of hsl() takes plain numbers for saturation and lightness, which a browser drops',
+    file: body('color.rs'),
+    find: 'Value::Number(number) if !legacy => Some(number / 100.0),',
+    replace: 'Value::Number(number) if true => Some(number / 100.0),',
+    scenarios: COLORS,
+  },
+  {
+    name: 'a color longhand is wrapped whatever else its value holds, so an invalid one hides the one before it',
+    file: body('paint.rs'),
+    find: 'if !wrappable(name, value, &colors) {',
+    replace: 'if false {',
+    scenarios: COLORS,
+  },
+  {
+    name: 'text set beside a background in one rule is read on the reader, not on that background',
+    file: body('paint.rs'),
+    find: 'let beside = backgrounds.get(block).copied().unwrap_or(on);',
+    replace: 'let beside = on;',
+    scenarios: COLORS,
+  },
+  {
+    name: "text in a style is read on the reader, not on its element's bgcolor",
+    file: body('rewrite.rs'),
+    find: 'let on = Painter::background(el, &name, style.as_deref());',
+    replace: 'let on: Option<Rgba> = None;',
+    scenarios: COLORS,
+  },
+  {
+    name: 'text beside a background is lightened against the reader only',
+    file: body('dark.rs'),
+    find: 'let base = on.map_or(READER, |on| flat(dark(ColorRole::Background, on, None), READER));',
+    replace: 'let base = on.map_or(READER, |_| READER);',
+    scenarios: COLORS,
+  },
+  {
+    name: "text is made readable to 4.5 exactly, so a browser's rounding of its alpha takes it under",
+    file: body('dark.rs'),
+    find: 'const FLOOR: f64 = 4.55;',
+    replace: 'const FLOOR: f64 = 4.5;',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a message with no From address takes a choice, which every such message then shares',
+    file: body('scheme.rs'),
+    find: '        if record.facts.from.address.trim().is_empty() {\n            return self.reject(change, Refusal::NotPermitted);',
+    replace: '        if false {\n            return self.reject(change, Refusal::NotPermitted);',
+    scenarios: COLORS,
+  },
+  {
+    name: "signing out with deletion leaves the account's choices in the store",
+    file: 'crates/core/src/accounts.rs',
+    find: 'remove_sender(world, tx, id);',
+    replace: 'let _ = id;',
+    scenarios: ACCOUNTS,
+  },
+  {
+    name: "a sender's choice reaches the same address in another account",
+    file: body('scheme.rs'),
+    find: 'SenderKey(scoped(account_id, &address.to_lowercase()))',
+    replace: 'SenderKey({\n            let _ = account_id;\n            address.to_lowercase()\n        })',
+    scenarios: ACCOUNTS,
   },
   {
     name: "a sender sets the core's own color names",
@@ -62,8 +142,9 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: 'a selector with a colon hides the colors in its block',
     file: body('paint.rs'),
-    find: '            at = end + 1;\n        } else {',
-    replace: '            at = until(bytes, end + 1, b"}") + 1;\n        } else {',
+    find: '            at = end;\n        } else {\n            at = until(bytes, at, b";{}");',
+    replace:
+      '            at = until(bytes, end + 1, b"}");\n        } else {\n            at = until(bytes, at, b";{}");',
     scenarios: COLORS,
   },
   {
@@ -90,8 +171,15 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: 'each spelling of a color gets its own swatch',
     file: body('paint.rs'),
-    find: 'if let Some(index) = self.places.get(&(role, color)) {',
-    replace: 'if let Some(index) = self.places.get(&(role, color)).filter(|_| false) {',
+    find: 'if let Some(index) = self.places.get(&(role, color, on)) {',
+    replace: 'if let Some(index) = self.places.get(&(role, color, on)).filter(|_| false) {',
+    also: [
+      {
+        file: body('paint.rs'),
+        find: 'if let Some(index) = self.values.get(&(role, color, value)).copied() {',
+        replace: 'if let Some(index) = self.values.get(&(role, color, value)).copied().filter(|_| false) {',
+      },
+    ],
     scenarios: COLORS,
   },
   {
@@ -133,8 +221,8 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: "the colour pass reads the sender's css, not the rewritten one, and brings a remote image back",
     file: body('rewrite.rs'),
-    find: 'let colored = self.paint.css(images.as_deref().unwrap_or(&own));',
-    replace: 'let colored = self.paint.css(&own);',
+    find: 'let colored = self.paint.css(images.as_deref().unwrap_or(&own), on);',
+    replace: 'let colored = self.paint.css(&own, on);',
     scenarios: COLORS,
   },
   {

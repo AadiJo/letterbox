@@ -4,7 +4,8 @@
 //! text (FG, for black) and its background (READER, for white), on a curve for each role:
 //!   - text: `FG - span·L²`, which keeps dark text bright (#222 reads near the reader's own
 //!     text, a muted grey near its muted grey), and light text keeps its own lightness where
-//!     that is lighter, as on a dark button. Then it is lightened until it has FLOOR on the reader.
+//!     that is lighter, as on a dark button. Then it is lightened until it has FLOOR on what it
+//!     sits on: the dark value of the background set beside it, else the reader.
 //!   - background: `READER + span·(1-L)²`, which takes a light page to the reader, while a dark
 //!     background keeps its own lightness where that is darker. One with a clear hue (a
 //!     brand's button) is lifted to BRAND so it stands off the reader. Either way the reader's
@@ -12,9 +13,9 @@
 //!   - border: `FG - span·L`, straight, so a light hairline stays a faint line and a black rule
 //!     a bright one.
 //!
-//! Text and backgrounds are judged apart, since the colour pass does not know which text sits
-//! on which background: text keeps its contrast on the reader, and a background keeps it under
-//! the reader's text. Light text on a dark background keeps both.
+//! The colour pass knows which background text sits on only where the two are set together, in
+//! one rule or on one element (paint.rs). Other text is judged on the reader, and every
+//! background keeps the reader's text readable.
 
 use letterbox_protocol::ColorRole;
 
@@ -35,8 +36,9 @@ const FG: Rgba = Rgba {
     a: 255,
 };
 
-/// The contrast text keeps on the reader: WCAG AA.
-const FLOOR: f64 = 4.5;
+/// The contrast text keeps on what it sits on: WCAG AA's 4.5, and a little over, so that a
+/// browser's rounding of an alpha (it shows 128/255 as 0.5) never takes it under.
+const FLOOR: f64 = 4.55;
 
 /// The lightness a dark background with a clear hue (OKLCH chroma of at least 0.04) is lifted to.
 const BRAND: f64 = 0.42;
@@ -49,8 +51,9 @@ struct Lch {
     h: f64,
 }
 
-/// The value `color` takes in the dark reader, in the role it plays.
-pub fn dark(role: ColorRole, color: Rgba) -> Rgba {
+/// The value `color` takes in the dark reader, in the role it plays. `on` is the background set
+/// beside text, when the colour pass knows it.
+pub fn dark(role: ColorRole, color: Rgba, on: Option<Rgba>) -> Rgba {
     let lch = lch_of(color);
     let at = |l: f64| rgb_of(Lch { l, ..lch }, color.a);
     let (fg, reader) = (lch_of(FG).l, lch_of(READER).l);
@@ -58,7 +61,8 @@ pub fn dark(role: ColorRole, color: Rgba) -> Rgba {
     match role {
         ColorRole::Text => {
             let start = lch.l.max(fg - span * lch.l.powi(2));
-            let reads = |color: Rgba| contrast(color, READER) >= FLOOR;
+            let base = on.map_or(READER, |on| flat(dark(ColorRole::Background, on, None), READER));
+            let reads = |color: Rgba| contrast(flat(color, base), base) >= FLOOR;
             match lowest(start, 1.0, |l| reads(at(l))) {
                 Some(l) => at(l),
                 // Too faint to read at any lightness: as light as it goes, and as opaque as it must be.
@@ -118,24 +122,27 @@ fn highest(from: f64, to: f64, holds: impl Fn(f64) -> bool) -> f64 {
     low
 }
 
-/// WCAG's contrast ratio between two colors, each laid over the reader as the frame shows it.
+/// `color` laid over the opaque `under`, as the frame blends it.
+fn flat(color: Rgba, under: Rgba) -> Rgba {
+    let alpha = f64::from(color.a) / 255.0;
+    let mix = |channel: u8, below: u8| (f64::from(channel) * alpha + f64::from(below) * (1.0 - alpha)).round() as u8;
+    Rgba {
+        r: mix(color.r, under.r),
+        g: mix(color.g, under.g),
+        b: mix(color.b, under.b),
+        a: 255,
+    }
+}
+
+/// WCAG's contrast ratio between two opaque colors.
 fn contrast(one: Rgba, other: Rgba) -> f64 {
     let (one, other) = (luminance(one), luminance(other));
     (one.max(other) + 0.05) / (one.min(other) + 0.05)
 }
 
-/// WCAG's relative luminance of a color laid over the reader.
+/// WCAG's relative luminance of an opaque color.
 fn luminance(color: Rgba) -> f64 {
-    let alpha = f64::from(color.a) / 255.0;
-    let over = |channel: u8, reader: u8| {
-        let mixed = f64::from(channel) * alpha + f64::from(reader) * (1.0 - alpha);
-        linear(mixed / 255.0)
-    };
-    let (r, g, b) = (
-        over(color.r, READER.r),
-        over(color.g, READER.g),
-        over(color.b, READER.b),
-    );
+    let [r, g, b] = [color.r, color.g, color.b].map(|channel| linear(f64::from(channel) / 255.0));
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 

@@ -140,6 +140,9 @@ importers:
       '@letterbox/sim-provider':
         specifier: workspace:*
         version: link:../sim-provider
+      playwright:
+        specifier: 1.64.0
+        version: 1.64.0
 
   packages/protocol:
     dependencies:

@@ -5,6 +5,7 @@
   "dependencies": {
     "@letterbox/client": "workspace:*",
     "@letterbox/protocol": "workspace:*",
-    "@letterbox/sim-provider": "workspace:*"
+    "@letterbox/sim-provider": "workspace:*",
+    "playwright": "1.64.0"
   }
 }

@@ -72,26 +72,103 @@ fn hex_of(hex: &str) -> Option<Rgba> {
     }
 }
 
-/// The parts of a color function, split on commas, space and `/`, with the alpha last if given.
-fn parts(inner: &str) -> Option<([&str; 3], Option<&str>)> {
-    let parts: Vec<&str> = inner
-        .split(|c: char| c == ',' || c == '/' || c.is_ascii_whitespace())
-        .filter(|part| !part.is_empty())
-        .collect();
-    match parts.as_slice() {
-        [a, b, c] => Some(([a, b, c], None)),
-        [a, b, c, alpha] => Some(([a, b, c], Some(alpha))),
+/// The arguments of `rgb()` or `hsl()`, in one of CSS Color 4's two forms: three separated by
+/// commas, with an optional alpha after a fourth comma (`legacy`), or three separated by space,
+/// with an optional alpha after a slash. None for anything else, such as `rgb(0 0 0 .35)`,
+/// which a browser drops: the colour pass then leaves the declaration as it is.
+struct Arguments<'a> {
+    values: [&'a str; 3],
+    alpha: Option<&'a str>,
+    legacy: bool,
+}
+
+fn arguments(inner: &str) -> Option<Arguments<'_>> {
+    let single = |part: &str| !part.is_empty() && !part.contains(|c: char| c.is_ascii_whitespace() || c == '/');
+    if inner.contains(',') {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if !parts.iter().all(|part| single(part)) {
+            return None;
+        }
+        return match parts.as_slice() {
+            [a, b, c] => Some(Arguments {
+                values: [a, b, c],
+                alpha: None,
+                legacy: true,
+            }),
+            [a, b, c, alpha] => Some(Arguments {
+                values: [a, b, c],
+                alpha: Some(alpha),
+                legacy: true,
+            }),
+            _ => None,
+        };
+    }
+    let (values, alpha) = match inner.split_once('/') {
+        Some((values, alpha)) => (values, Some(alpha.trim())),
+        None => (inner, None),
+    };
+    if alpha.is_some_and(|alpha| !single(alpha)) {
+        return None;
+    }
+    match values.split_ascii_whitespace().collect::<Vec<_>>().as_slice() {
+        [a, b, c] => Some(Arguments {
+            values: [a, b, c],
+            alpha,
+            legacy: false,
+        }),
         _ => None,
     }
 }
 
-/// A number, or a percentage of `full`.
-fn number(part: &str, full: f64) -> Option<f64> {
-    let value = match part.strip_suffix('%') {
-        Some(percent) => percent.parse::<f64>().ok()? / 100.0 * full,
-        None => part.parse::<f64>().ok()?,
+/// One argument: a number or a percentage, as CSS writes them.
+#[derive(Clone, Copy)]
+enum Value {
+    Number(f64),
+    Percent(f64),
+}
+
+fn value(text: &str) -> Option<Value> {
+    match text.strip_suffix('%') {
+        Some(percent) => css_number(percent).map(Value::Percent),
+        None => css_number(text).map(Value::Number),
+    }
+}
+
+/// A CSS number, as its syntax writes one: an optional sign, digits with at most one point and
+/// a digit after it, and an optional exponent. Rust's own parse takes more (`inf`, `1.`).
+fn css_number(text: &str) -> Option<f64> {
+    let bytes = text.as_bytes();
+    let mut at = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let digits = |at: &mut usize| {
+        let start = *at;
+        while bytes.get(*at).is_some_and(u8::is_ascii_digit) {
+            *at += 1;
+        }
+        *at - start
     };
-    value.is_finite().then_some(value)
+    let whole = digits(&mut at);
+    let mut fraction = 0;
+    if bytes.get(at) == Some(&b'.') {
+        at += 1;
+        fraction = digits(&mut at);
+        if fraction == 0 {
+            return None;
+        }
+    }
+    if whole + fraction == 0 {
+        return None;
+    }
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        if digits(&mut at) == 0 {
+            return None;
+        }
+    }
+    let number: f64 = text.parse().ok()?;
+    (at == bytes.len() && number.is_finite()).then_some(number)
 }
 
 /// A channel from 0 to 1 as 8 bits.
@@ -99,13 +176,35 @@ fn byte(unit: f64) -> u8 {
     (unit.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-fn alpha(part: Option<&str>) -> Option<u8> {
-    part.map_or(Some(255), |part| number(part, 1.0).map(byte))
+/// The alpha after the color's values: a number from 0 to 1, or a percentage. Opaque when none.
+fn alpha(text: Option<&str>) -> Option<u8> {
+    match text.map(value) {
+        None => Some(255),
+        Some(Some(Value::Number(number))) => Some(byte(number)),
+        Some(Some(Value::Percent(percent))) => Some(byte(percent / 100.0)),
+        Some(None) => None,
+    }
 }
 
+/// `rgb()` or `rgba()`: three numbers from 0 to 255 or three percentages, which the comma form
+/// may not mix.
 fn rgb(inner: &str) -> Option<Rgba> {
-    let ([r, g, b], a) = parts(inner)?;
-    let channel = |part: &str| number(part, 255.0).map(|value| byte(value / 255.0));
+    let Arguments {
+        values,
+        alpha: a,
+        legacy,
+    } = arguments(inner)?;
+    let values = values.map(value);
+    let numbers = values.iter().all(|value| matches!(value, Some(Value::Number(_))));
+    let percents = values.iter().all(|value| matches!(value, Some(Value::Percent(_))));
+    if legacy && !numbers && !percents {
+        return None;
+    }
+    let channel = |value: Option<Value>| match value? {
+        Value::Number(number) => Some(byte(number / 255.0)),
+        Value::Percent(percent) => Some(byte(percent / 100.0)),
+    };
+    let [r, g, b] = values;
     Some(Rgba {
         r: channel(r)?,
         g: channel(g)?,
@@ -114,10 +213,37 @@ fn rgb(inner: &str) -> Option<Rgba> {
     })
 }
 
+/// A hue: a number of degrees, or an angle in `deg`, `grad`, `rad` or `turn`.
+fn hue(text: &str) -> Option<f64> {
+    let lower = text.to_ascii_lowercase();
+    let units = [
+        ("deg", 1.0),
+        ("grad", 0.9),
+        ("rad", 180.0 / std::f64::consts::PI),
+        ("turn", 360.0),
+    ];
+    let (number, scale) = units
+        .iter()
+        .find_map(|(unit, scale)| lower.strip_suffix(unit).map(|number| (number, *scale)))
+        .unwrap_or((lower.as_str(), 1.0));
+    Some((css_number(number)? * scale).rem_euclid(360.0))
+}
+
+/// `hsl()` or `hsla()`: a hue, then saturation and lightness as percentages, or in the space
+/// form also as plain numbers of percent.
 fn hsl(inner: &str) -> Option<Rgba> {
-    let ([h, s, l], a) = parts(inner)?;
-    let hue = number(h.trim_end_matches("deg"), 360.0)?.rem_euclid(360.0);
-    let (s, l) = (number(s, 1.0)?.clamp(0.0, 1.0), number(l, 1.0)?.clamp(0.0, 1.0));
+    let Arguments {
+        values: [h, s, l],
+        alpha: a,
+        legacy,
+    } = arguments(inner)?;
+    let hue = hue(h)?;
+    let percent = |text: &str| match value(text)? {
+        Value::Percent(percent) => Some(percent / 100.0),
+        Value::Number(number) if !legacy => Some(number / 100.0),
+        Value::Number(_) => None,
+    };
+    let (s, l) = (percent(s)?.clamp(0.0, 1.0), percent(l)?.clamp(0.0, 1.0));
     // CSS Color 4, "Converting HSL colors to sRGB colors".
     let channel = |n: f64| {
         let k = (n + hue / 30.0) % 12.0;

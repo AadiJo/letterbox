@@ -266,17 +266,20 @@ export type ImageError = "gone" | "blocked" | "refused" | "too-large" | "unreach
  * How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
  * with `var(--letterbox-color-N, <its own color>)`, where N is the color's index in `palette`:
  * in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
- * (`background`, gradients too) and borders (`border*`, `outline`). An element whose `bgcolor`,
- * `<font color>`, or `<body text>` or `link` set one carries `data-letterbox-bg`,
- * `data-letterbox-text` or `data-letterbox-link` naming its N, and a `<style>` at the start of
- * `html` applies it with zero specificity, as the attribute did, so the sender's own rules
- * still win where they did. A custom property the sender named `--letterbox-…` is renamed
+ * (`background`, gradients too) and borders (`border*`, `outline`). A color longhand whose
+ * value is not just colors the core reads stays as written, so a browser still drops an
+ * invalid one. An element whose `bgcolor` (on body, table parts and cells), `<font color>`,
+ * or `<body text>`, `link`, `vlink` or `alink` set one carries `data-letterbox-bg`, `-text`,
+ * `-link`, `-vlink` or `-alink` naming its N. A `<style>` at the start of `html` applies it
+ * from an anonymous cascade layer, so every rule of the sender's still wins where it did over
+ * the attribute. A custom property the sender named `--letterbox-…` is renamed
  * `--sender-letterbox-…`, so only the UI sets these.
  *
  * With nothing set, the HTML shows the sender's own colors (`original`). For `dark`, the UI sets
  * each `--letterbox-color-N` to its swatch's `dark` on the frame's root, with
  * `style.setProperty`, as it does for images, and gives the frame its own dark defaults for what
- * the HTML leaves unset (the page, text and links).
+ * the HTML leaves unset (the page, text and links). Those go in a cascade layer declared before
+ * `html`, so they rank below every rule of the sender's and the core's.
  */
 export type Colors = { 
 /**
@@ -285,7 +288,9 @@ export type Colors = {
 scheme: ColorScheme, look: HtmlLook, 
 /**
  * Each color the HTML sets, once per role, in the order the HTML first sets it, at most 256.
- * Colors past that keep their own value in both schemes.
+ * Text set beside a background, in one rule or on one element, is a swatch of its own for
+ * that background when its dark value differs there. Colors past 256 keep their own value in
+ * both schemes.
  */
 palette: Array<Swatch>, };
 
@@ -313,9 +318,10 @@ original: string,
 /**
  * Its value for the dark reader (crates/core/src/body/dark.rs), in the same form. The same
  * hue, with its lightness turned over against the reader's background where the original
- * was meant for a light page. Text keeps a contrast of at least 4.5:1 (WCAG AA) on the
- * reader's background (#1b1b1e), made more opaque if it must be, and a background keeps
- * 4.5:1 under the reader's text (#e4e4e4). A border has no floor.
+ * was meant for a light page. Text keeps a contrast of at least 4.5:1 (WCAG AA), made more
+ * opaque if it must be, on the dark value of the background set beside it, else on the
+ * reader's background (#1b1b1e). A background keeps 4.5:1 under the reader's text
+ * (#e4e4e4). A border has no floor.
  */
 dark: string, };
 
