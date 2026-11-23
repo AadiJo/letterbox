@@ -13,6 +13,7 @@ import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
 import { useLost } from './core.ts'
 import { useShowImagesKey } from './images.ts'
+import { ColorsSwitch } from './ColorsSwitch.tsx'
 import { ImagesChip } from './ImagesChip.tsx'
 import { cx } from './cx.ts'
 import { useNow } from './clock.ts'
@@ -319,6 +320,7 @@ function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary;
           <div className="flex min-w-0 items-center gap-1.5 text-addr text-muted">
             <span className="truncate">{message.from.address} · to you</span>
             <ImagesChip key={message.id} message={message} />
+            <ColorsSwitch key={`colors ${message.id}`} message={message} />
           </div>
         </div>
       </div>

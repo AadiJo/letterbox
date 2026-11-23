@@ -19,6 +19,7 @@
 //   attachments   the same parts: a message's files as rows, and each state of a save or an open (ui/attachments.ts)
 //   body          the same parts with the fake web: remote images shown and blocked, and quoted history folded (ui/body.ts)
 //   unsubscribe   the same parts with the fake web: unsubscribing, held, posted, emailed, a page, and refused (ui/unsubscribe.ts)
+//   colors        the same parts: HTML mail dark and in its sender's colors, the switch, its reach and the prefix (ui/body-colors.ts)
 // Every process a run started must be gone at its end.
 //
 // Writes screenshots at 1440×900, 1920×1080 and 1024×700 (`<scene>.png`, `<scene>-1920.png`,
@@ -30,6 +31,7 @@
 import { mkdirSync, rmSync } from 'node:fs'
 import { type Browser, chromium } from 'playwright'
 import { checkAttachments } from './ui/attachments.ts'
+import { checkColors } from './ui/body-colors.ts'
 import { checkBody } from './ui/body.ts'
 import { checkUnsubscribe } from './ui/unsubscribe.ts'
 import { checkCompose } from './ui/compose.ts'
@@ -87,6 +89,7 @@ try {
   await runCheck(() => checkAttachments(browser))
   await runCheck(() => checkBody(browser))
   await runCheck(() => checkUnsubscribe(browser))
+  await runCheck(() => checkColors(browser))
 } finally {
   await browser.close()
 }
