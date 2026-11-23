@@ -18,6 +18,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -44,6 +45,8 @@ const sizes = values.sizes.split(',').map(Number)
 const runs = Number(values.runs)
 const COMMANDS = 100
 const DELIVERED = 200
+/** How many HTML newsletters, and how many long quoted replies, the bench opens. */
+const HTML_OPENED = 20
 
 if (!values.core) {
   const build = spawnSync('cargo', ['build', '--quiet', '--release', '--bin', 'core-sim'], {
@@ -88,6 +91,36 @@ function benchMessage(index: number, conversation: number, place: number): SeedM
     ...(place > 0 && { replyTo: [`m${index - 1}`] }),
     ...(conversation % 7 === 0 && { headers: { listUnsubscribe: true } }),
   }
+}
+
+/**
+ * A newsletter of about 22 KB, built the way marketing mail is: nested tables, inline styles,
+ * a `<style>` block, a remote image and a tracker per story, and a footer with an unsubscribe link.
+ */
+function newsletterHtml(n: number): string {
+  const story = (index: number) =>
+    `<tr><td style="padding:16px;background:#fafafa;border-bottom:1px solid #eee">` +
+    `<img src="https://cdn.news.example/${n}/story-${index}.jpg" width="560" alt="Story ${index}" style="display:block">` +
+    `<h2 style="font:600 20px Georgia,serif;color:#222">Story ${index} of issue ${n}</h2>` +
+    `<p style="font:15px/22px Georgia,serif;color:#444">${'A paragraph of the story, long enough to look like one. '.repeat(8)}</p>` +
+    `<a href="https://news.example/r/${n}/${index}" style="color:#c60">Read more</a>` +
+    `<img src="https://news.example/open.gif?u=${n}&s=${index}" width="1" height="1" alt=""></td></tr>`
+  const stories = Array.from({ length: 24 }, (_, index) => story(index)).join('')
+  return (
+    `<style>td{font-family:Georgia,serif}.hero{background:url(https://cdn.news.example/${n}/bg.png)}</style>` +
+    `<table width="100%" cellpadding="0" cellspacing="0"><tr><td class="hero"><table width="600">${stories}</table></td></tr></table>` +
+    `<p><a href="https://news.example/unsubscribe?u=${n}">Unsubscribe</a></p>`
+  )
+}
+
+/** A reply of about 20 KB that quotes ten earlier messages, each nested in the last, as Gmail writes it. */
+function quotedHtml(n: number): string {
+  let quote = ''
+  for (let level = 0; level < 10; level += 1) {
+    const words = `<p>${`Message ${level} of thread ${n}, with its own words. `.repeat(40)}</p>`
+    quote = `<div class="gmail_quote"><div class="gmail_attr">On Mon, Dec 1, 2025, Person ${level} wrote:<br></div><blockquote class="gmail_quote">${words}${quote}</blockquote></div>`
+  }
+  return `<div dir="ltr">Thanks, that settles it.</div><br>${quote}`
 }
 
 function benchSeed(size: number): { seed: Seed; conversations: number } {
@@ -222,6 +255,63 @@ async function run(size: number): Promise<Phases> {
     at = now()
     await core.request({ method: 'sync-now' })
     phases[`sync after ${DELIVERED} new messages (ms)`] = now() - at
+
+    // HTML mail, delivered after the first sync, so its bodies are fetched and processed as
+    // each conversation opens: the body pipeline's cost, and what it adds to the store.
+    const html: SeedMessage[] = []
+    for (let index = 0; index < HTML_OPENED * 2; index += 1) {
+      const newsletter = index < HTML_OPENED
+      html.push({
+        key: `html${index}`,
+        mailboxes: ['inbox'],
+        from: newsletter
+          ? { name: 'The News', address: 'issue@news.example' }
+          : { name: 'Person', address: 'person@example.com' },
+        to: [ME],
+        subject: newsletter ? `Issue ${index}` : `Plans ${index}`,
+        text: newsletter ? `Issue ${index}.` : 'Thanks, that settles it.',
+        html: newsletter ? newsletterHtml(index) : quotedHtml(index),
+        sentAt: new Date(Date.UTC(2026, 0, 1) + index * 60_000).toISOString(),
+        ...(newsletter && {
+          headers: { listUnsubscribe: '<https://news.example/u>', listUnsubscribePost: 'List-Unsubscribe=One-Click' },
+        }),
+      })
+    }
+    for (const message of html) box.deliver(message)
+    await core.request({ method: 'sync-now' })
+    // The bytes the store keeps for these messages' records, read beside the running core.
+    const recordBytes = (prefix: string) => {
+      const store = new DatabaseSync(join(data, 'letterbox.sqlite'), { readOnly: true })
+      try {
+        const row = store
+          .prepare(
+            "select sum(length(record)) as bytes from messages where json_extract(record, '$.facts.subject') like ?",
+          )
+          .get(`${prefix}%`)
+        return Number(row?.['bytes'] ?? 0)
+      } finally {
+        store.close()
+      }
+    }
+    const listed = await core.query({ view: 'threads', filter: {}, offset: 0, limit: HTML_OPENED * 2 })
+    const byKind = (prefix: string) => listed.threads.filter((thread) => thread.subject.startsWith(prefix))
+    for (const [prefix, name] of [
+      ['Issue', 'open an html newsletter'],
+      ['Plans', 'open a long quoted reply'],
+    ] as const) {
+      const before = recordBytes(prefix)
+      at = now()
+      for (const thread of byKind(prefix)) {
+        const opened = core.subscribe({ view: 'thread', threadId: thread.id })
+        while (!opened.latest()?.messages.every((item) => item.body.state === 'ready')) await opened.next()
+        opened.close()
+      }
+      phases[`${name}, per message (ms)`] = (now() - at) / HTML_OPENED
+      const raw = html.filter((message) => message.subject.startsWith(prefix))
+      const rawBytes = raw.reduce((sum, message) => sum + Buffer.byteLength(message.html ?? ''), 0) / HTML_OPENED
+      phases[`${name}: html as sent, per message (KB)`] = rawBytes / 1024
+      phases[`${name}: stored record growth, per message (KB)`] = (recordBytes(prefix) - before) / HTML_OPENED / 1024
+    }
 
     phases['peak memory (MB)'] = core.peakMegabytes()
     list.close()
