@@ -129,8 +129,8 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
   {
     name: 'a second core opens a store another core has open, so both act on its changes',
     file: 'crates/core/src/store.rs',
-    find: '            Err(fs4::TryLockError::WouldBlock) => return Err(StoreError::Locked),',
-    replace: '            Err(fs4::TryLockError::WouldBlock) => {}',
+    find: '        Err(StoreError::Locked)\n    }',
+    replace: '        Ok(FolderLock(file))\n    }',
     scenarios: SECOND_CORE,
   },
   {
