@@ -87,8 +87,9 @@ export const INVALID_HTML = [
   '<p class="bordered" style="border:1px solid #cc0000;border:-1e-50px solid #0000cc">Red past a negative width</p>',
   '<p class="bordered" style="border:1px solid #cc0000;border:1e-50 solid #0000cc">Red past a unitless width</p>',
   // Rules nested in a style rule (CSS nesting), which the core leaves unread and as written.
-  '<style>.outer{span:hover{color:#ff0000} color:#0000ff}.outer-media{@media all{color:#ff0000;span{color:#ff0000}}}</style>',
+  '<style>.outer{span:hover{color:#ff0000} color:#0000ff}.outer-media{@media all{color:#ff0000;span{color:#ff0000}}}.outer-class{.inner{color:#ff0000}}</style>',
   '<p class="outer as-written">Nested rule</p><p class="outer-media as-written">Nested media</p>',
+  '<p class="outer-class"><span class="inner as-written">Nested class</span></p>',
 ].join('')
 
 /**

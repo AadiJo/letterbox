@@ -153,7 +153,7 @@ scenario(
     const originalNavy = await computed(page, 'p.shorthand', 'backgroundColor')
     const originalOutline = await computed(page, 'p.outlined', 'outlineColor')
     const originalBorders = await computed(page, 'p.bordered', 'borderTopColor')
-    const originalNested = await computed(page, 'p.outer, p.outer-media', 'color')
+    const originalNested = await computed(page, 'p.outer, p.outer-media, span.inner', 'color')
     await paint(page, invalid, 'dark')
     t.equal(
       [originalBlue, await computed(page, 'p.kept', 'color')],
@@ -171,10 +171,10 @@ scenario(
       'a border width a browser drops (-1e-50px, or 1e-50 with no unit) leaves the red border before it in effect, in both schemes',
     )
     t.equal(
-      [originalNested, await computed(page, 'p.outer, p.outer-media', 'color')],
+      [originalNested, await computed(page, 'p.outer, p.outer-media, span.inner', 'color')],
       [
-        ['rgb(0, 0, 255)', 'rgb(255, 0, 0)'],
-        ['rgb(0, 0, 255)', 'rgb(255, 0, 0)'],
+        ['rgb(0, 0, 255)', 'rgb(255, 0, 0)', 'rgb(255, 0, 0)'],
+        ['rgb(0, 0, 255)', 'rgb(255, 0, 0)', 'rgb(255, 0, 0)'],
       ],
       'rules nested in a style rule paint as the sender wrote them, in both schemes: the core reads and wraps nothing in them',
     )

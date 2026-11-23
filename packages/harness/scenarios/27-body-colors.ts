@@ -41,8 +41,9 @@ const INVALID_SHOWN = [
   '<p style="border-color:red red red red red;text-decoration:underline underline #cc0000">Five colors, two underlines</p>',
   '<p class="bordered" style="border:1px solid var(<prefix>color-4, #cc0000);border:-1e-50px solid #0000cc">Red past a negative width</p>',
   '<p class="bordered" style="border:1px solid var(<prefix>color-4, #cc0000);border:1e-50 solid #0000cc">Red past a unitless width</p>',
-  '<style>.outer{span:hover{color:#ff0000} color:#0000ff}.outer-media{@media all{color:#ff0000;span{color:#ff0000}}}</style>',
+  '<style>.outer{span:hover{color:#ff0000} color:#0000ff}.outer-media{@media all{color:#ff0000;span{color:#ff0000}}}.outer-class{.inner{color:#ff0000}}</style>',
   '<p class="outer as-written">Nested rule</p><p class="outer-media as-written">Nested media</p>',
+  '<p class="outer-class"><span class="inner as-written">Nested class</span></p>',
 ].join('')
 
 const INVALID_PALETTE = [
