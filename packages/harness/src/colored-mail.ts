@@ -35,6 +35,8 @@ export const LUMEN_HTML = [
   '</table></td></tr></table>',
   '<p style="color:#6b716f">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
   ' <span style="color:rgba(0,0,0,.35)">Lumen Media, Bristol</span></p>',
+  // Values that call var(), which the pass wraps: the color names in their url() and string stay.
+  `<p style="background:var(--sender-bg, url(cid:red) #12423d)">Lumen</p><p style="color:var(--note, 'red')">Note</p>`,
   '</body>',
 ].join('')
 

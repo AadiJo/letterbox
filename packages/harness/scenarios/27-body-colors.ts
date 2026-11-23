@@ -116,6 +116,7 @@ const LUMEN_SHOWN = [
   '</table></td></tr></table>',
   '<p style="color:var(<prefix>color-3, #6b716f)">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
   ' <span style="color:var(<prefix>color-11, rgba(0,0,0,.35))">Lumen Media, Bristol</span></p>',
+  `<p style="background:var(--sender-bg, url(cid:red) var(<prefix>color-5, #12423d))">Lumen</p><p style="color:var(--note, 'red')">Note</p>`,
   '</body>',
 ].join('')
 
