@@ -52,4 +52,5 @@ export const many: DevSeed = {
   },
   delivery: (n) => message(COUNT + n, NOW),
   conversations: [],
+  images: [],
 }

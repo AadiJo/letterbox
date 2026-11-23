@@ -12,6 +12,8 @@ import { Attachments } from './Attachments.tsx'
 import { Avatar } from './Avatar.tsx'
 import { Body } from './Body.tsx'
 import { useLost } from './core.ts'
+import { useShowImagesKey } from './images.ts'
+import { ImagesChip } from './ImagesChip.tsx'
 import { cx } from './cx.ts'
 import { useNow } from './clock.ts'
 import { rangeFor } from './MailScreen.tsx'
@@ -275,11 +277,13 @@ function Dotted({ parts }: { parts: readonly ReactNode[] }) {
 
 /**
  * A conversation's newest message, open: the sender's mark, the subject in the name's place,
- * then the body and its files, which open and save as they do in the conversation reader.
+ * the address line with its images chip (I shows them), then the body and its files, which open
+ * and save as they do in the conversation reader.
  */
 function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary; now: number }) {
   const thread = useThreadDetail(id)
   const message = thread?.messages.at(-1)
+  useShowImagesKey(message)
   if (!thread || !message) return null
   return (
     <section className="border-b border-line pt-5 pb-[26px]" data-message="open">
@@ -294,11 +298,14 @@ function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary;
               {messageTime(message.sentAt, now)}
             </span>
           </div>
-          <div className="truncate text-addr text-muted">{message.from.address} · to you</div>
+          <div className="flex min-w-0 items-center gap-1.5 text-addr text-muted">
+            <span className="truncate">{message.from.address} · to you</span>
+            <ImagesChip message={message} />
+          </div>
         </div>
       </div>
       <div className="mt-[18px]">
-        <Body body={message.body} />
+        <Body id={message.id} body={message.body} />
         {/* Its files can be fetched only once the provider holds the message. */}
         <Attachments attachments={message.attachments} held={message.delivery === null} />
       </div>

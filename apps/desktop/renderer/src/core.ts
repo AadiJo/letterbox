@@ -7,7 +7,7 @@
 import { createClient, type Subscription, type Transport } from '@letterbox/client'
 import { messagePortTransport, shellPort, type ShellBridge } from '@letterbox/client/message-port'
 import { webSocketTransport } from '@letterbox/client/websocket'
-import type { ChangeId, Command, Queries, Query } from '@letterbox/protocol'
+import type { ChangeId, Command, Queries, Query, Request, RequestId, Requests } from '@letterbox/protocol'
 import { useState, useSyncExternalStore } from 'react'
 
 type View = keyof Queries
@@ -51,11 +51,36 @@ const randomId = () => Array.from(crypto.getRandomValues(new Uint32Array(4)), (p
 /** Change ids must differ across restarts too, so they are random, not counted. */
 const newId = (kind: 'sub' | 'req' | 'change') => `${kind}-${randomId()}`
 
+/** Where each request this page started with `requestBytes` takes its `chunk` messages, by request id. */
+const chunkTakers = new Map<RequestId, (data: string) => void>()
+
 export const client = createClient(transport, {
   newId,
-  // Nothing in this renderer waits for a message no request asked for yet.
-  unclaimed: () => {},
+  // Nothing in this renderer waits for a message no request asked for yet. A chunk goes to
+  // the request it belongs to, if this page is collecting its bytes.
+  unclaimed: (message) => {
+    if (message.kind === 'chunk') chunkTakers.get(message.id)?.(message.data)
+  },
 })
+
+type Method = keyof Requests
+
+/**
+ * Sends `request` and collects the base64 `chunk` messages that come before its response, as
+ * the core answers `image` (and `attachment`). Resolves with the response and the chunks in
+ * order. The transport hands messages over after `send` returns, so the taker is in place before
+ * the first chunk can arrive.
+ */
+export async function requestBytes<M extends Method>(request: Extract<Request, { method: M }>) {
+  const { id, done } = client.begin(request)
+  const chunks: string[] = []
+  chunkTakers.set(id, (data) => chunks.push(data))
+  try {
+    return { response: await done, chunks }
+  } finally {
+    chunkTakers.delete(id)
+  }
+}
 
 /**
  * Sends `command` and hands back its change id at once, with the core's answer to come. For a

@@ -5,6 +5,8 @@
 // The fake answers name lookups too, at `/.dns/<name>`: a public stand-in address unless the
 // scenario points the name elsewhere, so it can show that a private address is never connected to.
 // A scenario can hold a URL's answer, to act while the core waits for it.
+// The dev host (packages/dev-host) runs one too, serving a dev seed's images, so `pnpm dev`,
+// `pnpm dev:desktop` and the UI check show images through the same fetch path.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 

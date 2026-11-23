@@ -9,11 +9,12 @@ import { type Child, startChild } from './children.ts'
 import { coreProgram, type Paths } from './core.ts'
 
 /**
- * Which core the shell runs: core-sim against the dev host's provider, core-sim against the
- * fake Gmail alone (the Electron check's oauth run), or the app's own over Gmail.
+ * Which core the shell runs: core-sim against the dev host's provider (fetching images from its
+ * fake web, if `web` names one), core-sim against the fake Gmail alone (the Electron check's
+ * oauth run), or the app's own over Gmail.
  */
 export type DesktopCore =
-  | { kind: 'sim'; now: string }
+  | { kind: 'sim'; now: string; web?: string }
   | { kind: 'fake-gmail'; now: string; url: string; redirects: string }
   | { kind: 'gmail'; client: string | undefined }
 
@@ -58,6 +59,7 @@ export function shellEnv(paths: Paths, renderer: string, core: DesktopCore): Rec
     LETTERBOX_CORE_PROGRAM: coreProgram(paths, 'core-sim'),
     LETTERBOX_SIM_SOCKET: paths.socket,
     LETTERBOX_SIM_NOW: core.now,
+    ...(core.web !== undefined && { LETTERBOX_SIM_WEB: core.web }),
   }
 }
 
