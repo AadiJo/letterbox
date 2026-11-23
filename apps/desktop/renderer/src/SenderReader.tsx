@@ -69,6 +69,7 @@ export function SenderReader({ sender, inbox, most, chrome, onMarkRead, onArchiv
             type="button"
             disabled={lost || !sender}
             onClick={() => sender && onArchive(sender)}
+            aria-label={sender ? `Archive all ${sender.threads} conversations` : 'Archive all'}
             className={outlined}
           >
             <Archive className="size-4" strokeWidth={1.75} aria-hidden />

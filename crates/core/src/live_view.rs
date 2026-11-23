@@ -184,6 +184,7 @@ impl LiveView {
                 account_id,
                 mailbox_id,
                 zone,
+                address,
                 offset,
                 limit,
             } => {
@@ -194,6 +195,7 @@ impl LiveView {
                 };
                 LiveView::Senders(Box::new(Senders::open(
                     filter,
+                    address.as_deref().map(str::to_lowercase),
                     zone_of(zone.as_deref()),
                     (*offset, limit.get()),
                     rows,

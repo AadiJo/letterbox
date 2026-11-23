@@ -34,11 +34,30 @@ import { createWindow, lockNavigation, pageOrigin, registerScheme, serveRenderer
 
 /**
  * Opens a page in the browser: a sign-in page from the core, or a page the person chose, such
- * as a sender's unsubscribe page. Only https: anything else stays shut.
+ * as a sender's unsubscribe page. Only https, and never with a user name or password in it,
+ * which the browser would send: anything else stays shut. True when it opened.
  */
 const openUrl = (url: string) => {
-  if (URL.parse(url)?.protocol !== 'https:') return log('refused to open a url that is not https')
+  const parsed = URL.parse(url)
+  if (parsed?.protocol !== 'https:') return void log('refused to open a url that is not https')
+  if (parsed.username !== '' || parsed.password !== '')
+    return void log('refused to open a url with a user name or password')
   void shell.openExternal(url)
+  return true
+}
+
+/** How often the page may open pages: one a second, and PAGES_A_MINUTE in any minute. */
+const PAGE_GAP_MS = 1000
+const PAGES_A_MINUTE = 5
+
+/** When the page last opened pages, newest last, within the past minute. */
+const pagesOpened: number[] = []
+
+/** True when the page may open another page now, by the limits above. */
+function pageAllowed(now: number) {
+  while (pagesOpened.length > 0 && now - (pagesOpened[0] ?? now) >= 60_000) pagesOpened.shift()
+  const last = pagesOpened.at(-1)
+  return pagesOpened.length < PAGES_A_MINUTE && (last === undefined || now - last >= PAGE_GAP_MS)
 }
 
 const dropped = () => log('dropped a core request from a page that has since reloaded or closed')
@@ -163,9 +182,13 @@ if (!read.ok) {
   attachments('attachment:open', openAttachment)
 
   // A page the person chose to open, as a sender's unsubscribe page. Only our own page may ask.
+  // At most one a second and a few a minute, so a page gone wrong cannot flood the browser.
   ipcMain.on('url:open' satisfies Channel, (event, url: unknown) => {
     if (!ownPage(event)) return log('refused url:open from a frame that is not our page')
-    if (typeof url === 'string' && url.length <= 4096) openUrl(url)
+    if (typeof url !== 'string' || url.length > 4096) return
+    const now = Date.now()
+    if (!pageAllowed(now)) return log('refused url:open: too many pages too fast')
+    if (openUrl(url)) pagesOpened.push(now)
   })
 
   registerScheme()

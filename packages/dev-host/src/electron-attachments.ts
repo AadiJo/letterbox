@@ -130,19 +130,26 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       )
     const bytesOf = (index: number) => sim.mailbox.attachmentBytes(KEY, index)
 
-    // A page the person chose, as an unsubscribe page: main opens https, and nothing else.
+    // A frame that is not our page cannot ask at all. It asks first, so no limit stops it but that.
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.emit('url:open', { sender: null, senderFrame: null }, 'https://elsewhere.example/u')
+    })
+    // A page the person chose, as an unsubscribe page: main opens https with no user name or
+    // password, at most one a second. The last two go together, inside one second.
     await page.evaluate(() => {
       window.letterbox?.openPage('http://plain.example/u')
       window.letterbox?.openPage('file:///etc/hosts')
+      window.letterbox?.openPage('https://member:secret@bramblebooks.example/unsubscribe')
       window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?u=9')
+      window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?u=10')
     })
-    // The page's next ask to main goes after those three, so main has read them once it answers.
+    // The page's next ask to main goes after those, so main has read them once it answers.
     // A blob id too long to be one is answered at once, with no dialog.
     await open('x'.repeat(201) as BlobId)
     equal(
       (await asked()).external,
       ['https://bramblebooks.example/unsubscribe?u=9'],
-      'pages: main opens a page the person chose only when it is https',
+      'pages: main opens only an https page with no user name or password, one a second, and only for our page',
     )
 
     const target = join(saved, 'chosen.pdf')

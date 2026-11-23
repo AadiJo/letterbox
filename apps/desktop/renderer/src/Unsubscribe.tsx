@@ -1,36 +1,40 @@
 // Unsubscribe A: an outlined Unsubscribe beside Archive all in a sender's toolbar and before
 // Search in a conversation's, ⇧U, and a third button on a hovered Updates row. Each opens one
-// confirm, a float under the toolbar's button. Once confirmed, the button and the row say where
-// it has got, from the sender's Updates row: "Unsubscribing" while held or sending,
-// "Unsubscribed" once done, or a button that opens the sender's page when only that is left.
-// The toast says the same, with Undo while held and Archive all once done (unsubscribe.ts).
+// confirm, a float under the toolbar's button, pinned to the message it opened on. Once
+// confirmed, the button and the row say where it has got, from the sender's Updates row:
+// "Unsubscribing" while held or sending, with Undo while held, "Unsubscribed" once done, or a
+// button that opens the sender's page when only that is left. The toast says the same, with
+// Undo while held and Archive all once done (unsubscribe.ts).
 
-import type { SenderSummary, ThreadId, Unsubscribed } from '@letterbox/protocol'
+import type { MailboxId, SenderSummary, ThreadId, Unsubscribed } from '@letterbox/protocol'
 import { Archive, CircleCheck, Clock, ExternalLink, Info, MailX, Zap } from 'lucide-react'
-import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type CSSProperties, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Mail } from './actions.ts'
 import { useSecondsUntil } from './clock.ts'
 import { useLost } from './core.ts'
 import { cx } from './cx.ts'
 import { Key, shifted } from './Key.tsx'
-import { actOnSender } from './sender-actions.ts'
 import { useThreadDetail } from './threads.ts'
 import { Frame } from './Toast.tsx'
 import { Tooltip } from './Tooltip.tsx'
 import {
+  closeConfirm,
   type ConfirmPlace,
   hostOf,
   howItGoes,
+  observed,
+  openConfirm,
   openUnsubscribePage,
-  reachedEnd,
-  setConfirming,
   type Target,
   targetIn,
+  undoUnsubscribe,
   unsubscribe,
   UNSUBSCRIBE_KEY,
   useConfirming,
+  usePending,
   useSenderRow,
   useTracked,
+  whatItTells,
 } from './unsubscribe.ts'
 
 /** How far the confirm keeps from the reader's edges. */
@@ -48,13 +52,28 @@ type ControlProps = {
   tooltip: boolean
 }
 
+/** Whether two targets are the same sender. */
+const sameSender = (a: Target, b: Target) =>
+  a.accountId === b.accountId && a.address.toLowerCase() === b.address.toLowerCase()
+
 /** The toolbar's Unsubscribe, its confirm, and what it says once confirmed. */
 function Control({ place, target, row, tooltip }: ControlProps) {
   const lost = useLost() !== null
-  const open = useConfirming(place)
+  const confirming = useConfirming(place)
+  const pending = usePending(target)
   const trigger = useRef<HTMLButtonElement>(null)
   const state = row?.unsubscribed ?? null
+  const blocked = lost || pending || state !== null
+  // A request to open (⇧U, a row's button) pins the target this button has now. A confirm
+  // pinned to another sender, as when the selection moved, or one this button cannot start, closes.
+  useEffect(() => {
+    if (!confirming) return
+    if (blocked) return closeConfirm()
+    if (confirming.target === null) openConfirm(place, target)
+    else if (!sameSender(confirming.target, target)) closeConfirm()
+  }, [confirming, blocked, place, target])
   if (state) return <Where state={state} />
+  const open = confirming?.target ?? null
   const label = `Unsubscribe from ${target.sender}`
   const button = (describedBy?: string) => (
     <button
@@ -63,11 +82,11 @@ function Control({ place, target, row, tooltip }: ControlProps) {
       aria-label={label}
       aria-describedby={describedBy}
       aria-keyshortcuts="Shift+U"
-      aria-expanded={open}
+      aria-expanded={open !== null}
       data-field="unsubscribe"
-      disabled={lost}
-      onClick={() => setConfirming(open ? null : place)}
-      className={cx(OUTLINED, open && 'bg-hover', lost && 'opacity-40')}
+      disabled={blocked}
+      onClick={() => (open ? closeConfirm() : openConfirm(place, target))}
+      className={cx(OUTLINED, open && 'bg-hover', lost && 'opacity-40', pending && 'disabled:text-faint')}
     >
       <MailX className="size-4" strokeWidth={1.75} aria-hidden />
       {/* A narrow window shows the mark alone. */}
@@ -86,9 +105,9 @@ function Control({ place, target, row, tooltip }: ControlProps) {
       )}
       {open && (
         <Confirm
-          target={target}
+          target={open}
           close={(refocus) => {
-            setConfirming(null)
+            closeConfirm()
             if (refocus) trigger.current?.focus()
           }}
         />
@@ -97,28 +116,38 @@ function Control({ place, target, row, tooltip }: ControlProps) {
   )
 }
 
-/** Where a confirmed unsubscribe has got, in the toolbar's button's place. */
+const MUTED = 'inline-flex h-8 items-center gap-1.5 px-2 text-row font-medium whitespace-nowrap text-muted'
+
+/** Where a confirmed unsubscribe has got, in the toolbar's button's place. Undo comes only from the core's held state. */
 function Where({ state }: { state: Unsubscribed }) {
   switch (state.state) {
     case 'held':
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span className={MUTED} data-field="unsubscribe-state" data-state="held">
+            <Clock className="size-4" strokeWidth={1.75} aria-hidden />
+            Unsubscribing
+          </span>
+          <button
+            type="button"
+            data-field="unsubscribe-undo"
+            onClick={() => void undoUnsubscribe(state.change)}
+            className="inline-flex h-7 items-center rounded-lg px-2.5 text-row font-medium text-fg2 hover:bg-hover hover:text-fg"
+          >
+            Undo
+          </button>
+        </span>
+      )
     case 'sending':
       return (
-        <span
-          className="inline-flex h-8 items-center gap-1.5 px-2 text-row font-medium whitespace-nowrap text-muted"
-          data-field="unsubscribe-state"
-          data-state={state.state}
-        >
+        <span className={MUTED} data-field="unsubscribe-state" data-state="sending">
           <Clock className="size-4" strokeWidth={1.75} aria-hidden />
           Unsubscribing
         </span>
       )
     case 'done':
       return (
-        <span
-          className="inline-flex h-8 items-center gap-1.5 px-2 text-row font-medium whitespace-nowrap text-muted"
-          data-field="unsubscribe-state"
-          data-state="done"
-        >
+        <span className={MUTED} data-field="unsubscribe-state" data-state="done">
           <CircleCheck className="size-4 text-green" strokeWidth={1.75} aria-hidden />
           Unsubscribed
         </span>
@@ -140,8 +169,9 @@ function Where({ state }: { state: Unsubscribed }) {
 }
 
 /**
- * The confirm, under its button: what unsubscribing tells the sender, how the request goes
- * out, and Cancel (Esc) and Unsubscribe (↵). It keeps inside the reader's visible part.
+ * The confirm, under its button, for the target pinned as it opened: what unsubscribing tells
+ * the sender, how the request goes out, and Cancel (Esc) and Unsubscribe (↵). Tab stays inside
+ * it, and the reader's shortcuts wait while it is up. It keeps inside the reader.
  */
 function Confirm({ target, close }: { target: Target; close: (refocus: boolean) => void }) {
   const box = useRef<HTMLDivElement>(null)
@@ -171,7 +201,7 @@ function Confirm({ target, close }: { target: Target; close: (refocus: boolean) 
       const outside = event.target instanceof Node && !box.current?.parentElement?.contains(event.target)
       if (outside) close(false)
     }
-    const escape = (event: KeyboardEvent) => {
+    const escape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.stopPropagation()
       close(true)
@@ -183,18 +213,30 @@ function Confirm({ target, close }: { target: Target; close: (refocus: boolean) 
       window.removeEventListener('keydown', escape, true)
     }
   }, [close])
+  /** Tab and Shift+Tab go round its buttons and never leave it. */
+  const trap = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab') return
+    const buttons = [...(box.current?.querySelectorAll('button') ?? [])]
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    const next = buttons[(at + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length]
+    event.preventDefault()
+    next?.focus()
+  }
   return (
     <div
       ref={box}
       role="dialog"
+      aria-modal="true"
       aria-label={`Unsubscribe from ${target.sender}?`}
       data-field="unsubscribe-confirm"
+      data-message={target.messageId}
+      onKeyDown={trap}
       style={shift ?? undefined}
       className="absolute top-10 left-0 z-30 w-[348px] rounded-xl bg-float px-4 pt-4 pb-3 whitespace-normal shadow-float"
     >
       <h4 className="text-subject font-semibold text-fg">Unsubscribe from {target.sender}?</h4>
-      <p className="mt-1.5 text-cite text-fg2">
-        This tells {target.sender} that {target.me} is read by a person. Most senders stop within a few days.
+      <p className="mt-1.5 text-cite text-fg2" data-field="unsubscribe-tells">
+        {whatItTells(target)}
       </p>
       <p className="mt-2.5 flex items-start gap-1.5 text-meta text-muted" data-field="unsubscribe-how">
         <Zap className="mt-0.5 size-[13px] flex-none" strokeWidth={1.75} aria-hidden />
@@ -204,7 +246,7 @@ function Confirm({ target, close }: { target: Target; close: (refocus: boolean) 
         <button
           type="button"
           onClick={() => close(true)}
-          className="inline-flex h-7 items-center gap-2 rounded-lg pr-[5px] pl-2.5 text-row font-medium text-muted hover:bg-hover hover:text-fg"
+          className="inline-flex h-7 items-center gap-2 rounded-lg pr-[5px] pl-2.5 text-row font-medium text-muted outline-none hover:bg-hover hover:text-fg focus-visible:bg-hover"
         >
           Cancel
           <Key>Esc</Key>
@@ -265,19 +307,22 @@ export function RowUnsubscribed({ state }: { state: Unsubscribed }) {
   )
 }
 
+/** Archives all of a sender's conversations from the toast: the screen's own Archive all, so its selection moves on as the toolbar's does. */
+export type ArchiveAll = (row: SenderSummary, inbox: MailboxId) => void
+
 /**
  * The toast for the followed unsubscribe, from its sender's row: Undo with the seconds left
  * while held, quiet while sending, then "Unsubscribed" with Archive all, or the page to open.
  */
-export function UnsubscribeToast({ mail, onUndo }: { mail: Mail; onUndo: () => Promise<void> }) {
+export function UnsubscribeToast({ onUndo, onArchiveAll }: { onUndo: () => Promise<void>; onArchiveAll: ArchiveAll }) {
   const followed = useTracked()
   if (!followed) return null
   return (
     <Followed
       key={`${followed.target.messageId} ${followed.change ?? ''}`}
       followed={followed}
-      mail={mail}
       onUndo={onUndo}
+      onArchiveAll={onArchiveAll}
     />
   )
 }
@@ -289,14 +334,15 @@ const icon = (Glyph: typeof Clock, tone = 'text-fg2') => (
   <Glyph className={`size-[17px] ${tone}`} strokeWidth={2} aria-hidden />
 )
 
-function Followed({ followed, mail, onUndo }: { followed: Followed; mail: Mail; onUndo: () => Promise<void> }) {
+type FollowedProps = { followed: Followed; onUndo: () => Promise<void>; onArchiveAll: ArchiveAll }
+
+function Followed({ followed, onUndo, onArchiveAll }: FollowedProps) {
   const { target, change, failed } = followed
   const row = useSenderRow(target.inbox, target.accountId, target.address)
   const state = row?.unsubscribed?.change === change ? row?.unsubscribed : null
-  const over = state?.state === 'done' || state?.state === 'page'
   useEffect(() => {
-    if (over && change) reachedEnd(change)
-  }, [over, change])
+    if (state && change) observed(target, change, state.state)
+  }, [target, change, state])
   const ghost = 'inline-flex h-[30px] items-center gap-2 rounded-lg pr-2 pl-2.5 text-fg hover:bg-hover'
   const rule = <span aria-hidden className="mx-0.5 h-[18px] w-px bg-hover" />
   if (failed)
@@ -316,11 +362,7 @@ function Followed({ followed, mail, onUndo }: { followed: Followed; mail: Mail; 
         {row && row.threads > 0 && (
           <>
             {rule}
-            <button
-              type="button"
-              className={ghost}
-              onClick={() => void actOnSender(row, 'archive', target.inbox, mail)}
-            >
+            <button type="button" className={ghost} onClick={() => onArchiveAll(row, target.inbox)}>
               <Archive className="size-[15px]" strokeWidth={1.75} aria-hidden />
               Archive all {row.threads}
             </button>
@@ -341,17 +383,14 @@ function Followed({ followed, mail, onUndo }: { followed: Followed; mail: Mail; 
         </button>
       </Frame>
     )
-  if (state?.state === 'sending')
-    return (
-      <Frame undo="none" onUndo={onUndo}>
-        {icon(Clock)}
-        <span data-field="toast">Unsubscribing from {target.sender}…</span>
-      </Frame>
-    )
+  // Undo only once the core's row says it holds it, under this change.
   return (
-    <Frame undo={change ? 'ready' : 'waiting'} onUndo={onUndo}>
+    <Frame undo={state?.state === 'held' ? 'ready' : 'none'} onUndo={onUndo}>
       {icon(Clock)}
-      <span data-field="toast">Unsubscribing from {target.sender}</span>
+      <span data-field="toast">
+        Unsubscribing from {target.sender}
+        {state?.state === 'held' ? '' : '…'}
+      </span>
       {state?.state === 'held' && <Left until={state.until} />}
     </Frame>
   )

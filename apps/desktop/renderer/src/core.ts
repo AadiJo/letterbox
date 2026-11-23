@@ -38,6 +38,8 @@ const transport: Transport = {
       receive: listener.receive,
       end: (error) => {
         listener.end(error)
+        // No `settled` comes now, so every wait for one ends with none.
+        for (const take of settledTakers.values()) take(null)
         lost = error.message
         console.error('lost the core:', error)
         for (const watcher of lostWatchers) watcher()
@@ -53,8 +55,8 @@ const newId = (kind: 'sub' | 'req' | 'change') => `${kind}-${randomId()}`
 
 /** Where each request this page started with `requestBytes` takes its `chunk` messages, by request id. */
 const chunkTakers = new Map<RequestId, (data: string) => void>()
-/** Who waits for each change's `settled` (`commandSettled`), by change id. */
-const settledTakers = new Map<ChangeId, (result: ChangeResult) => void>()
+/** Who waits for each change's `settled` (`commandSettled`), by change id. Null ends a wait with no result. */
+const settledTakers = new Map<ChangeId, (result: ChangeResult | null) => void>()
 
 export const client = createClient(transport, {
   newId,
@@ -99,15 +101,18 @@ export function command(sent: Command, change?: ChangeId) {
 
 /**
  * Sends `sent` as `command` does, and also waits for the core's last word on it: the answer, and
- * a promise of its `settled` result, which never resolves for a refused command or once the
- * connection ends. The wait is in place before the command goes, so no `settled` comes unheard.
+ * a promise of its `settled` result. That is null for a command the core refused, which never
+ * settles, and once the connection ends. The wait is in place before the command goes, so no
+ * `settled` comes unheard, and it is gone once it ends.
  */
 export function commandSettled(sent: Command) {
   const change = newId('change') as ChangeId
-  const settled = new Promise<ChangeResult>((resolve) => settledTakers.set(change, resolve)).finally(() =>
+  const settled = new Promise<ChangeResult | null>((resolve) => settledTakers.set(change, resolve)).finally(() =>
     settledTakers.delete(change),
   )
   const answer = client.command(sent, change)
+  const none = () => settledTakers.get(change)?.(null)
+  answer.then((first) => first.kind === 'rejected' && none(), none)
   return { change, answer, settled }
 }
 

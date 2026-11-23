@@ -53,8 +53,8 @@ export const PEOPLE_MUTATIONS: Mutation[] = [
   {
     name: 'Updates keeps conversations archived out of its mailbox',
     file: core('senders.rs'),
-    find: 'let Some(sender) = listed.sender.as_ref().filter(|_| matches(listed, &self.filter)) else {',
-    replace: 'let Some(sender) = listed.sender.as_ref() else {',
+    find: '            matches(listed, &self.filter)\n                && self',
+    replace: '            true\n                && self',
     scenarios: 'Updates groups',
   },
   {
