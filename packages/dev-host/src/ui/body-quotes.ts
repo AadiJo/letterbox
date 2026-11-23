@@ -138,8 +138,9 @@ export async function checkStatement(page: Page, relay: Relay) {
     [
       'On Sat, Feb 28, 2026, Harbour Lane Accounts <statements@harbourlane.example> wrote: Your January statement is ready. The balance is €0.00.',
       0,
-      ['rgb(120, 40, 40)'],
-      ['rgb(0, 0, 200)'],
+      // Dark, as every sender starts: the dark values of the sender's #782828 and its later blue, #0000c8.
+      ['rgb(255, 186, 181)'],
+      ['rgb(189, 211, 255)'],
       false,
       0,
       true,

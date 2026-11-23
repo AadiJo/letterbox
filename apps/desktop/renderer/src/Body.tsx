@@ -1,11 +1,14 @@
 // One message's body. Plain text shows as text. HTML is hostile input (protocol.Body), so it
 // shows in a sandboxed iframe that cannot run script or reach the network. Remote images wait
 // as one-line placeholders until the user shows them (ImagesChip.tsx), and then come from the
-// core (images.ts). Quoted history at the end folds behind one line (pick B).
+// core (images.ts). Quoted history at the end folds behind one line (pick B). Dark, the HTML is
+// restyled for the reader with the core's palette, and a person's plain HTML takes the reader's
+// type; Original, it shows the sender's own colors on a dimmed card (colors.ts, pick C).
 
-import type { Body as MessageBody, Images, MessageId, Quote } from '@letterbox/protocol'
+import type { Colors, ColorScheme, HtmlLook, Body as MessageBody, Images, MessageId, Quote } from '@letterbox/protocol'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
+import { bindColors } from './colors.ts'
 import { cx } from './cx.ts'
 import { frameDom } from './frame-dom.ts'
 import { bindImages, useImageUrls } from './images.ts'
@@ -25,25 +28,69 @@ const IMAGE_OFF =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 2l20 20M10.41 10.41a2 2 0 1 1-2.83-2.83M13.5 13.5 6 21M18 12l3 3M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59M21 15V5a2 2 0 0 0-2-2H9'/%3E%3C/svg%3E"
 
 /**
- * The frame's own styles: its light page, and a blocked image's placeholder, one 30 px line with
- * the image-off mark and the image's alt text, or "Image" when it has none (protocol `Images`).
- * Its colors are raw: the frame is its own light document, which the app's tokens never reach.
+ * A blocked image's placeholder, one 30 px line with the image-off mark and the image's alt text,
+ * or "Image" when it has none (protocol `Images`), in the colors `LIGHT` or `DARK` give it. It
+ * is the reader's own, so it is no layer's: the sender's rules never reach it.
  */
-const FRAME_STYLE =
-  'html{color-scheme:light}body{margin:0;padding:16px;font:15px/23px -apple-system,system-ui,sans-serif;color:#1d1d1f;overflow-wrap:anywhere}img{max-width:100%;height:auto}' +
-  'span[data-letterbox-image]{display:inline-flex;box-sizing:border-box;max-width:100%;height:30px;align-items:center;gap:8px;overflow:hidden;border-radius:7px;background:#f1f1f2;box-shadow:inset 0 0 0 1px rgb(0 0 0 / 7%);padding:0 12px 0 10px;font:400 12.5px/18px -apple-system,system-ui,sans-serif;letter-spacing:normal;text-transform:none;color:#76767b;white-space:nowrap;vertical-align:middle}' +
+const PLACEHOLDER =
+  'img{max-width:100%;height:auto}' +
+  'span[data-letterbox-image]{display:inline-flex;box-sizing:border-box;max-width:100%;height:30px;align-items:center;gap:8px;overflow:hidden;border-radius:7px;padding:0 12px 0 10px;font:400 12.5px/18px -apple-system,system-ui,sans-serif;letter-spacing:normal;text-transform:none;white-space:nowrap;vertical-align:middle}' +
   `span[data-letterbox-image]::before{content:"";flex:none;width:14px;height:14px;background:currentColor;-webkit-mask:url("${IMAGE_OFF}") center/14px no-repeat;mask:url("${IMAGE_OFF}") center/14px no-repeat}` +
   'span[data-letterbox-image]:empty::after{content:"Image"}'
+
+/**
+ * The frame's own styles, for each scheme. Its colors are raw: the frame is its own document,
+ * which the app's tokens never reach. Original is the sender's light page, as it was before pick
+ * C. Dark is the reader's page, text and links (`--color-reader`, `--color-prose`, the mocks'
+ * link blue) in an anonymous cascade layer declared before the HTML, as protocol `Colors` asks,
+ * so every rule of the sender's and the core's color attribute rules win over them.
+ */
+const LIGHT =
+  'html{color-scheme:light}body{margin:0;padding:16px;font:15px/23px -apple-system,system-ui,sans-serif;color:#1d1d1f;overflow-wrap:anywhere}' +
+  PLACEHOLDER +
+  'span[data-letterbox-image]{background:#f1f1f2;box-shadow:inset 0 0 0 1px rgb(0 0 0 / 7%);color:#76767b}'
+const DARK =
+  '@layer{html{color-scheme:dark;background:#1b1b1e}body{margin:0;padding:0;font:15px/23px -apple-system,system-ui,sans-serif;color:#e4e4e4;overflow-wrap:anywhere}a:link,a:visited{color:#7aa7f7}}' +
+  PLACEHOLDER +
+  'span[data-letterbox-image]{background:rgb(255 255 255 / 4%);box-shadow:inset 0 0 0 1px rgb(255 255 255 / 6%);color:#a3a3a3}'
+
+/**
+ * A person's plain HTML, dark (`HtmlLook` `simple`), in the reader's own type and colors: 16/26
+ * prose at 62 characters, links in the reader's blue, tables at 14/20 with 12/16 heads and
+ * hairlines, and a light plate under images so a transparent logo still shows. It overrides the
+ * sender's own type and colors, so it is no layer's and wins with `!important`. The frame cannot
+ * load the app's Inter (its policy loads fonts only from `data:`), so it takes the system's face.
+ */
+const SIMPLE =
+  "body{max-width:62ch;font-family:'Inter Variable',-apple-system,system-ui,sans-serif!important;font-size:16px!important;line-height:26px!important;color:#e4e4e4!important;background:transparent!important}" +
+  'body :where(:not([data-letterbox-image])){font-family:inherit!important;font-size:inherit!important;line-height:inherit!important;color:inherit!important;background-color:transparent!important;border-color:rgb(255 255 255 / 6%)!important}' +
+  'body a:link,body a:visited{color:#7aa7f7!important}' +
+  'body table{border-collapse:collapse;margin:4px 0 20px}' +
+  'body th,body td{padding:9px 16px 9px 0;border:0 solid!important;border-bottom-width:1px!important;text-align:left;font-size:14px!important;line-height:20px!important;color:#d2d2d2!important}' +
+  'body th{font-size:12px!important;line-height:16px!important;font-weight:600;color:#a3a3a3!important}' +
+  'body img{border-radius:5px;background:#e9e7e1}'
+
+/**
+ * The frame's styles for a scheme and a look. A person's plain HTML takes the reader's type only
+ * when dark. In the sender's own colors, designed mail fills its card to the edge, as its page
+ * does, and a person's keeps the frame's margin.
+ */
+const frameStyle = (scheme: ColorScheme, look: HtmlLook) => {
+  if (scheme === 'original') return look === 'branded' ? `${LIGHT}body{padding:0}` : LIGHT
+  return look === 'simple' ? DARK + SIMPLE : DARK
+}
 
 /**
  * The document an HTML body renders in. The policy comes first, so nothing in the body loads
  * before it applies, and DNS prefetching is off, so no hostname in it is looked up ahead. Links default to a new window, which the sandbox refuses, so a click
  * leaves the frame on this document. A link that names its own target is stopped by the
  * app page's `frame-src 'none'` (index.html): the frame shows an error page, and nothing loads.
+ * Its own styles come before the HTML, so the dark defaults' layer is declared before any of the
+ * sender's and before the core's color attribute rules (protocol `Colors`).
  */
-const htmlDocument = (html: string) =>
+const htmlDocument = (html: string, scheme: ColorScheme, look: HtmlLook) =>
   `<!doctype html><meta http-equiv="Content-Security-Policy" content="${POLICY}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><base target="_blank">` +
-  `<style>${FRAME_STYLE}</style>` +
+  `<style>${frameStyle(scheme, look)}</style>` +
   html
 
 const UNAVAILABLE = {
@@ -86,7 +133,7 @@ export function Body({ id, body }: { id: MessageId; body: MessageBody }) {
     // The new part is a prefix the core cut before an element, which the browser closes by itself.
     // HTML that cannot fold shows whole, with no line.
     const cut = folds ? htmlCut : null
-    const frame = { images: body.images, urls, prefix: body.cssPrefix }
+    const frame = { images: body.images, urls, prefix: body.cssPrefix, colors: body.colors }
     return (
       <>
         <HtmlBody {...frame} title="Message" html={cut === null ? body.html : body.html.slice(0, cut)} />
@@ -140,39 +187,63 @@ type HtmlProps = {
   html: string
   images: Images
   urls: ReadonlyMap<number, string>
-  /** The body's `cssPrefix`, which names its CSS images. */
+  /** The body's `cssPrefix`, which names its CSS images and its colors. */
   prefix: string
+  /** How to color the HTML: its sender's scheme, its look and its palette. */
+  colors: Colors | null
   /** Runs on each document the frame loads, before it is measured. */
   prepare?: (doc: Document) => void
 }
 
-function HtmlBody({ title, html, images, urls, prefix, prepare }: HtmlProps) {
+function HtmlBody({ title, html, images, urls, prefix, colors, prepare }: HtmlProps) {
   const [height, setHeight] = useState(0)
   const [frame, setFrame] = useState<Document | null>(null)
-  // Shown images go in as they arrive, and again after the frame loads a new document. The frame
-  // is as tall as its whole document (frame-dom.ts), measured as each document loads and as each
-  // image put in it loads.
+  const scheme = colors?.scheme ?? 'dark'
+  const look = colors?.look ?? 'branded'
+  // Shown images go in as they arrive, and again after the frame loads a new document, and so do
+  // the colors of its scheme. The frame is as tall as its whole document (frame-dom.ts), measured
+  // as each document loads and as each image put in it loads.
   useEffect(() => {
-    if (frame) bindImages(frame, urls, prefix, () => setHeight(frameDom.height(frame)))
-  }, [frame, urls, prefix])
-  return (
+    if (!frame) return
+    bindColors(frame, colors, prefix)
+    bindImages(frame, urls, prefix, () => setHeight(frameDom.height(frame)))
+    setHeight(frameDom.height(frame))
+  }, [frame, urls, prefix, colors])
+  const original = scheme === 'original'
+  const iframe = (
     <iframe
-      // Blocking again needs the placeholders back, so a new choice loads a fresh document.
-      key={images.shown}
+      // Blocking again needs the placeholders back, and a new scheme its own defaults, so either
+      // choice loads a fresh document.
+      key={`${images.shown} ${scheme}`}
       title={title}
       data-field={title === 'Message' ? 'body' : 'quoted-body'}
+      data-scheme={scheme}
+      data-look={look}
+      data-palette={colors?.palette.length ?? 0}
       sandbox="allow-same-origin"
       referrerPolicy="no-referrer"
-      srcDoc={htmlDocument(html)}
+      srcDoc={htmlDocument(html, scheme, look)}
       onLoad={(event) => {
         const document = event.currentTarget.contentDocument
         if (document) prepare?.(document)
+        // The colors go on as the document loads, so no frame paints a moment in the wrong ones.
+        if (document) bindColors(document, colors, prefix)
         setFrame(document)
         setHeight(document ? frameDom.height(document) : 0)
       }}
-      className="block w-full rounded-lg bg-paper"
+      className={cx('block w-full', original ? 'bg-paper' : 'bg-reader')}
       style={{ height }}
     />
+  )
+  if (!original) return iframe
+  // The sender's own colors, on a card dimmed to about 86% and a step less saturated, so a light
+  // page sits in the dark reader. Its ring is drawn over the frame, which an inset shadow on the
+  // frame itself would sit under.
+  return (
+    <div className="relative overflow-hidden rounded-[10px] brightness-86 saturate-92" data-field="original-card">
+      {iframe}
+      <span aria-hidden className="pointer-events-none absolute inset-0 rounded-[10px] shadow-card" />
+    </div>
   )
 }
 

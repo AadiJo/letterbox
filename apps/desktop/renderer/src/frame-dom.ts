@@ -3,7 +3,7 @@
 // `<form name="createElement">` makes `doc.createElement` that form, and an `<input
 // name="setAttribute">` does the same to its form. So nothing here reads a method or a
 // property off the frame's objects: each call goes through the prototype that defines it,
-// with the frame's object as `this`. Body.tsx and images.ts use it.
+// with the frame's object as `this`. Body.tsx, images.ts and colors.ts use it.
 
 /** The getter `name` defines on `prototype`, as a function of the object to read. */
 function getter<Value>(prototype: object, name: string): (target: object) => Value {
@@ -54,6 +54,11 @@ export const frameDom = {
   setProperty: (doc: Document, name: string, value: string) => {
     const root = rootOf(doc)
     if (root) CSSStyleDeclaration.prototype.setProperty.call(styleOf(root), name, value)
+  },
+  /** Takes a custom property off the frame's root element. */
+  removeProperty: (doc: Document, name: string) => {
+    const root = rootOf(doc)
+    if (root) CSSStyleDeclaration.prototype.removeProperty.call(styleOf(root), name)
   },
   /**
    * How tall the frame must be to show its whole document: the root's own height, which takes in
