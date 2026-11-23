@@ -49,8 +49,12 @@ export type ShellBridge = {
   openPage(url: string): Promise<PageOutcome>
 }
 
-/** What main did with a page the person chose to open: opened it, or refused it as too soon after others, or as a URL it opens for no one. */
-export type PageOutcome = 'opened' | 'refused-rate' | 'refused-url'
+/**
+ * What main did with a page the person chose to open: opened it in the browser, refused it as
+ * too soon after others or as a URL it opens for no one, or failed, when the OS could not
+ * start the browser.
+ */
+export type PageOutcome = 'opened' | 'refused-rate' | 'refused-url' | 'failed'
 
 /**
  * Asks the shell for a port to a core and resolves with it. It listens before it asks, so

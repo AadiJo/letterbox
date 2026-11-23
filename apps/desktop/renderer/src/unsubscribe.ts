@@ -7,8 +7,8 @@
 //
 // The core's view of one sender (`useSenderRow`) is the only source of where an unsubscribe has
 // got, for every control: toolbar, row, conversation, ⇧U, the toast and z. A sender with no row
-// in Updates has no control. The renderer keeps only the senders whose command is on its way,
-// and what the toast says. Undo comes only from the view's `held` state and its change, so it is
+// in Updates has no control. The renderer keeps only the senders whose unsubscribe is on its
+// way until their view shows it, and what the toast says. Undo comes only from the view's `held` state and its change, so it is
 // there after a reload too.
 
 import type {
@@ -107,7 +107,7 @@ export const UNSUBSCRIBE_REFUSALS = {
 } as const satisfies Record<Refusal, string>
 
 /** A sender, by account and address: the key of everything kept per sender here. */
-const senderKey = (target: Pick<Target, 'accountId' | 'address'>) =>
+export const senderKey = (target: Pick<Target, 'accountId' | 'address'>) =>
   `${target.accountId} ${target.address.toLowerCase()}`
 
 const watchers = new Set<() => void>()
@@ -118,13 +118,18 @@ const subscribe = (onChange: () => void) => {
 }
 
 /**
- * The senders whose unsubscribe command is on its way: from the confirm until the core accepts
- * or refuses it. This is the only state kept here: once the core accepts, its view of the sender
- * says the rest.
+ * The senders whose unsubscribe is on its way, with its change: from the confirm until the
+ * sender's live view shows that change, or the core refuses or settles it, or ANSWER_MS pass
+ * with no word. The core answers `accepted` before its views move on, so the gap between is
+ * covered too. This is the only state kept here: past it, the core's view of the sender says
+ * the rest.
  */
-const inFlight = new Set<string>()
+const inFlight = new Map<string, ChangeId>()
 
-/** True while an unsubscribe command for `target`'s sender is on its way. */
+/** How long a sender stays in flight at most. Then its view alone decides, and nothing is sent again. */
+const ANSWER_MS = 15_000
+
+/** True while an unsubscribe for `target`'s sender is on its way (`inFlight`). */
 export const useInFlight = (target: Target) => useSyncExternalStore(subscribe, () => inFlight.has(senderKey(target)))
 
 /**
@@ -143,6 +148,8 @@ let shown: Shown | null = null
 let expiry: ReturnType<typeof setTimeout> | undefined
 /** The change the shown toast's view says the core holds now: the only one z and Undo take back. */
 let held: ChangeId | null = null
+/** True once the shown toast's view has shown its change. */
+let seen = false
 
 /** How long the toast stays once its unsubscribe has got where it ends. */
 const OVER_MS = 8000
@@ -152,6 +159,7 @@ function show(next: Shown | null, ends = false) {
   clearTimeout(expiry)
   shown = next
   held = null
+  seen = false
   notify()
   if (next && ends) expiry = setTimeout(() => shown === next && show(null), OVER_MS)
 }
@@ -160,25 +168,61 @@ function show(next: Shown | null, ends = false) {
 const fail = (target: Target, change: ChangeId | null, failed: string) =>
   show({ target, change, failed, serial: noticeSerial() }, true)
 
+/** Opens the live view of `target`'s sender. `shows` resolves once it shows `change`, in any state. */
+function watchFor(target: Target, change: ChangeId) {
+  const { accountId, inbox, address } = target
+  const view = client.subscribe({ view: 'senders', accountId, mailboxId: inbox, address, offset: 0, limit: 1 })
+  const { promise: shows, resolve } = Promise.withResolvers<void>()
+  const look = () => {
+    if (view.latest()?.senders[0]?.unsubscribed?.change === change) resolve()
+  }
+  const unwatch = view.watch(look)
+  look()
+  return {
+    shows,
+    stop: () => {
+      unwatch()
+      view.close()
+    },
+  }
+}
+
 /**
- * Sends the unsubscribe for `target`, unless one for its sender is on its way. The toast follows
- * it. A refusal, or a failure once it settles, says why on the toast, whatever it shows then.
+ * Sends the unsubscribe for `target`, unless one for its sender is on its way. The toast
+ * follows its change from the start. A refusal, or a failure once it settles, says why on the
+ * toast, whatever it shows then, except a conflict over a change the toast already follows.
+ * With no answer in ANSWER_MS, the toast goes and the sender's view decides. It never sends again.
  */
 export async function unsubscribe(target: Target) {
   const key = senderKey(target)
   if (inFlight.has(key)) return
   if (lostReason() !== null) return fail(target, null, 'Lost the connection, so nothing was sent.')
-  inFlight.add(key)
-  const mine: Shown = { target, change: null, failed: null, serial: noticeSerial() }
-  show(mine)
+  const before = shown
   const sent = commandSettled({ kind: 'unsubscribe', messageId: target.messageId })
-  const answer = await sent.answer.catch(() => 'unanswered' as const)
-  inFlight.delete(key)
+  inFlight.set(key, sent.change)
   notify()
-  if (answer === 'unanswered') return fail(target, null, 'Lost the connection. It may or may not have gone through.')
-  // A conflict too: one from this sender is already held, and its view says so in the toolbar.
-  if (answer.kind === 'rejected') return fail(target, null, UNSUBSCRIBE_REFUSALS[answer.reason])
-  if (shown === mine) show({ ...mine, change: sent.change })
+  const mine: Shown = { target, change: sent.change, failed: null, serial: noticeSerial() }
+  show(mine)
+  const watch = watchFor(target, sent.change)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<'late'>((resolve) => (timer = setTimeout(() => resolve('late'), ANSWER_MS)))
+  try {
+    const answer = await Promise.race([sent.answer.catch(() => 'unanswered' as const), late])
+    if (answer === 'late') return void (shown === mine && show(null))
+    if (answer === 'unanswered') return fail(target, null, 'Lost the connection. It may or may not have gone through.')
+    if (answer.kind === 'rejected') {
+      // One from this sender is already on its way: the toast that follows it stays.
+      const following = before && !before.failed && before.change && senderKey(before.target) === key
+      if (answer.reason === 'conflict' && following) return void (shown === mine && show(before))
+      return fail(target, null, UNSUBSCRIBE_REFUSALS[answer.reason])
+    }
+    await Promise.race([watch.shows, sent.settled, late])
+  } finally {
+    clearTimeout(timer)
+    watch.stop()
+    if (inFlight.get(key) === sent.change) inFlight.delete(key)
+    notify()
+  }
   const result = await sent.settled
   if (result === null) {
     if (shown?.change === sent.change)
@@ -189,11 +233,18 @@ export async function unsubscribe(target: Target) {
 
 /**
  * The shown toast's view says its unsubscribe is now `state`, or null when the view shows another
- * change or no row: Undo follows `held` alone, and once it is done or its page is left, the toast
- * stays a while, then goes.
+ * change or no row. Undo follows `held` alone. Once it is done or its page is left, the toast
+ * stays a while, then goes. Once the view has shown it and then loses it, as when its sender's
+ * last conversation leaves the inbox, the toast goes at once, and z with it.
  */
 export function viewed(change: ChangeId, state: Unsubscribed['state'] | null) {
   if (shown?.change !== change || shown.failed) return
+  if (state === null) {
+    held = null
+    if (seen) show(null)
+    return
+  }
+  seen = true
   held = state === 'held' ? change : null
   if (state === 'done' || state === 'page') {
     clearTimeout(expiry)
@@ -249,10 +300,11 @@ export async function openUnsubscribePage(url: string): Promise<PageOutcome> {
   return 'opened'
 }
 
-/** What the page's button says when the shell refused to open it. */
+/** What the page's button says when the shell refused to open it, or the browser did not start. */
 export const PAGE_REFUSALS = {
   'refused-rate': 'Wait a moment, then try again.',
   'refused-url': 'This page can’t be opened.',
+  failed: 'Your browser didn’t open it.',
 } as const satisfies Record<Exclude<PageOutcome, 'opened'>, string>
 
 /** Where the confirm can open: under the sender's toolbar button, or the conversation's. */
@@ -267,8 +319,11 @@ let confirming: Confirming | null = null
  * sender's button is up: by place and sender. Only that sender's button takes it.
  */
 let requested: { place: ConfirmPlace; key: string } | null = null
-/** The confirm-opening of each mounted button that can start an unsubscribe now, by place. */
-const claims = new Map<ConfirmPlace, () => void>()
+/**
+ * The mounted button at each place: its sender, and how it opens its confirm, or null while it
+ * cannot start an unsubscribe.
+ */
+const claims = new Map<ConfirmPlace, { key: string; open: (() => void) | null }>()
 const confirmWatchers = new Set<() => void>()
 
 const setConfirm = (next: Confirming | null) => {
@@ -289,26 +344,33 @@ export const closeConfirm = () => {
 }
 
 /** ⇧U: the button at `place` opens its confirm, if one is up and can start an unsubscribe. Otherwise nothing. */
-export const claimConfirm = (place: ConfirmPlace) => claims.get(place)?.()
+export const claimConfirm = (place: ConfirmPlace) => claims.get(place)?.open?.()
 
-/** Asks the button of `target`'s sender at `place` to open its confirm, once it is up and can. */
+/**
+ * A row's Unsubscribe: the button of `target`'s sender at `place` opens its confirm, at once if
+ * it is up, or once it comes up, as when the row opens its sender. If it cannot start one, nothing.
+ */
 export const requestConfirm = (place: ConfirmPlace, target: Pick<Target, 'accountId' | 'address'>) => {
-  requested = { place, key: senderKey(target) }
-  confirmWatchers.forEach((watcher) => watcher())
-}
-
-/** While the button at `place` on `target` can start an unsubscribe, it claims ⇧U and takes a request for its sender. */
-function holdClaim(place: ConfirmPlace, target: Target, eligible: boolean) {
   const key = senderKey(target)
-  if (!eligible) {
-    if (confirming?.place === place) setConfirm(null)
-    if (requested?.place === place && requested.key === key) requested = null
+  const claim = claims.get(place)
+  if (claim?.key !== key) {
+    requested = { place, key }
     return
   }
-  const open = () => openConfirm(place, target)
-  claims.set(place, open)
-  if (requested?.place === place && requested.key === key) open()
-  return () => void (claims.get(place) === open && claims.delete(place))
+  requested = null
+  claim.open?.()
+}
+
+/** The button at `place` on `target` is up: ⇧U and a request for its sender reach it, and open its confirm while `eligible`. */
+function holdClaim(place: ConfirmPlace, target: Target, eligible: boolean) {
+  const claim = { key: senderKey(target), open: eligible ? () => openConfirm(place, target) : null }
+  claims.set(place, claim)
+  if (!eligible && confirming?.place === place) setConfirm(null)
+  if (requested?.place === place && requested.key === claim.key) {
+    requested = null
+    claim.open?.()
+  }
+  return () => void (claims.get(place) === claim && claims.delete(place))
 }
 
 /**

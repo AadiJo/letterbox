@@ -34,18 +34,31 @@ import { applyBadge, notifyYourTurn, openFromNotifications, showBadge } from './
 import { createWindow, lockNavigation, pageOrigin, registerScheme, serveRenderer } from './window.ts'
 
 /**
- * Opens a page in the browser: a sign-in page from the core, or a page the person chose, such
- * as a sender's unsubscribe page. Only https, and never with a user name or password in it,
- * which the browser would send: anything else stays shut. True when it opened.
+ * Whether main opens `url` in the browser at all, for a sign-in page from the core or a page the
+ * person chose, such as a sender's unsubscribe page: only https, and never with a user name or
+ * password in it, which the browser would send. Anything else stays shut.
  */
-const openUrl = (url: string) => {
+const openable = (url: string) => {
   const parsed = URL.parse(url)
   if (parsed?.protocol !== 'https:') return void log('refused to open a url that is not https')
   if (parsed.username !== '' || parsed.password !== '')
     return void log('refused to open a url with a user name or password')
-  void shell.openExternal(url)
   return true
 }
+
+/** Hands an openable `url` to the browser. Resolves true once the OS has started it, false when it could not. */
+async function launch(url: string) {
+  try {
+    await shell.openExternal(url)
+    return true
+  } catch {
+    log('the OS could not open a page in the browser')
+    return false
+  }
+}
+
+/** Opens a sign-in page the core asks for, when it is openable. */
+const openUrl = (url: string) => void (openable(url) && launch(url))
 
 /** How often a window's page may open pages: one a second, and PAGES_A_MINUTE in any minute. */
 const PAGE_GAP_MS = 1000
@@ -186,22 +199,22 @@ if (!read.ok) {
 
   // A page the person chose to open, as a sender's unsubscribe page. Only our own page may ask.
   // At most one a second and a few a minute per window, so a page gone wrong cannot flood the
-  // browser. The page hears which, so its button can say so.
-  ipcMain.handle('url:open' satisfies Channel, (event, url: unknown): PageOutcome => {
+  // browser. The page hears which, or that the browser did not start, so its button can say so.
+  ipcMain.handle('url:open' satisfies Channel, async (event, url: unknown): Promise<PageOutcome> => {
     const page = ownPage(event)
     if (!page) {
       log('refused url:open from a frame that is not our page')
       return 'refused-url'
     }
-    if (typeof url !== 'string' || url.length > 4096) return 'refused-url'
+    if (typeof url !== 'string' || url.length > 4096 || !openable(url)) return 'refused-url'
     const now = Date.now()
     if (!pageAllowed(event.sender, now)) {
       log('refused url:open: too many pages too fast')
       return 'refused-rate'
     }
-    if (!openUrl(url)) return 'refused-url'
+    // The slot is taken before the browser starts, so an ask that comes meanwhile counts it.
     pagesOpened.get(event.sender)?.push(now)
-    return 'opened'
+    return (await launch(url)) ? 'opened' : 'failed'
   })
 
   registerScheme()

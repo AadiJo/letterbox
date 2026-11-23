@@ -91,7 +91,9 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
         stubs.opened.push(path)
         return ''
       }
+      // A URL with `fails` in it stands for a page the OS cannot start a browser for.
       shell.openExternal = async (url: string) => {
+        if (url.includes('fails')) throw new Error('no browser')
         stubs.external.push(url)
       }
     })
@@ -167,6 +169,16 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       (await asked()).external,
       ['https://bramblebooks.example/unsubscribe?u=9'],
       'pages: main opens only an https page with no user name or password, one a second, and only for our page',
+    )
+    // Past the second, a page the browser cannot be started for: main says it failed, not that it opened.
+    await page.waitForTimeout(1100)
+    equal(
+      await within(
+        page.evaluate(() => window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?fails')),
+        'the page that fails',
+      ),
+      'failed',
+      'pages: main waits for the browser to start, and says when it could not',
     )
 
     const target = join(saved, 'chosen.pdf')

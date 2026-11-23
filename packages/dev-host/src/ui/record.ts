@@ -100,6 +100,10 @@ async function relayCore(page: Page) {
   let refuseUndo: { conflict?: unknown } | undefined
   // The reason the relay refuses the page's next unsubscribe with itself, instead of passing it to the core.
   let refuseUnsubscribe: Refusal | undefined
+  // True once `swallowNextUnsubscribe` is called: the page's next unsubscribe never reaches the core, and nothing answers it.
+  let swallowUnsubscribe = false
+  // Armed by `holdFromCore`: each holds every message from the core its `test` takes, until its release.
+  const coreHolds = new Set<{ test: (message: string) => boolean; held: string[]; first: () => void }>()
   // True once `failNextUndo` is called: the page's next undo ends the connection, and the core never sees it.
   let failUndo = false
   // Armed by `holdNextUndoAnswer`: the change id of the page's next undo, once sent, and the core's answer to it, once held.
@@ -162,6 +166,10 @@ async function relayCore(page: Page) {
         const hold = [...answerHolds].find((one) => one.id === null && one.test(request))
         if (hold) hold.id = id
       }
+      if (swallowUnsubscribe && text.includes('"kind":"unsubscribe"')) {
+        swallowUnsubscribe = false
+        return
+      }
       if (refuseUnsubscribe && text.includes('"kind":"unsubscribe"')) {
         const reason = refuseUnsubscribe
         refuseUnsubscribe = undefined
@@ -204,6 +212,11 @@ async function relayCore(page: Page) {
         if (answer[1] === 'response') hold.answered()
         return
       }
+      const coreHold = [...coreHolds].find((one) => one.test(message))
+      if (coreHold) {
+        coreHold.held.push(message)
+        return coreHold.first()
+      }
       if (undoAnswer?.change && undoAnswer.answer === null && /"kind":"(accepted|rejected)"/.test(message)) {
         const { change } = JSON.parse(message) as { change?: string }
         if (change === undoAnswer.change) {
@@ -229,6 +242,26 @@ async function relayCore(page: Page) {
     /** Refuses the page's next unsubscribe with `reason`, as the core would. It never reaches the core. */
     refuseNextUnsubscribe: (reason: Refusal) => {
       refuseUnsubscribe = reason
+    },
+    /** The page's next unsubscribe never reaches the core, and nothing answers it, though the connection stays open. */
+    swallowNextUnsubscribe: () => {
+      swallowUnsubscribe = true
+    },
+    /**
+     * Holds every message the core sends that `test` takes, while everything else passes, until
+     * `release` hands them to the page in order. `first` resolves once it holds one.
+     */
+    holdFromCore: (test: (message: string) => boolean) => {
+      const { promise: first, resolve } = Promise.withResolvers<void>()
+      const hold = { test, held: [] as string[], first: resolve }
+      coreHolds.add(hold)
+      return {
+        first,
+        release: () => {
+          coreHolds.delete(hold)
+          for (const message of hold.held) toPage?.(message)
+        },
+      }
     },
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }

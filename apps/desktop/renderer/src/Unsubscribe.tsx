@@ -34,6 +34,7 @@ import {
   openConfirm,
   openUnsubscribePage,
   PAGE_REFUSALS,
+  senderKey,
   type Target,
   targetIn,
   undoUnsubscribe,
@@ -303,12 +304,18 @@ export function ConversationUnsubscribe({ id, mail }: { id: ThreadId; mail: Mail
   return target ? <Control place="toolbar" target={target} tooltip /> : null
 }
 
-/** A sender's Unsubscribe, beside Archive all, from its newest conversation's target. */
-export function SenderUnsubscribe({ newest, mail }: { newest: ThreadId; mail: Mail }) {
+type SenderProps = { sender: Pick<SenderSummary, 'accountId' | 'address'>; newest: ThreadId; mail: Mail }
+
+/**
+ * A sender's Unsubscribe, beside Archive all, from its newest conversation's target. Keyed by
+ * its sender (`senderKey`), so it only ever shows a target from that sender: none until one
+ * loads. While a newer conversation from the same sender loads, the last target stays, so the
+ * Unsubscribe, and a confirm open on it, stay up.
+ */
+export function SenderUnsubscribe({ sender, newest, mail }: SenderProps) {
   const detail = useThreadDetail(newest)
-  const found = targetIn(detail, mail)
-  // While a newer conversation from the sender loads, its target stays as it was, so the
-  // Unsubscribe, and a confirm open on it, stay up.
+  const loaded = targetIn(detail, mail)
+  const found = loaded && senderKey(loaded) === senderKey(sender) ? loaded : null
   const [kept, keep] = useState(found)
   if (detail !== undefined && found?.messageId !== kept?.messageId) keep(found)
   const target = detail === undefined ? kept : found

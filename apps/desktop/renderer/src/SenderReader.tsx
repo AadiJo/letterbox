@@ -21,6 +21,7 @@ import type { Chrome } from './Screen.tsx'
 import { type Entry, threadRecord, useThread, useThreadDetail, useThreadSection, useThreadWindow } from './threads.ts'
 import { clockTime, dayOf, listTime, messageTime } from './time.ts'
 import { SenderUnsubscribe } from './Unsubscribe.tsx'
+import { senderKey } from './unsubscribe.ts'
 import { rate, Strip } from './Volume.tsx'
 
 /** The newest conversations the reader groups into Today and Yesterday. More in two days is rare. */
@@ -101,7 +102,8 @@ function ToolbarUnsubscribe({ sender, inbox, mail }: Omit<MailProps, 'most'>) {
   const newest = useThreadSection({ mailboxId: inbox, sender: sender.id }, RECENT)?.entries[0]?.id
   return newest ? (
     <span className="ml-2 inline-flex">
-      <SenderUnsubscribe newest={newest} mail={mail} />
+      {/* One per sender, so another sender's target never shows here while this one's loads. */}
+      <SenderUnsubscribe key={senderKey(sender)} sender={sender} newest={newest} mail={mail} />
     </span>
   ) : null
 }

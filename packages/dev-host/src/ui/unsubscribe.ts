@@ -3,6 +3,8 @@
 // through the real core and the fake web. This file runs it, and checks what happens while the
 // core holds an unsubscribe, on a core that holds its undo window:
 //   - ⇧U where nothing can start one, and a person's mail with a body link (unsubscribe-views.ts).
+//   - A row's Unsubscribe on the open sender, a sender opened again, the gap after `accepted`,
+//     a sender's last conversation leaving, and no answer at all (unsubscribe-races.ts).
 //   - ⇧U opens the confirm, which says what it tells the sender and how it goes out, keeps
 //     inside the reader at 640 px, keeps Tab inside it, and holds back the reader's shortcuts.
 //     Confirmed, the toast says it is held, with the seconds left and Undo. z takes it back.
@@ -24,6 +26,13 @@ import { startServer } from '../server.ts'
 import { startSim } from '../sim.ts'
 import { appErrors, ARTIFACTS, equal, openPage, type Relay, root, SIZES } from './record.ts'
 import { checkOutcomes } from './unsubscribe-outcomes.ts'
+import {
+  checkAcceptedGap,
+  checkBackToSender,
+  checkLastLeaves,
+  checkNoAnswer,
+  checkRowOnOpen,
+} from './unsubscribe-races.ts'
 import { checkNoClaim, checkPerson } from './unsubscribe-views.ts'
 import { senderRow } from './updates-edges.ts'
 
@@ -220,9 +229,14 @@ export async function checkUnsubscribe(browser: Browser) {
   try {
     await checkNoClaim(page)
     await checkPerson(page)
+    await checkRowOnOpen(page)
+    await checkBackToSender(page, relay)
+    await checkAcceptedGap(page, relay)
+    await checkNoAnswer(page, relay)
     await checkConfirmAndUndo(page, posted, sent)
     await checkOneAtATime(page, relay)
     await checkUndoAfterReload(page, posted)
+    await checkLastLeaves(page, relay, running)
     await checkDropped(page, relay)
     flags = []
     await page.reload()

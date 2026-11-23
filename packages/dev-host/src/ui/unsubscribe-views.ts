@@ -59,7 +59,7 @@ export const lists = (key: string, count: number, from: number): SeedMessage[] =
   }))
 
 /** Waits two frames, so effects from the last render have run and painted. */
-const settle = (page: Page) =>
+export const settle = (page: Page) =>
   page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 
 /** Opens Updates and its sender `name`, without waiting for an Unsubscribe it may not have. */

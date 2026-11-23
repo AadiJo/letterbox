@@ -218,8 +218,17 @@ async function checkPage(page: Page, running: RunningSim) {
   await page.evaluate(() => Reflect.set(window, 'letterbox', { openPage: async () => 'refused-rate' }))
   await page.locator('[data-field="unsubscribe-page"]').click()
   const refused = await page.locator('[data-field="page-refused"]').textContent()
+  // The browser does not start: the button says so too.
+  await page.evaluate(() => Reflect.set(window, 'letterbox', { openPage: async () => 'failed' }))
+  await page.locator('[data-field="unsubscribe-page"]').click()
+  await page.locator('[data-field="page-refused"]', { hasText: 'browser' }).waitFor()
+  const failed = await page.locator('[data-field="page-refused"]').textContent()
   await page.evaluate(() => Reflect.deleteProperty(window, 'letterbox'))
-  equal(refused, 'Wait a moment, then try again.', 'when the shell refuses the page, its button says why')
+  equal(
+    [refused, failed],
+    ['Wait a moment, then try again.', 'Your browser didn’t open it.'],
+    'when the shell refuses the page, or the browser does not start, its button says why',
+  )
 }
 
 /** Every reason the core can refuse one, as the toast says it. The relay gives each, so the core never sees them. */
