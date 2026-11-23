@@ -161,6 +161,14 @@ export const BODY_MUTATIONS: Mutation[] = [
     file: body('fetch.rs'),
     find: '                if shown(world, record) == ShowImages::Blocked {',
     replace: '                if shown(world, record) == ShowImages::Blocked && false {',
+    // The check before every hop would catch it too, so both go.
+    also: [
+      {
+        file: body('fetch.rs'),
+        find: '        for _ in 0..=MAX_REDIRECTS {\n            self.still_shown(message_id)?;',
+        replace: '        for _ in 0..=MAX_REDIRECTS {',
+      },
+    ],
     scenarios: FETCH,
   },
   {
