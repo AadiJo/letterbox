@@ -2,12 +2,13 @@
 // pulls within seconds, not after the rest of its backoff (crates/core/src/schedule.rs). Ways it
 // can go wrong: the hint does nothing, so mail waits out the backoff; it pulls healthy accounts,
 // so every resume or reconnect costs a pull each; each hint of a burst pulls again, so a
-// network that flaps brings a burst of pulls; or it acts on what held when it came, not on what
-// holds when its pull would start: a pull already under way, a pull that ended offline during
-// the settle, an account that needs a sign-in by then, or one offline only from a push.
+// network that flaps brings a burst of pulls; it acts for an account that is not offline in a
+// way the network explains: a pull under way, one that needs a sign-in, or one offline only
+// from a push; or it runs beside the schedule, so a pull it brings misses what the schedule
+// would have done, as health that clears while it waits.
 //
-// `noted` waits on the schedule's own word that it ignored or dropped a hint, so each step is
-// taken once the schedule has decided, never on time.
+// The hint only brings the schedule's next deadline forward. `noted` waits on the core's word
+// that a hint did not hold, so each step is taken once it decided, never on time.
 //
 // The fixed clock holds every idle wait until the scenario moves it, and `idleWaits` lists the
 // waits the schedule began (see 27-sync-schedule.ts).
@@ -112,19 +113,6 @@ scenario('a network-back hint that comes while a pull is under way is ignored', 
   t.equal(await core.idleWaits(3), [60, 120, 240], 'no second pull came of the hint: the backoff went on as it was')
 })
 
-scenario('a network-back hint whose settle sees a pull end offline goes back to its backoff', async (t) => {
-  const { core } = await backedOff(t)
-  t.check((await core.request({ method: 'network-back' })).ok, 'the core takes the hint')
-  t.equal(await core.idleWaits(3), [60, 120, 2], 'the backoff gives way to a short settle')
-  // A sync-now finds the provider still offline before the settle ends.
-  t.equal((await core.request({ method: 'sync-now' })).ok, false, 'a sync finds it offline')
-  core.advanceClock(2)
-  await core.noted('hint-dropped', 1)
-  // The wait the hint cut began 120 s before its end, and 2 s of it have passed.
-  core.advanceClock(118)
-  t.equal(await core.idleWaits(4), [60, 120, 2, 240], 'its pull comes at its own time, and backs off from there')
-})
-
 scenario('a network-back hint is ignored when only a push found the provider offline', async (t) => {
   const { core, box } = await start(t)
   await core.idleWaits(1)
@@ -142,25 +130,22 @@ scenario('a network-back hint is ignored when only a push found the provider off
 })
 
 scenario(
-  'on gmail, a network-back hint whose account needs a sign-in by the end of its settle does not pull',
+  'on gmail, a network-back hint is ignored while the account needs a sign-in',
   async (t) => {
     const gmail = t.gmail
     if (!gmail) throw new Error('this scenario runs as gmail only')
     const { core, box } = await backedOff(t)
     box.setOffline(false)
-    t.check((await core.request({ method: 'network-back' })).ok, 'the core takes the hint')
-    t.equal(await core.idleWaits(3), [60, 120, 2], 'the backoff gives way to a short settle')
-    // The user removes the app's access, and a change's push finds out while the hint settles.
+    // The user removes the app's access, and a change's push finds out.
     const accounts = core.subscribe({ view: 'accounts' })
+    await accounts.next()
     gmail.revokeAccess(ME)
     gmail.expireAccessTokens()
     const target = await thread(core, 'Can you review the draft?')
     const change = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
     await untilAccounts(accounts, (list) => list[0]?.status.state === 'needs-sign-in')
-    const refreshes = gmail.refreshes(ME)
-    core.advanceClock(2)
-    await core.noted('hint-dropped', 1)
-    t.equal(gmail.refreshes(ME), refreshes, 'no pull asked Gmail for a token it will not give')
+    t.check((await core.request({ method: 'network-back' })).ok, 'the core takes the hint')
+    await core.noted('hint-ignored', 1)
     // Signing in again picks up the change.
     await signIn(t, core, ME, '')
     await sync(core)
@@ -168,3 +153,22 @@ scenario(
   },
   ['gmail'],
 )
+
+scenario('health a push clears while a hint is pending brings the pull at once, as without the hint', async (t) => {
+  const { core, box } = await backedOff(t)
+  box.deliver(fromBen('meanwhile', 'Sent while you were offline', '2025-12-09T09:00:00.000Z'))
+  box.setOffline(false)
+  const list = core.subscribe({ view: 'threads', filter: {}, offset: 0, limit: 500 })
+  await list.next()
+  t.check((await core.request({ method: 'network-back' })).ok, 'the core takes the hint')
+  t.equal(await core.idleWaits(3), [60, 120, 2], 'the next pull is brought forward')
+  // Before that deadline, a change reaches the provider, which clears the health.
+  const target = await thread(core, 'Can you review the draft?')
+  const change = await core.command({ kind: 'set-flags', threadIds: [target.id], unread: false })
+  t.equal((await core.settled(change.change)).result, 'done', 'the change reaches the provider')
+  t.equal(await core.idleWaits(4), [60, 120, 2, 0], 'the health that cleared makes the pull due at once')
+  core.advanceClock(0)
+  await untilListed(t, list, 'Sent while you were offline', 'the pull brings the mail')
+  await core.take('your-turn')
+  t.equal(await core.idleWaits(5), [60, 120, 2, 0, 60], 'and pulls are a minute apart again')
+})

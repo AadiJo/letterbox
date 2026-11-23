@@ -8,14 +8,14 @@ const schedule = 'crates/core/src/schedule.rs'
 
 /** What `hint_holds` asks, all of it. Each break below drops one part. */
 const HOLDS =
-  'pulls.offline && pulls.ended == ended && offline && queued <= own && !state.backfills.contains_key(account_id)'
+  'pulls.offline && offline && !state.pulls.contains_key(account_id) && !state.backfills.contains_key(account_id)'
 
 export const NETWORK_MUTATIONS: Mutation[] = [
   {
     name: 'a network-back hint reaches no schedule, so an offline account waits out its backoff',
     file: schedule,
-    find: '            linked.network.notify_waiters();',
-    replace: '            let _ = linked;',
+    find: '                linked.network.notify_one();',
+    replace: '                drop(linked);',
     scenarios: 'network-back hint',
   },
   {
@@ -26,38 +26,31 @@ export const NETWORK_MUTATIONS: Mutation[] = [
     scenarios: 'only a push found',
   },
   {
-    name: 'a network-back hint pulls an account that needs a sign-in by the end of its settle',
+    name: 'a network-back hint pulls an account that needs a sign-in',
     file: schedule,
     find: HOLDS,
     replace: HOLDS.replace(' && offline &&', ' &&'),
-    scenarios: 'needs a sign-in by the end',
+    scenarios: 'while the account needs a sign-in',
   },
   {
-    name: 'a network-back hint that comes while a pull is under way pulls again once that one ends',
+    name: 'a network-back hint that comes while a pull is under way brings another',
     file: schedule,
     find: HOLDS,
-    replace: HOLDS.replace('queued <= own', 'true'),
+    replace: HOLDS.replace(' && !state.pulls.contains_key(account_id)', ''),
     scenarios: 'under way is ignored',
-  },
-  {
-    name: 'a network-back hint pulls though a pull ended offline during its settle',
-    file: schedule,
-    find: HOLDS,
-    replace: HOLDS.replace('pulls.ended == ended', 'true'),
-    scenarios: 'sees a pull end offline',
   },
   {
     name: 'each hint of a burst starts the settle again, so a flapping network keeps pushing the pull off',
     file: schedule,
-    find: '                    Woke::Heard if hint.is_none() => {',
-    replace: '                    Woke::Heard if true => {',
+    find: '                        if sooner.is_none() {',
+    replace: '                        if true {',
     scenarios: 'network-back hint',
   },
   {
     name: 'a network-back hint forgets the failures in a row, so a flapping network keeps the backoff short',
     file: schedule,
-    find: '                Woke::Pulled(ended) => {\n',
-    replace: '                Woke::Pulled(ended) => {\n                    failures = 0;\n',
+    find: '                    Woke::Hinted => {\n',
+    replace: '                    Woke::Hinted => {\n                        failures = 0;\n',
     scenarios: 'still offline backs off further',
   },
 ]

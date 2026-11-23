@@ -42,11 +42,9 @@ pub trait Environment {
 pub enum Noted {
     /// It queued a pull.
     PullQueued,
-    /// It heard the network may be back, and the hint did not hold, so its wait went on.
+    /// The host said the network may be back, and the hint did not hold for an account, so
+    /// that account's wait goes on as it was.
     HintIgnored,
-    /// A hint it took no longer held once its settle ended, or at the head of the queue, so
-    /// it went back to the wait the hint had cut.
-    HintDropped,
 }
 
 impl Noted {
@@ -55,7 +53,6 @@ impl Noted {
         match self {
             Noted::PullQueued => "pull-queued",
             Noted::HintIgnored => "hint-ignored",
-            Noted::HintDropped => "hint-dropped",
         }
     }
 }

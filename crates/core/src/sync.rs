@@ -22,8 +22,6 @@ pub(crate) type PassResult = Result<(), AdapterFailure>;
 /// How an account's pulls have ended since the core started (see `note_pull`).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PullsEnded {
-    /// How many have ended, well or not.
-    pub(crate) ended: u64,
     /// How many have ended well.
     pub(crate) well: u64,
     /// True when the last one found the provider offline.
@@ -239,11 +237,10 @@ impl Inner {
 
     /// Notes in `pulls_ended` how a pull for the account ended. The schedule reads it
     /// (schedule.rs): to skip its own pull when another ended well since its tick, and to tell
-    /// whether a hint that the network is back still holds.
+    /// whether a hint that the network is back holds.
     fn note_pull(&self, account_id: &AccountId, ended: PassResult) {
         let mut state = self.state.borrow_mut();
         let log = state.pulls_ended.entry(account_id.clone()).or_default();
-        log.ended += 1;
         log.well += u64::from(ended.is_ok());
         log.offline = ended == Err(AdapterFailure::Offline);
     }

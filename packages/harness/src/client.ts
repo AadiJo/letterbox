@@ -46,11 +46,11 @@ export type CoreClient = KeepingClient & {
   idleWaitStarts(count: number): Promise<number[]>
   /**
    * Resolves once the sync schedule has noted `count` decisions of kind `what` (`Noted` in
-   * crates/core/src/clock.rs): a pull queued, or a network-back hint ignored or dropped. A clock
+   * crates/core/src/clock.rs): a pull queued, or a network-back hint ignored. A clock
    * move and a hint each reach the schedule apart from the protocol's order, so this, not a
    * round trip, says the schedule has acted on one.
    */
-  noted(what: 'pull-queued' | 'hint-ignored' | 'hint-dropped', count: number): Promise<void>
+  noted(what: 'pull-queued' | 'hint-ignored', count: number): Promise<void>
   /** The process's exit code once it has exited on its own, else null. */
   exitCode(): number | null
   /** Sends anything at all, for scenarios about bad input. */
