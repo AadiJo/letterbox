@@ -47,6 +47,7 @@ const oneClick = (url: string, dkim: NonNullable<SeedMessage['dkim']>): Partial<
  *   unsigned-post signed, but not over List-Unsubscribe-Post: one-click cannot be used
  *   wrong-key    signed over both, but the DNS serves another key
  *   private      signed one-click only, at a host that resolves to a private address
+ *   moved        signed one-click only, whose server answers the POST with a redirect
  *   web-only     an https page alone
  */
 const seed = (): Seed => ({
@@ -86,6 +87,10 @@ const seed = (): Seed => ({
       headers: { listUnsubscribe: '<https://intranet.example/u/4>', listUnsubscribePost: ONE_CLICK },
       dkim: { domain: 'intranet.example', selector: 'sel' },
     }),
+    list('moved', 'moved@list.example', 'Moved list', '2025-12-02T12:00:00.000Z', {
+      headers: { listUnsubscribe: '<https://list.example/u/6>', listUnsubscribePost: ONE_CLICK },
+      dkim: { domain: 'list.example', selector: 'sel' },
+    }),
     list('web-only', 'digest@list.example', 'Daily digest', '2025-12-02T09:00:00.000Z', {
       headers: { listUnsubscribe: '<https://list.example/u/5>' },
     }),
@@ -101,6 +106,8 @@ function web(t: Scenario) {
   t.web.resolve('intranet.example', ['10.0.0.5'])
   for (const page of ['list.example/u/1', 'shop.example/u/2', 'other.example/u/3', 'intranet.example/u/4'])
     t.web.serve(`https://${page}`, { kind: 'status', status: 200 })
+  t.web.serve('https://list.example/u/6', { kind: 'redirect', location: 'https://list.example/elsewhere' })
+  t.web.serve('https://list.example/elsewhere', { kind: 'status', status: 200 })
 }
 
 /** Signs in to the seed's mailbox with a core started with `options`. */
@@ -172,8 +179,16 @@ scenario('an unsubscribe held for its window is undone, and nothing leaves the d
 
 scenario('a one-click unsubscribe whose DKIM signature verifies is posted once', async (t) => {
   const { core, box } = await begin(t)
+  const inbox = await mailbox(core, 'Inbox')
+  const updates = core.subscribe({ view: 'senders', mailboxId: inbox.id, offset: 0, limit: 50 })
   const change = await unsubscribe(t, core, 'Weekly news')
   t.equal((await core.settled(change)).result, 'done', 'it settles done once its window ends')
+  t.equal(
+    updates.latest()?.senders.find((sender) => sender.address === 'news@list.example')?.unsubscribed,
+    { state: 'done', change, method: 'one-click' },
+    'an open Updates shows it done before it settles',
+  )
+  updates.close()
   t.equal(
     t.web.posted(),
     [{ url: 'https://list.example/u/1', type: FORM, body: ONE_CLICK }],
@@ -243,12 +258,43 @@ scenario('a one-click unsubscribe whose DKIM check fails goes out once as mail',
   t.equal(box.sent().length, 2, 'a sync after sends nothing again')
 })
 
-scenario('a one-click unsubscribe at a private address is refused, and nothing is posted', async (t) => {
+scenario('a one-click unsubscribe at a private address is refused, and a redirect is not followed', async (t) => {
   const { core } = await begin(t)
   const change = await unsubscribe(t, core, 'Alerts')
   t.equal((await core.settled(change)).result, { failed: 'not-public' }, 'it fails not-public')
   t.equal([t.web.posted(), t.web.requested()], [[], []], 'nothing was sent to the host')
   t.equal((await row(core, 'alerts@intranet.example'))?.unsubscribed, null, 'the row offers the button again')
+
+  const moved = await unsubscribe(t, core, 'Moved list')
+  t.equal(
+    (await core.settled(moved)).result,
+    { failed: 'refused-by-provider' },
+    'a redirect, which RFC 8058 forbids, fails it',
+  )
+  t.equal(
+    [t.web.posted().map((post) => post.url), t.web.requested()],
+    [['https://list.example/u/6'], []],
+    'the POST went once, and the redirect was not followed',
+  )
+})
+
+scenario("an unsubscribe's POST cut off by a stopped core is never sent again", async (t) => {
+  const first = await begin(t)
+  const held = t.web.hold('https://list.example/u/1')
+  const change = await unsubscribe(t, first.core, 'Weekly news')
+  await held.arrived
+  await first.core.kill()
+  held.release()
+
+  const core = t.startCore()
+  await core.hello()
+  t.equal(
+    (await core.settled(change)).result,
+    { failed: 'unconfirmed' },
+    'after the restart it fails unconfirmed: it may have arrived',
+  )
+  t.equal(t.web.posted().length, 1, 'it was posted once')
+  t.equal((await row(core, 'news@list.example'))?.unsubscribed, null, 'the row offers the button again')
 })
 
 scenario('a web unsubscribe opens its page once its window ends', async (t) => {

@@ -27,6 +27,7 @@ import { SCHEDULE_MUTATIONS } from './mutations-schedule.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
 import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
+import { UNSUBSCRIBE_MUTATIONS } from './mutations-unsubscribe.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
 
@@ -429,4 +430,5 @@ await runBreaks([
   ...SCHEDULE_MUTATIONS,
   ...NETWORK_MUTATIONS,
   ...BODY_MUTATIONS,
+  ...UNSUBSCRIBE_MUTATIONS,
 ])

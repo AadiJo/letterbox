@@ -27,7 +27,7 @@ export type FakeWeb = {
   /** Sets the TXT records of `name`, written without a trailing dot. Every other name has none. */
   txt(name: string, records: readonly string[]): void
   /**
-   * Holds the answer to `url` until the returned release runs. `arrived` resolves once a
+   * Holds the answer to `url`, to a GET or a POST, until the returned release runs. `arrived` resolves once a
    * request for it is waiting, so a scenario acts while the core waits, never on a timer.
    */
   hold(url: string): { arrived: Promise<void>; release: () => void }
@@ -74,29 +74,28 @@ export async function startFakeWeb(): Promise<FakeWeb> {
       return
     }
     const url = `https:/${request.url ?? '/'}`
-    if (request.method === 'POST') {
-      const chunks: Buffer[] = []
-      request.on('data', (chunk: Buffer) => chunks.push(chunk))
-      request.on('end', () => {
-        const type = request.headers['content-type'] ?? null
-        posted.push({ url, type, body: Buffer.concat(chunks).toString() })
-        const leaks = ['cookie', 'referer', 'authorization'].filter((name) => request.headers[name] !== undefined)
-        if (leaks.length > 0) response.writeHead(400).end(`sent ${leaks.join(', ')}`)
-        else answer(url, response)
-      })
-      return
-    }
-    requested.push(url)
     // The core must send nothing that identifies the reader or the page.
-    const leaks = ['cookie', 'referer', 'authorization'].filter((name) => request.headers[name] !== undefined)
-    if (leaks.length > 0) {
-      response.writeHead(400).end(`sent ${leaks.join(', ')}`)
-      return
+    const respond = () => {
+      const leaks = ['cookie', 'referer', 'authorization'].filter((name) => request.headers[name] !== undefined)
+      if (leaks.length > 0) {
+        response.writeHead(400).end(`sent ${leaks.join(', ')}`)
+        return
+      }
+      const hold = held.get(url)
+      if (hold === undefined) return answer(url, response)
+      hold.waiting.push(() => answer(url, response))
+      hold.arrive()
     }
-    const hold = held.get(url)
-    if (hold === undefined) return answer(url, response)
-    hold.waiting.push(() => answer(url, response))
-    hold.arrive()
+    if (request.method !== 'POST') {
+      requested.push(url)
+      return respond()
+    }
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
+    request.on('end', () => {
+      posted.push({ url, type: request.headers['content-type'] ?? null, body: Buffer.concat(chunks).toString() })
+      respond()
+    })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
