@@ -7,6 +7,9 @@
 //!      Location as the server wrote it, and the core decides whether to go on.
 //!   2. It sends no cookies, no referrer and no credentials, and keeps nothing between calls.
 //!   3. It reads at most `limit` bytes of a body, and answers `TooLarge` past that.
+//!   4. It connects only to public addresses: it answers `Refused`, and connects to nothing,
+//!      for a host whose address, or any of whose addresses, is loopback, private, link-local
+//!      or otherwise not on the public internet, and it connects to the addresses it checked.
 
 use crate::adapter::LocalFuture;
 
@@ -19,6 +22,8 @@ pub enum Fetched {
     Redirect { location: String },
     /// The body ran past the limit.
     TooLarge,
+    /// The host's address is not public (rule 4). Nothing was connected to.
+    Refused,
     /// No answer, an error status, or a redirect without a Location.
     Failed,
 }

@@ -81,12 +81,19 @@ pub fn remote(value: &str) -> Option<Url> {
 
 /// The host a tracker would have loaded from, for the protocol.
 pub fn host(url: &Url) -> String {
-    url.host_str().unwrap_or_default().to_owned()
+    host_of(url).to_owned()
 }
 
-/// Rules 1 and 4, which read the URL alone.
+/// A URL's host as the rules compare it: lowercase, IDNA in its ASCII form (the URL parser does
+/// both, as WHATWG URL says), and without a trailing dot, which names the same host.
+fn host_of(url: &Url) -> &str {
+    url.host_str().unwrap_or_default().trim_end_matches('.')
+}
+
+/// Rules 1 and 4, which read the URL alone. Every URL the pipeline lists and every redirect
+/// hop the core follows (fetch.rs) goes through here.
 pub fn by_url(url: &Url) -> Option<Reason> {
-    let host = url.host_str().unwrap_or_default();
+    let host = host_of(url);
     let known = KNOWN_HOSTS
         .iter()
         .any(|known| host == *known || host.strip_suffix(known).is_some_and(|rest| rest.ends_with('.')));

@@ -3,7 +3,10 @@
 //!   0. `unwrap` makes the markup read as the renderer's frame reads it: it takes the tags off
 //!      every `<noscript>`, whose content lol_html reads as text but a frame with scripts off
 //!      reads as markup, and drops every `<base>`, so no relative URL resolves against a
-//!      sender's address.
+//!      sender's address. It drops every `<link>` too, since a browser acts on DNS-prefetch,
+//!      preconnect and prefetch hints outside the frame's image policy, so a hint would tell a
+//!      sender's resolver the mail was opened, and every `<meta http-equiv>`, which could turn
+//!      prefetching back on or set a refresh.
 //!   1. `scan` reads the body: where its quote starts (quote.rs), its text before the quote,
 //!      and its unsubscribe links.
 //!   2. `rewrite` (rewrite.rs) writes the body a UI shows: trackers taken out (trackers.rs), each remote
@@ -70,14 +73,14 @@ pub fn process(input: &str) -> Option<Html> {
     })
 }
 
-/// Pass 0: every `<noscript>` without its tags, and no `<base>`.
+/// Pass 0: every `<noscript>` without its tags, and no `<base>`, `<link>` or `<meta http-equiv>`.
 fn unwrap(input: &str) -> Option<String> {
     let settings = RewriteStrSettings::new()
         .append_element_content_handler(element!("noscript", |el| {
             el.remove_and_keep_content();
             Ok(())
         }))
-        .append_element_content_handler(element!("base", |el| {
+        .append_element_content_handler(element!("base, link, meta[http-equiv]", |el| {
             el.remove();
             Ok(())
         }));

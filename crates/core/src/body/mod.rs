@@ -170,13 +170,19 @@ pub fn unprocessed(record: &MessageRecord) -> bool {
     matches!(record.body, Some(BodyResult::Body { .. })) && record.reading.current().is_none()
 }
 
+/// True when the provider verified the sender of a message whose body has loaded
+/// (`RemoteBody::sender_verified`).
+pub fn sender_verified(record: &MessageRecord) -> bool {
+    matches!(&record.body, Some(BodyResult::Body { body }) if body.sender_verified)
+}
+
 /// Whose choice shows a message's images. The sender's applies only to a message whose sender
-/// the provider verified (`RemoteFacts::sender_verified`), so a message that only claims the
-/// address in its From never inherits it. Else the message's own.
+/// the provider verified (`sender_verified`), so a message that only claims the address in its
+/// From never inherits it. Else the message's own.
 pub fn shown(world: &World, record: &MessageRecord) -> ShowImages {
     let address = record.facts.from.address.to_lowercase();
     let account = world.accounts.get(&record.account_id);
-    let trusted = record.facts.sender_verified && !address.is_empty();
+    let trusted = sender_verified(record) && !address.is_empty();
     if trusted && account.is_some_and(|account| account.images_from.contains(&address)) {
         ShowImages::Sender
     } else if record.reading.show_images {
@@ -320,7 +326,7 @@ impl Inner {
             return self.reject(change, Refusal::UnknownTarget);
         };
         let address = record.facts.from.address.to_lowercase();
-        if show == ShowImages::Sender && (!record.facts.sender_verified || address.is_empty()) {
+        if show == ShowImages::Sender && (!sender_verified(&record) || address.is_empty()) {
             return self.reject(change, Refusal::NotPermitted);
         }
         let mut senders: Vec<String> = account

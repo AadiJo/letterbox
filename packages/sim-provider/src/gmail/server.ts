@@ -53,6 +53,7 @@ import {
   metadataOf,
   minimalOf,
   named,
+  rawOf,
   refOfId,
 } from './shapes.ts'
 
@@ -284,6 +285,7 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
       if (!stored) return fail(response, 404, 'Requested entity was not found.')
       const threadId = threadOf(entry, stored.ref)
       if (format === 'minimal') return send(response, 200, { ...minimalOf(store, stored, history()), threadId })
+      if (format === 'raw') return send(response, 200, { ...rawOf(store, stored, history()), threadId })
       const metadata = metadataOf(store, stored, history(), query.getAll('metadataHeaders'))
       return send(response, 200, { ...metadata, threadId })
     }

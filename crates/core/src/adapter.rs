@@ -157,12 +157,6 @@ pub struct RemoteFacts {
     pub headers: RemoteHeaders,
     /// The provider's own verdict that this is bulk mail. None when it gives none.
     pub bulk: Option<bool>,
-    /// True when the provider verified that the From address's domain sent it: for Gmail,
-    /// Google's own Authentication-Results says DMARC passed for that domain. False for a
-    /// provider that cannot say, and for messages stored before this was kept. "Always show
-    /// images from this sender" applies only to verified messages (body/mod.rs).
-    #[serde(default)]
-    pub sender_verified: bool,
 }
 
 /// Empty string when the header is absent.
@@ -192,11 +186,19 @@ pub struct RemoteMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteBody {
     pub text: String,
     /// Untrusted. The core keeps it as it came, and passes on what body/mod.rs makes of it.
     pub html: Option<String>,
     pub attachments: Vec<RemoteAttachment>,
+    /// True when the provider verified that the From address's domain sent the message, and
+    /// the adapter is sure of it: for Gmail, Google's own verdict in the raw headers
+    /// (crates/gmail/src/verify.rs). False when unsure, for a provider that cannot say, and
+    /// for bodies stored before this was kept. "Always show images from this sender" applies
+    /// only to verified messages (body/mod.rs).
+    #[serde(default)]
+    pub sender_verified: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

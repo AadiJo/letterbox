@@ -196,9 +196,10 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await page.evaluate(() => {
     window.addEventListener('message', (event) => document.body.setAttribute('data-got-message', String(event.data)))
   })
-  // Every remote stylesheet and font the body names. Each must be refused before it reaches the
-  // network. The core's body pipeline takes the tracking pixel out first, so it never reaches the frame.
-  const remoteLoads = [...htmlMessage.html.matchAll(/(?:<link [^>]*href="|url\()(https:[^")]+)/g)].flatMap((match) =>
+  // Every remote font the body names. Each must be refused before it reaches the network. The
+  // core's body pipeline takes the tracking pixel and every <link> (stylesheet, dns-prefetch,
+  // preconnect) out first, so they never reach the frame.
+  const remoteLoads = [...htmlMessage.html.matchAll(/url\((https:[^")]+)/g)].flatMap((match) =>
     match[1] ? [match[1]] : [],
   )
   const refused = Promise.all(
@@ -219,8 +220,18 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     'the body frame is sandboxed without scripts',
   )
   await refused
-  equal(blocked.toSorted(), remoteLoads.toSorted(), "the body frame's policy blocked its stylesheet and font")
+  equal(blocked.toSorted(), remoteLoads.toSorted(), "the body frame's policy blocked its font")
   equal(await frame.locator('img[width="1"]').count(), 0, 'the tracking pixel never reached the frame')
+  equal(
+    await frame.locator('link').count(),
+    0,
+    'no <link>, so no stylesheet, dns-prefetch or preconnect, reached the frame',
+  )
+  equal(
+    await frame.locator('meta[http-equiv="x-dns-prefetch-control"]').getAttribute('content'),
+    'off',
+    "the frame's document turns DNS prefetching off",
+  )
   equal(remote, [], 'the page never reached past 127.0.0.1')
   await page.screenshot({ path: join(ARTIFACTS, 'html-body.png') })
 

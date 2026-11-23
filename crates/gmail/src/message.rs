@@ -13,7 +13,7 @@ use crate::labels;
 use crate::wire::{Message, Part};
 
 /// The headers `format=metadata` is asked for. Gmail returns only these.
-pub const METADATA_HEADERS: [&str; 15] = [
+pub const METADATA_HEADERS: [&str; 14] = [
     "From",
     "To",
     "Cc",
@@ -28,7 +28,6 @@ pub const METADATA_HEADERS: [&str; 15] = [
     "Precedence",
     "Auto-Submitted",
     "Content-Type",
-    "Authentication-Results",
 ];
 
 /// The first value of a header, by case-insensitive name.
@@ -82,7 +81,20 @@ fn split_addresses(value: &str) -> Vec<&str> {
 
 /// One `Name <address>` or bare address. Encoded words (RFC 2047) are left as they are.
 fn address(text: &str) -> RemoteAddress {
-    let Some((name, rest)) = text.split_once('<') else {
+    // The angle bracket that opens the address is the first one outside a quoted display name,
+    // so `"Shop <news@shop.example>" <x@evil.example>` is evil.example's.
+    let (mut quoted, mut escaped) = (false, false);
+    let open = text.char_indices().find_map(|(index, c)| {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            '<' if !quoted => return Some(index),
+            _ => {}
+        }
+        None
+    });
+    let Some((name, rest)) = open.map(|index| (&text[..index], &text[index + 1..])) else {
         return RemoteAddress {
             name: None,
             address: text.to_owned(),
@@ -172,42 +184,6 @@ fn sent_at(message: &Message) -> String {
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// True when Google verified that the From address's domain sent the message: its topmost
-/// Authentication-Results header, which Google's receiving server writes, names Google's own
-/// authserv-id, mx.google.com, and says `dmarc=pass` with `header.from` that domain (RFC 8601,
-/// RFC 7489). A sender can write more of the header, but below Google's, so only the first
-/// counts, and one that names another authserv-id proves nothing.
-fn sender_verified(message: &Message, from: &str) -> bool {
-    let Some(results) = header(message, "Authentication-Results") else {
-        return false;
-    };
-    let Some(domain) = from
-        .rsplit_once('@')
-        .map(|(_, domain)| domain)
-        .filter(|domain| !domain.is_empty())
-    else {
-        return false;
-    };
-    let mut parts = results.split(';');
-    let authserv = parts
-        .next()
-        .unwrap_or_default()
-        .split_whitespace()
-        .next()
-        .unwrap_or_default();
-    if !authserv.eq_ignore_ascii_case("mx.google.com") {
-        return false;
-    }
-    parts.any(|part| {
-        let words: Vec<&str> = part.split_whitespace().collect();
-        let passed = words
-            .first()
-            .is_some_and(|word| word.eq_ignore_ascii_case("dmarc=pass"));
-        let names = words.iter().filter_map(|word| word.strip_prefix("header.from="));
-        passed && names.into_iter().any(|named| named.eq_ignore_ascii_case(domain))
-    })
-}
-
 /// A message fetched with `format=metadata`, as the core lists it.
 pub fn remote_message(message: &Message) -> RemoteMessage {
     let has = |name| header(message, name).is_some();
@@ -222,7 +198,6 @@ pub fn remote_message(message: &Message) -> RemoteMessage {
         name: None,
         address: String::new(),
     });
-    let sender_verified = sender_verified(message, &from.address);
     RemoteMessage {
         state: labels::state(&message.id, &message.label_ids),
         facts: RemoteFacts {
@@ -249,7 +224,6 @@ pub fn remote_message(message: &Message) -> RemoteMessage {
                 list_unsubscribe_post: value("List-Unsubscribe-Post"),
             },
             bulk: labels::bulk(&message.label_ids),
-            sender_verified,
         },
     }
 }
@@ -332,5 +306,7 @@ pub fn remote_body(message: &Message) -> RemoteBody {
         text: text.unwrap_or_default(),
         html,
         attachments: attachments.collect(),
+        // The adapter reads the verdict from the raw message (verify.rs).
+        sender_verified: false,
     }
 }

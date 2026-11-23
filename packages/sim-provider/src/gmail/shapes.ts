@@ -196,6 +196,27 @@ export const metadataOf = (store: Store, message: Stored, historyId: string, onl
   }
 }
 
+/**
+ * users.messages.get with format=raw: the message as written, base64url, with its headers in
+ * their order, Authentication-Results on top. Its text is the whole body: the adapter reads
+ * only the headers (crates/gmail/src/verify.rs).
+ */
+export const rawOf = (store: Store, message: Stored, historyId: string) => {
+  const head = headersOf(message)
+    .map(({ name, value }) => `${name}: ${value}\r\n`)
+    .join('')
+  return {
+    id: gmailIdOf(message.ref),
+    threadId: gmailIdOf(message.ref),
+    labelIds: labelIdsOf(store, message),
+    snippet: snippetOf(message.body.text),
+    sizeEstimate: message.facts.size,
+    raw: Buffer.from(`${head}\r\n${message.body.text}`).toString('base64url'),
+    historyId,
+    internalDate: String(Date.parse(message.facts.sentAt)),
+  }
+}
+
 /** One MIME part with its content inline as base64url. */
 const textPart = (mimeType: string, text: string) => ({
   mimeType,

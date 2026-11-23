@@ -22,9 +22,11 @@ use crate::adapter::RemoteHeaders;
 
 /// The way the header names, or None when it names neither a mailto nor an https URI.
 pub fn from_headers(headers: &RemoteHeaders) -> Option<Unsubscribe> {
+    // RFC 2369 section 2: whitespace inside the brackets, as when a long URL is folded, is not
+    // part of the URL.
     let urls: Vec<Url> = entries(&headers.list_unsubscribe_value)
         .into_iter()
-        .filter_map(|entry| Url::parse(entry).ok())
+        .filter_map(|entry| Url::parse(&entry.split_whitespace().collect::<String>()).ok())
         .filter(|url| matches!(url.scheme(), "https" | "mailto"))
         .collect();
     let one_click = headers

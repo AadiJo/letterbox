@@ -40,6 +40,7 @@ mod loopback;
 mod message;
 mod oauth;
 mod send;
+mod verify;
 mod wire;
 
 use std::rc::Rc;

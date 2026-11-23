@@ -117,7 +117,6 @@ fn message(index: usize, conversation: usize, place: usize) -> RemoteMessage {
                 list_unsubscribe_post: String::new(),
             },
             bulk: None,
-            sender_verified: false,
         },
     }
 }

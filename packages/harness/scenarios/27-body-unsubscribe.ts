@@ -31,6 +31,7 @@ const mail = (
  *   mailto      a comment, then a mailto and an https target: the mailto comes first
  *   order       an https target, then a mailto: the header's order wins
  *   malformed   an entry outside angle brackets ends the reading, before the https target
+ *   folded      a URL folded across lines: the space inside the brackets is not part of it
  *   web-only    an https target alone, without one-click
  *   http-only   only an http target, which is not offered
  *   body-link   no header: a link whose text says unsubscribe beats one whose address does
@@ -59,6 +60,9 @@ const seed = (): Seed => ({
     }),
     mail('order', 'order@list.example', 'Order news', '2025-12-05T11:00:00.000Z', {
       headers: { listUnsubscribe: '<https://list.example/u/5>, <mailto:leave@list.example>' },
+    }),
+    mail('folded', 'folded@list.example', 'Folded header', '2025-12-05T09:30:00.000Z', {
+      headers: { listUnsubscribe: '< https://list.example/\r\n u/8 >' },
     }),
     mail('malformed', 'bad@list.example', 'Bad header', '2025-12-05T10:00:00.000Z', {
       headers: { listUnsubscribe: 'mailto:leave@list.example, <https://list.example/u/6>' },
@@ -120,6 +124,7 @@ scenario(
         ['weekly@list.example', MAILTO],
         ['order@list.example', ORDER],
         ['bad@list.example', null],
+        ['folded@list.example', { method: 'web', url: 'https://list.example/u/8', from: 'header' }],
         ['digest@list.example', WEB_ONLY],
         ['old@list.example', null],
         ['promo@deals.example', null],
@@ -138,7 +143,7 @@ scenario(
     t.equal(await opened(core, 'Notes'), TEXT_LINK, 'in plain text, the URL on the line after "unsubscribe"')
     t.equal(await opened(core, 'Seen this?'), null, 'a link in the quoted part is not offered for the message')
     t.equal(
-      rows(await core.query(query)).slice(6),
+      rows(await core.query(query)).slice(7),
       [
         ['promo@deals.example', BODY_LINK],
         ['notes@plain.example', TEXT_LINK],

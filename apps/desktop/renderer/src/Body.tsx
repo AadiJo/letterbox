@@ -16,12 +16,12 @@ const POLICY = "default-src 'none'; img-src data: cid:; font-src data:; style-sr
 
 /**
  * The document an HTML body renders in. The policy comes first, so nothing in the body loads
- * before it applies. Links default to a new window, which the sandbox refuses, so a click
+ * before it applies, and DNS prefetching is off, so no hostname in it is looked up ahead. Links default to a new window, which the sandbox refuses, so a click
  * leaves the frame on this document. A link that names its own target is stopped by the
  * app page's `frame-src 'none'` (index.html): the frame shows an error page, and nothing loads.
  */
 const htmlDocument = (html: string) =>
-  `<!doctype html><meta http-equiv="Content-Security-Policy" content="${POLICY}"><meta charset="utf-8"><base target="_blank">` +
+  `<!doctype html><meta http-equiv="Content-Security-Policy" content="${POLICY}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><base target="_blank">` +
   // oxlint-disable-next-line letterbox/renderer-design-tokens -- the frame is its own light document, which the app's tokens never reach
   '<style>html{color-scheme:light}body{margin:0;padding:16px;font:15px/23px -apple-system,system-ui,sans-serif;color:#1d1d1f;overflow-wrap:anywhere}img{max-width:100%;height:auto}</style>' +
   html

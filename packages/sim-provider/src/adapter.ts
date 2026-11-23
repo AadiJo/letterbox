@@ -110,8 +110,6 @@ export type RemoteFacts = {
   }
   /** The provider's own verdict that this is bulk mail. Null when it gives none. */
   bulk: boolean | null
-  /** True when the provider verified that the From address's domain sent it. Left out when not. */
-  senderVerified?: boolean
 }
 
 export type RemoteMessage = RemoteState & RemoteFacts
@@ -121,6 +119,8 @@ export type RemoteBody = {
   /** Untrusted. The core keeps it as it came, and its body pipeline makes what the UI shows. */
   html: string | null
   attachments: { name: string; mime: string; size: number; inline: boolean }[]
+  /** True when the provider verified that the From address's domain sent it. Left out when not. */
+  senderVerified?: boolean
 }
 
 /**

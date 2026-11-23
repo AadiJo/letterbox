@@ -108,9 +108,14 @@ pub enum TrackerReason {
 }
 
 /// The bytes of one remote image, after its `chunk` messages, which carry them as base64.
+///
+/// The UI binds them through DOM APIs only: it sets the placeholder element's `src` (or
+/// `poster`, `href`) to a `data:` URL, or a `--letterbox-image-i` custom property on the
+/// frame's root with `style.setProperty`. It never writes them into CSS text the sender wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct ImageFile {
-    /// The type the server gave, always `image/...`.
+    /// Read from the bytes, never from the server's word: `image/png`, `image/jpeg`,
+    /// `image/gif`, `image/webp` or `image/avif`. SVG is refused.
     pub mime: String,
     pub size: u64,
 }
@@ -121,10 +126,11 @@ pub struct ImageFile {
 pub enum ImageError {
     /// The message, its body or that index is not there.
     Gone,
-    /// The message's images are not shown.
+    /// The message's images are not shown, or stopped being shown while it was fetched.
     Blocked,
-    /// The server sent something the core will not pass on: a redirect to a tracker or to a
-    /// URL that is not https, more than five redirects, or a type that is not an image.
+    /// The core will not pass it on: its host's address is not public, it redirected to a
+    /// tracker or to a URL that is not https or more than five times, or its bytes are not a
+    /// PNG, JPEG, GIF, WebP or AVIF image.
     Refused,
     /// More than 5 MB.
     TooLarge,

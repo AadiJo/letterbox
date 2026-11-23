@@ -237,10 +237,15 @@ export type UnsubscribeSource = "header" | "body";
 
 /**
  * The bytes of one remote image, after its `chunk` messages, which carry them as base64.
+ *
+ * The UI binds them through DOM APIs only: it sets the placeholder element's `src` (or
+ * `poster`, `href`) to a `data:` URL, or a `--letterbox-image-i` custom property on the
+ * frame's root with `style.setProperty`. It never writes them into CSS text the sender wrote.
  */
 export type ImageFile = { 
 /**
- * The type the server gave, always `image/...`.
+ * Read from the bytes, never from the server's word: `image/png`, `image/jpeg`,
+ * `image/gif`, `image/webp` or `image/avif`. SVG is refused.
  */
 mime: string, size: number, };
 

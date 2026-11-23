@@ -25,8 +25,14 @@ const VERIFIED = ['mx.google.com; dkim=pass header.i=@shop.example; dmarc=pass (
  *   <base href>, rel/photo.png                    the base goes, so the relative image names no server
  *   image-set(), logo@2x.png beside cid:logo      not listed, so never fetched
  *   data-letterbox-image="7"                      an attribute that pretends to be the core's own
+ *   <link> dns-prefetch, preconnect, stylesheet    hints a browser acts on outside the image policy
+ *   <meta http-equiv>                              which would turn prefetching back on
+ *   US1.LIST-MANAGE.COM., ｍａｉｌｔｒａｃｋ.io       known hosts in capitals with a trailing dot, and in full-width letters
  */
 const NEWSLETTER = [
+  '<link rel="dns-prefetch" href="//cdn.shop.example"><link rel="preconnect" href="https://cdn.shop.example">',
+  '<link rel="stylesheet" href="https://cdn.shop.example/mail.css">',
+  '<meta http-equiv="x-dns-prefetch-control" content="on">',
   '<base href="https://evil.example/">',
   '<table><tr><td background="https://cdn.shop.example/bg.png">',
   '<img src="https://cdn.shop.example/hero.jpg" width="600" alt="Winter sale">',
@@ -45,6 +51,8 @@ const NEWSLETTER = [
   '<img src="https://us1.list-manage.com/track/open.php?u=1">',
   '<img src="https://news.shop.example/e/open.gif?id=9">',
   '<img src="https&#58;//mailtrack.io/trace/mail/x.png">',
+  '<img src="https://US1.LIST-MANAGE.COM./track/x.png" alt="">',
+  '<img src="https://ｍａｉｌｔｒａｃｋ.io/y.png" alt="">',
   '<div style="background:url(https://ct.sendgrid.net/wf/open?upn=1)">Thanks for reading.</div>',
 ].join('')
 
@@ -56,6 +64,8 @@ const TRACKERS = [
   { host: 'news.shop.example', reason: 'hidden' },
   { host: 'us1.list-manage.com', reason: 'known-host' },
   { host: 'news.shop.example', reason: 'beacon' },
+  { host: 'mailtrack.io', reason: 'known-host' },
+  { host: 'us1.list-manage.com', reason: 'known-host' },
   { host: 'mailtrack.io', reason: 'known-host' },
   { host: 'ct.sendgrid.net', reason: 'known-host' },
 ]
@@ -140,6 +150,39 @@ const seed = (): Seed => ({
       '2025-12-02T11:00:00.000Z',
       ['relay.example; dmarc=pass header.from=shop.example'],
     ),
+    // Google's first verdict passes, but another of Google's below it fails: unsure, so unverified.
+    newsletter(
+      'split',
+      'Split verdict',
+      SHOP,
+      '<img src="https://cdn.shop.example/split.png" alt="Split">',
+      '2025-12-02T11:30:00.000Z',
+      [...VERIFIED, 'mx.google.com; dmarc=fail header.from=shop.example'],
+    ),
+    // Verified, but for evil.example: the shop's address is only in the quoted display name.
+    newsletter(
+      'display',
+      'Display name',
+      { name: 'Shop <news@shop.example>', address: 'x@evil.example' },
+      '<img src="https://cdn.shop.example/display.png" alt="Display">',
+      '2025-12-02T11:45:00.000Z',
+      ['mx.google.com; dmarc=pass header.from=evil.example'],
+    ),
+    // Images that point inside the network: an IP literal, one in IPv6 form, a name the fake
+    // web resolves to loopback, one to a public and a private address, and a redirect to one.
+    newsletter(
+      'inner',
+      'Inner images',
+      SHOP,
+      [
+        '<img src="https://127.0.0.1/a.png" alt="A">',
+        '<img src="https://[::ffff:127.0.0.1]/b.png" alt="B">',
+        '<img src="https://inner.shop.example/c.png" alt="C">',
+        '<img src="https://mixed.shop.example/d.png" alt="D">',
+        '<img src="https://cdn.shop.example/hop.png" alt="E">',
+      ].join(''),
+      '2025-12-02T12:00:00.000Z',
+    ),
   ],
 })
 
@@ -173,7 +216,7 @@ async function image(core: CoreClient, message: Message, index: number) {
   const chunks = Math.ceil(response.result.size / (64 * 1024))
   const parts: Buffer[] = []
   for (let taken = 0; taken < chunks; taken += 1) parts.push(Buffer.from((await core.take('chunk')).data, 'base64'))
-  return { answer: response.result, bytes: Buffer.concat(parts).toString() }
+  return { answer: response.result, bytes: Buffer.concat(parts).toString('base64') }
 }
 
 scenario('trackers leave an html body for good, and its remote images wait until the user shows them', async (t) => {
@@ -209,7 +252,7 @@ scenario('trackers leave an html body for good, and its remote images wait until
   t.equal(bodyOf(spring).body.images.shown, 'sender', 'the message shows its images for its sender')
   t.equal(bodyOf(winter).body.images.shown, 'sender', "the sender's other message, its address in other case, does too")
 
-  for (const subject of ['Your account is locked', 'Claimed verdict']) {
+  for (const subject of ['Your account is locked', 'Claimed verdict', 'Split verdict']) {
     const open = await openThread(core, (await thread(core, subject)).id)
     const forged = bodyOf(open)
     t.equal(
@@ -224,6 +267,12 @@ scenario('trackers leave an html body for good, and its remote images wait until
       `${subject}: its sender cannot be always shown`,
     )
   }
+  const display = bodyOf(await openThread(core, (await thread(core, 'Display name')).id))
+  t.equal(
+    [display.message.from.address, display.body.images.shown],
+    ['x@evil.example', 'blocked'],
+    "a mailbox named only in a quoted display name is not the shop's, so its mail stays blocked",
+  )
 
   box.deliver(
     newsletter(
@@ -270,22 +319,28 @@ scenario('trackers leave an html body for good, and its remote images wait until
   t.equal(t.web.requested(), [], 'nothing was fetched: no UI asked for an image')
 })
 
+/** A PNG, a JPEG and an SVG's first bytes, which is all the core reads to tell them apart. */
+const PNG = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from('hero')])
+const JPEG = Buffer.concat([Buffer.from('ffd8ffe0', 'hex'), Buffer.from('poster')])
+const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><a href="https://shop.example">x</a></svg>')
+
 scenario('the core fetches a shown image a UI asks for, checks every redirect, and fetches nothing else', async (t) => {
-  t.web.serve('https://cdn.shop.example/hero.jpg', { kind: 'body', mime: 'image/jpeg', bytes: Buffer.from('hero') })
-  t.web.serve('https://cdn.shop.example/bg.png', { kind: 'redirect', location: 'https://us1.list-manage.com/o.gif' })
+  // Says it is a JPEG, but its bytes are a PNG: the core goes by the bytes.
+  t.web.serve('https://cdn.shop.example/hero.jpg', { kind: 'body', mime: 'image/jpeg', bytes: PNG })
+  t.web.serve('https://cdn.shop.example/bg.png', { kind: 'redirect', location: 'https://us1.list-manage.com./o.gif' })
   t.web.serve('https://cdn.shop.example/stripe.png', { kind: 'redirect', location: 'http://cdn.shop.example/s.png' })
   t.web.serve('https://cdn.shop.example/poster.jpg', { kind: 'redirect', location: '/moved/poster.jpg' })
-  t.web.serve('https://cdn.shop.example/moved/poster.jpg', {
-    kind: 'body',
-    mime: 'image/jpeg',
-    bytes: Buffer.from('poster'),
-  })
-  t.web.serve('https://cdn.shop.example/badge.svg', { kind: 'body', mime: 'text/html', bytes: Buffer.from('<p>') })
+  t.web.serve('https://cdn.shop.example/moved/poster.jpg', { kind: 'body', mime: 'image/jpeg', bytes: JPEG })
+  t.web.serve('https://cdn.shop.example/badge.svg', { kind: 'body', mime: 'image/svg+xml', bytes: SVG })
   t.web.serve('https://cdn.shop.example/promo.jpg', {
     kind: 'body',
     mime: 'image/jpeg',
-    bytes: Buffer.alloc(5 * 1024 * 1024 + 1),
+    bytes: Buffer.concat([JPEG, Buffer.alloc(5 * 1024 * 1024)]),
   })
+  t.web.resolve('inner.shop.example', ['127.0.0.1'])
+  t.web.resolve('mixed.shop.example', ['93.184.215.14', '10.0.0.5'])
+  t.web.resolve('hidden.shop.example', ['169.254.169.254'])
+  t.web.serve('https://cdn.shop.example/hop.png', { kind: 'redirect', location: 'https://hidden.shop.example/e.png' })
   const { core } = await start(t, seed())
   const winter = await openThread(core, (await thread(core, 'Winter sale')).id)
   const message = bodyOf(winter).message
@@ -295,19 +350,37 @@ scenario('the core fetches a shown image a UI asks for, checks every redirect, a
   await done(t, core, show(message, 'message'), 'show this message')
   t.equal(
     await image(core, message, 1),
-    { answer: { mime: 'image/jpeg', size: 4 }, bytes: 'hero' },
-    'a shown image comes from the core, in chunks',
+    { answer: { mime: 'image/png', size: PNG.length }, bytes: PNG.toString('base64') },
+    'a shown image comes from the core, in chunks, its type read from its bytes',
   )
-  t.equal(await image(core, message, 0), { answer: 'refused', bytes: '' }, 'a redirect to a tracker is not followed')
+  t.equal(
+    await image(core, message, 0),
+    { answer: 'refused', bytes: '' },
+    'a redirect to a tracker, its host in another spelling, is not followed',
+  )
   t.equal(await image(core, message, 2), { answer: 'refused', bytes: '' }, 'nor one away from https')
   t.equal(
     await image(core, message, 3),
-    { answer: { mime: 'image/jpeg', size: 6 }, bytes: 'poster' },
+    { answer: { mime: 'image/jpeg', size: JPEG.length }, bytes: JPEG.toString('base64') },
     'a relative redirect to another image on https is',
   )
-  t.equal(await image(core, message, 4), { answer: 'refused', bytes: '' }, 'what is not an image is not passed on')
+  t.equal(
+    await image(core, message, 4),
+    { answer: 'refused', bytes: '' },
+    'an SVG, which can carry links, is not passed on',
+  )
   t.equal(await image(core, message, 5), { answer: 'too-large', bytes: '' }, 'nor an image over 5 MB')
   t.equal(await image(core, message, 6), { answer: 'gone', bytes: '' }, 'an index past the list is gone')
+
+  const inner = bodyOf(await openThread(core, (await thread(core, 'Inner images')).id)).message
+  await done(t, core, show(inner, 'message'), 'show the inner images')
+  const refused = []
+  for (const index of [0, 1, 2, 3, 4]) refused.push((await image(core, inner, index)).answer)
+  t.equal(
+    refused,
+    ['refused', 'refused', 'refused', 'refused', 'refused'],
+    'a loopback literal, its IPv6 form, a name that resolves to loopback, one with a private address among public ones, and a redirect to cloud metadata are all refused',
+  )
   t.equal(
     t.web.requested(),
     [
@@ -318,8 +391,40 @@ scenario('the core fetches a shown image a UI asks for, checks every redirect, a
       'https://cdn.shop.example/moved/poster.jpg',
       'https://cdn.shop.example/badge.svg',
       'https://cdn.shop.example/promo.jpg',
+      'https://cdn.shop.example/hop.png',
     ],
-    'the web saw only the listed images and the redirects it allowed: no tracker, noscript image, base, image-set or srcset beside a local image',
+    'the web saw only the listed public images and the redirects allowed: no tracker, no address inside the network, no noscript image, base, image-set or srcset beside a local image',
+  )
+})
+
+scenario('a block while an image is fetched ends the fetch as blocked', async (t) => {
+  t.web.serve('https://cdn.shop.example/hero.jpg', { kind: 'body', mime: 'image/png', bytes: PNG })
+  const { core } = await start(t, seed())
+  const winter = await openThread(core, (await thread(core, 'Winter sale')).id)
+  const message = bodyOf(winter).message
+  await done(t, core, show(message, 'message'), 'show this message')
+  const held = t.web.hold('https://cdn.shop.example/hero.jpg')
+  const asked = core.begin({ method: 'image', messageId: message.id, index: 1 })
+  await held.arrived
+  await done(t, core, show(message, 'blocked'), 'block it while the image is on its way')
+  held.release()
+  const response = await asked.done
+  t.equal(response.ok ? 'fetched' : response.error, 'blocked', 'the bytes that came are not passed on')
+
+  // A redirect held, then a block: the next hop is never asked for.
+  t.web.serve('https://cdn.shop.example/poster.jpg', { kind: 'redirect', location: '/moved/poster.jpg' })
+  await done(t, core, show(message, 'message'), 'show it again')
+  const redirect = t.web.hold('https://cdn.shop.example/poster.jpg')
+  const second = core.begin({ method: 'image', messageId: message.id, index: 3 })
+  await redirect.arrived
+  await done(t, core, show(message, 'blocked'), 'block it while the redirect is on its way')
+  redirect.release()
+  const answer = await second.done
+  t.equal(answer.ok ? 'fetched' : answer.error, 'blocked', 'a block before a hop ends the fetch')
+  t.equal(
+    t.web.requested(),
+    ['https://cdn.shop.example/hero.jpg', 'https://cdn.shop.example/poster.jpg'],
+    'and the redirect was never followed',
   )
 })
 

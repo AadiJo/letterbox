@@ -111,8 +111,33 @@ pub struct Scan {
     block_text: String,
     first_content: Option<u32>,
     last_content: Option<u32>,
-    /// The Border candidates whose text is still being read: open, and not yet 16 bytes long.
+    /// The Border candidates whose text may still be read, innermost last. Elements close
+    /// innermost first, so one that closed or holds BORDER_TEXT bytes leaves from the top.
     reading: Vec<usize>,
+}
+
+/// How much of a Border candidate's text the rules read: enough for "From:".
+const BORDER_TEXT: usize = 16;
+
+/// How much of the text since the latest `div` or `p` the rules keep: enough for "wrote:".
+const BLOCK_TEXT: usize = 256;
+
+/// The start of `text`, at most `bytes` long, cut at a character boundary.
+fn head(text: &str, bytes: usize) -> &str {
+    let mut end = bytes.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The end of `text`, at most `bytes` long, cut at a character boundary.
+fn tail(text: &str, bytes: usize) -> &str {
+    let mut start = text.len().saturating_sub(bytes);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 /// The attributes of an element that the quote rules read, with their entities decoded.
@@ -167,7 +192,18 @@ impl Scan {
         if let Some(candidate) = self.candidates.get_mut(index) {
             candidate.end = candidate.end.min(pos);
         }
-        self.reading.retain(|open| *open != index);
+        self.drop_finished();
+    }
+
+    /// Takes the Border candidates off the top of `reading` that closed or hold enough text.
+    fn drop_finished(&mut self) {
+        while let Some(&index) = self.reading.last() {
+            let candidate = &self.candidates[index];
+            if candidate.end == u32::MAX && candidate.text.len() < BORDER_TEXT {
+                return;
+            }
+            self.reading.pop();
+        }
     }
 
     /// An image, or text that is not blank, at `pos`.
@@ -176,28 +212,28 @@ impl Scan {
         self.last_content = Some(pos);
     }
 
-    /// Text at `pos`, blank or not.
+    /// Text at `pos`, blank or not. Copies at most BLOCK_TEXT bytes of it, and BORDER_TEXT into
+    /// each Border candidate still reading, however long the chunk.
     pub fn text(&mut self, pos: u32, text: &str) {
-        self.block_text.push_str(text);
-        if self.block_text.len() > 256 {
-            let mut cut = self.block_text.len() - 128;
-            while !self.block_text.is_char_boundary(cut) {
-                cut += 1;
-            }
-            self.block_text.drain(..cut);
+        self.block_text.push_str(tail(text, BLOCK_TEXT));
+        if self.block_text.len() > 2 * BLOCK_TEXT {
+            let kept = tail(&self.block_text, BLOCK_TEXT).len();
+            self.block_text.drain(..self.block_text.len() - kept);
         }
         for &index in &self.reading {
             let candidate = &mut self.candidates[index];
+            let open = candidate.end == u32::MAX && pos >= candidate.start.pos;
+            if !open || candidate.text.len() >= BORDER_TEXT {
+                continue;
+            }
             let piece = if candidate.text.is_empty() {
                 text.trim_start()
             } else {
                 text
             };
-            candidate.text.push_str(piece);
+            candidate.text.push_str(head(piece, BORDER_TEXT - candidate.text.len()));
         }
-        let candidates = &self.candidates;
-        self.reading
-            .retain(|&index| candidates[index].text.len() < 16 && pos >= candidates[index].start.pos);
+        self.drop_finished();
     }
 
     /// True when a Border candidate's text starts "From:". Every other candidate qualifies by its kind.

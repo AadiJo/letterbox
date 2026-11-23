@@ -41,7 +41,7 @@ export type Scenario = {
   /** Locks or unlocks core-sim's stand-in keychain. While locked, every call to it fails, and what it held is kept for the unlock. */
   lockKeychain(locked: boolean): void
   /** The fake web the core fetches remote images from (web.ts). */
-  web: Pick<FakeWeb, 'serve' | 'requested'>
+  web: Pick<FakeWeb, 'serve' | 'resolve' | 'hold' | 'requested'>
   /**
    * Runs one SQL statement on the core's store and returns its rows. Only while no core runs:
    * a scenario uses it to make the store look like one an older core wrote.
@@ -266,7 +266,7 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
       }
       record({ from: 'scenario', note: `the keychain is ${locked ? 'locked' : 'unlocked'}` })
     },
-    web: { serve: web.serve, requested: web.requested },
+    web: { serve: web.serve, resolve: web.resolve, hold: web.hold, requested: web.requested },
     sql: (statement) => {
       record({ from: 'scenario', note: `the store runs: ${statement}` })
       const store = new DatabaseSync(join(data, 'letterbox.sqlite'))

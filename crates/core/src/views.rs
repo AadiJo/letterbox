@@ -94,7 +94,7 @@ fn message<'a>(world: &World, record: &'a MessageRecord, pending: &Pending<'a>, 
     Message {
         id: record.id.clone(),
         from: person(&record.facts.from, me),
-        sender_verified: record.facts.sender_verified,
+        sender_verified: body::sender_verified(record),
         to: record.facts.to.iter().map(|to| person(to, me)).collect(),
         cc: record.facts.cc.iter().map(|cc| person(cc, me)).collect(),
         sent_at: record.facts.sent_at.clone(),
