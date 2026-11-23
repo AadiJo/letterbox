@@ -67,7 +67,7 @@ export const readFrame = (page: Page, where: Where) =>
       quote: all(doc, '.gmail_quote, blockquote').length,
       // The color of each quote attribution, which a `<style>` in the new part sets.
       cite: all(doc, '.gmail_attr').map((element) => view.getComputedStyle(element).color),
-      // The color of the quoted text, which two rules of the same weight set, the later one blue.
+      // The color of the quoted text, which two rules of the same weight set, the later one blue (dark, a light blue).
       tone: all(doc, '.quote-tone').map((element) => view.getComputedStyle(element).color),
       title: get<string>(Document.prototype, 'title', doc),
       fits: {

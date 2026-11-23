@@ -98,6 +98,8 @@ async function relayCore(page: Page) {
   let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
+  // Set by `rewriteToPage`: what every message from the core becomes on its way to the page.
+  let rewrite: ((message: string) => string) | undefined
   // True once `failNextUndo` is called: the page's next undo ends the connection, and the core never sees it.
   let failUndo = false
   // Armed by `holdNextUndoAnswer`: the change id of the page's next undo, once sent, and the core's answer to it, once held.
@@ -186,7 +188,7 @@ async function relayCore(page: Page) {
       await core.close()
     }
     core.onMessage((frame) => {
-      const message = frame.toString()
+      const message = rewrite ? rewrite(frame.toString()) : frame.toString()
       see(message)
       // serde writes `kind` first and `id` next, so only these lines answer a request.
       const answer = /^\{"kind":"(chunk|response)","id":"([^"]+)"/.exec(message)
@@ -214,6 +216,10 @@ async function relayCore(page: Page) {
     })
   })
   return {
+    /** Rewrites every message the core sends from now on, before the page sees it, until called with undefined. */
+    rewriteToPage: (change: ((message: string) => string) | undefined) => {
+      rewrite = change
+    },
     pauseAtAccepted: () => new Promise<void>((resolve) => (armed = resolve)),
     /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
     pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),

@@ -3,7 +3,7 @@
 // `<form name="createElement">` makes `doc.createElement` that form, and an `<input
 // name="setAttribute">` does the same to its form. So nothing here reads a method or a
 // property off the frame's objects: each call goes through the prototype that defines it,
-// with the frame's object as `this`. Body.tsx and images.ts use it.
+// with the frame's object as `this`. Body.tsx, images.ts and colors.ts use it.
 
 /** The getter `name` defines on `prototype`, as a function of the object to read. */
 function getter<Value>(prototype: object, name: string): (target: object) => Value {
@@ -15,6 +15,7 @@ function getter<Value>(prototype: object, name: string): (target: object) => Val
 const rootOf = getter<HTMLElement | null>(Document.prototype, 'documentElement')
 const bodyOf = getter<HTMLElement | null>(Document.prototype, 'body')
 const headOf = getter<HTMLHeadElement | null>(Document.prototype, 'head')
+const defaultViewOf = getter<Window | null>(Document.prototype, 'defaultView')
 const localName = getter<string>(Element.prototype, 'localName')
 const textOf = getter<string | null>(Node.prototype, 'textContent')
 const parentOf = getter<Node | null>(Node.prototype, 'parentNode')
@@ -50,10 +51,17 @@ export const frameDom = {
   set: (element: Element, name: string, value: string) => Element.prototype.setAttribute.call(element, name, value),
   unset: (element: Element, name: string) => Element.prototype.removeAttribute.call(element, name),
   replace: (element: Element, by: Node) => Element.prototype.replaceWith.call(element, by),
-  /** Sets a custom property on the frame's root element. */
-  setProperty: (doc: Document, name: string, value: string) => {
+  /** Sets a property on the frame's root element's own style, `important` when asked. */
+  setProperty: (doc: Document, name: string, value: string, priority: '' | 'important' = '') => {
     const root = rootOf(doc)
-    if (root) CSSStyleDeclaration.prototype.setProperty.call(styleOf(root), name, value)
+    if (root) CSSStyleDeclaration.prototype.setProperty.call(styleOf(root), name, value, priority)
+  },
+  /** True while `doc` is a frame's current document: one its frame dropped has no window. */
+  current: (doc: Document) => defaultViewOf(doc) !== null,
+  /** Takes a custom property off the frame's root element. */
+  removeProperty: (doc: Document, name: string) => {
+    const root = rootOf(doc)
+    if (root) CSSStyleDeclaration.prototype.removeProperty.call(styleOf(root), name)
   },
   /**
    * How tall the frame must be to show its whole document: the root's own height, which takes in
