@@ -19,6 +19,15 @@ use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
 
+/// How an account's pulls have ended since the core started (see `note_pull`).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PullsEnded {
+    /// How many have ended well.
+    pub(crate) well: u64,
+    /// True when the last one found the provider offline.
+    pub(crate) offline: bool,
+}
+
 /// Whether a pass pulls, and whether the accounts view shows it as syncing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Pull {
@@ -175,11 +184,10 @@ impl Inner {
         if self.unsure(&account_id) && !self.backfilling(&account_id) {
             // A pass that only pushes was not counted as a pull when it was queued. It is one now.
             let _pulling = self.pulling(&account_id);
-            match self.pull(&account_id, &linked, pull).await {
-                Ok(done) => {
-                    self.count_pull(&account_id);
-                    pulled = Some(done);
-                }
+            let done = self.pull(&account_id, &linked, pull).await;
+            self.note_pull(&account_id, done.as_ref().map(drop).map_err(|failure| *failure));
+            match done {
+                Ok(done) => pulled = Some(done),
                 Err(failure) => result = Err(failure),
             }
         }
@@ -204,14 +212,12 @@ impl Inner {
                     }
                 }),
             };
+            // A pull that ran here, not the one the pass made before its push.
+            if pulled_now {
+                self.note_pull(&account_id, done.as_ref().map(drop).map_err(|failure| *failure));
+            }
             match done {
-                Ok(done) => {
-                    // A pull that ran here, not the one the pass made before its push.
-                    if pulled_now {
-                        self.count_pull(&account_id);
-                    }
-                    synced = matches!(done, Pulled::Done);
-                }
+                Ok(done) => synced = matches!(done, Pulled::Done),
                 Err(failure) => result = Err(failure),
             }
         }
@@ -229,22 +235,21 @@ impl Inner {
         Some(result)
     }
 
-    /// Counts a pull that ended well for the account (`pulled_well`). The schedule skips its
-    /// own pull when one did since its tick (schedule.rs).
-    fn count_pull(&self, account_id: &AccountId) {
-        *self
-            .state
-            .borrow_mut()
-            .pulled_well
-            .entry(account_id.clone())
-            .or_default() += 1;
+    /// Notes in `pulls_ended` how a pull for the account ended. The schedule reads it
+    /// (schedule.rs): to skip its own pull when another ended well since its tick, and to tell
+    /// whether a hint that the network is back holds.
+    fn note_pull(&self, account_id: &AccountId, ended: PassResult) {
+        let mut state = self.state.borrow_mut();
+        let log = state.pulls_ended.entry(account_id.clone()).or_default();
+        log.well += u64::from(ended.is_ok());
+        log.offline = ended == Err(AdapterFailure::Offline);
     }
 
-    /// How many pulls have ended well for the account since the core started.
-    pub(crate) fn pulls_ended_well(&self, account_id: &AccountId) -> u64 {
+    /// How the account's pulls have ended since the core started.
+    pub(crate) fn pulls_ended(&self, account_id: &AccountId) -> PullsEnded {
         self.state
             .borrow()
-            .pulled_well
+            .pulls_ended
             .get(account_id)
             .copied()
             .unwrap_or_default()

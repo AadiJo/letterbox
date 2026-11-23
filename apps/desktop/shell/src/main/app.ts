@@ -5,6 +5,7 @@
 //   - opens the core's sign-in pages in the browser, https only;
 //   - saves and opens attachments for the page, which names them by blob id (attachments.ts);
 //   - notifies of new mail that is the user's turn, and keeps the badge count (notify.ts);
+//   - tells the core when the network may be back, so an offline account pulls soon (network.ts);
 //   - on quit, closes the core's input, waits up to STOP_MS, then kills it by PID.
 // If the core exits on its own, the page hears it through the port. Nothing restarts it.
 
@@ -27,6 +28,7 @@ import { openAttachment, saveAttachment } from './attachments.ts'
 import { coreCommand, readConfig } from './config.ts'
 import { type CoreHooks, type CoreSession, startCore, STOP_MS } from './core.ts'
 import { log, logTo } from './log.ts'
+import { watchNetwork } from './network.ts'
 import { applyBadge, notifyYourTurn, openFromNotifications, showBadge } from './notify.ts'
 import { createWindow, lockNavigation, pageOrigin, registerScheme, serveRenderer } from './window.ts'
 
@@ -91,6 +93,8 @@ if (!read.ok) {
   /** Page connects and the quit, one at a time, in order. */
   let queue = Promise.resolve()
   let quitting = false
+  /** Stops main telling the core the network may be back (network.ts). Set once the app is ready. */
+  let stopWatchingNetwork: (() => void) | undefined
   const origin = pageOrigin(config.renderer)
 
   /**
@@ -169,6 +173,9 @@ if (!read.ok) {
       applyBadge(opened)
     }
     open()
+    // One watcher for the app, across cores. The core between pages, if any, hears nothing:
+    // its successor pulls at start anyway.
+    stopWatchingNetwork = watchNetwork(() => core?.session.networkBack())
     // macOS keeps an app running with no window. Opening one gives its page a new core.
     app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && open?.())
   })
@@ -181,6 +188,7 @@ if (!read.ok) {
     event.preventDefault()
     if (quitting) return
     quitting = true
+    stopWatchingNetwork?.()
     log(`quitting: stopping the core, for up to ${STOP_MS} ms`)
     void queue
       .then(() => core?.session.stop())

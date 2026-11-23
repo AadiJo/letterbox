@@ -15,6 +15,14 @@
 //!   - When the account's health clears, because some other call reached the provider, the
 //!     network is back: it pulls at once, through a wait of zero. A pull that failed while
 //!     another call cleared the health counts as cleared too, as no wait was there to be woken.
+//!   - When the host says the network may be back (`network-back`), the hint only brings the
+//!     next deadline forward, to SETTLE from now if that is sooner, and only for an account it
+//!     holds for as it comes (`hint_holds`): its last pull found the provider offline, its health
+//!     still reads offline, and no pull is queued or running. What happens at that deadline is
+//!     what happens at any: the guards and the failures in a row above, so a pull that finds the
+//!     provider offline again backs off as before. Every other account ignores it, and a hint
+//!     that comes once the deadline is near changes nothing, so a network that flaps brings each
+//!     offline account at most one pull per SETTLE, and a healthy one none.
 //!   - It starts no pull while another one is queued or running for the account (`pulls`, see
 //!     `Inner::pulling` in queue.rs), or a backfill's next page is queued: that pull does the
 //!     work. It waits PERIOD more instead.
@@ -32,10 +40,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use letterbox_protocol::AccountId;
+use letterbox_protocol::{AccountId, Answer, Empty, RequestId, Response};
 use tokio::sync::oneshot;
 
-use crate::adapter::AdapterFailure;
+use crate::adapter::{AdapterFailure, LocalFuture};
+use crate::clock::Noted;
 use crate::sync::{Joined, PassResult, Pull};
 use crate::world::Health;
 use crate::{Inner, Linked};
@@ -52,6 +61,11 @@ pub(crate) const PERIOD: Duration = Duration::from_secs(60);
 /// say so. A provider that keeps failing is asked no more than that.
 const MOST: Duration = Duration::from_secs(300);
 
+/// How long an offline account waits to pull after the host says the network may be back. A
+/// network that just came back gets a moment to settle, and the hints a resume and a reconnect
+/// send together fold into one pull.
+const SETTLE: Duration = Duration::from_secs(2);
+
 /// Where a schedule starts.
 pub(crate) enum Start {
     /// With a pull due at once: an account the core resumed at start.
@@ -66,6 +80,8 @@ enum Woke {
     Due,
     /// The account's health cleared: the provider can be reached again.
     Cleared,
+    /// The host said the network may be back, and the hint held (see `network_back`).
+    Hinted,
     /// The link stopped.
     Stopped,
 }
@@ -96,19 +112,42 @@ impl Inner {
             }
         };
         loop {
-            // Registered before the wait begins, so health that clears while it runs wakes it.
-            let cleared = linked.wake.notified();
-            let due = async {
-                match wait {
-                    Some(wait) => self.env.idle(wait).await,
+            let timer = wait.map(|wait| self.env.idle(wait));
+            let mut due = std::pin::pin!(async move {
+                match timer {
+                    Some(timer) => timer.await,
                     None => std::future::pending().await,
                 }
-            };
-            let woke = tokio::select! {
-                biased;
-                () = linked.stop.cancelled() => Woke::Stopped,
-                () = cleared => Woke::Cleared,
-                () = due => Woke::Due,
+            });
+            // The deadline a hint brought forward, if one came. The loop pulls at whichever comes first.
+            let mut sooner: Option<LocalFuture<'static, ()>> = None;
+            let woke = loop {
+                // Registered before the wait goes on, so health that clears or a hint that comes while it runs wakes it.
+                let cleared = linked.wake.notified();
+                let hinted = linked.network.notified();
+                let soon = async {
+                    match sooner.as_mut() {
+                        Some(soon) => soon.await,
+                        None => std::future::pending().await,
+                    }
+                };
+                let woke = tokio::select! {
+                    biased;
+                    () = linked.stop.cancelled() => Woke::Stopped,
+                    () = cleared => Woke::Cleared,
+                    () = hinted => Woke::Hinted,
+                    () = soon => Woke::Due,
+                    () = &mut due => Woke::Due,
+                };
+                match woke {
+                    // A deadline already brought forward is as soon as a hint makes it.
+                    Woke::Hinted => {
+                        if sooner.is_none() {
+                            sooner = Some(self.env.idle(SETTLE));
+                        }
+                    }
+                    woke => break woke,
+                }
             };
             match woke {
                 Woke::Stopped => return,
@@ -117,7 +156,7 @@ impl Inner {
                     wait = Some(Duration::ZERO);
                     continue;
                 }
-                Woke::Due => {}
+                Woke::Due | Woke::Hinted => {}
             }
             let busy = self.state.borrow().pulls.contains_key(&account_id) || self.backfilling(&account_id);
             if busy {
@@ -145,12 +184,12 @@ impl Inner {
     async fn scheduled_pull(self: &Rc<Self>, account_id: &AccountId, linked: &Linked) -> Option<PassResult> {
         let core = Rc::clone(self);
         let (id, link) = (account_id.clone(), linked.clone());
-        let ticked = self.pulls_ended_well(account_id);
+        let ticked = self.pulls_ended(account_id).well;
         let pass = self.enqueue_pull(account_id, async move {
             if link.stop.is_cancelled() || !core.still_current(&id, &link) {
                 return None;
             }
-            if core.pulls_ended_well(&id) != ticked {
+            if core.pulls_ended(&id).well != ticked {
                 if let Some(backfill) = core.join_backfill(&id) {
                     return Some((Some(Ok(())), Some(backfill), false));
                 }
@@ -160,6 +199,7 @@ impl Inner {
             }
             Some(core.sync_pass(id, Pull::Quiet).await)
         });
+        self.env.noted(Noted::PullQueued);
         let ran = tokio::select! {
             biased;
             () = linked.stop.cancelled() => return None,
@@ -185,6 +225,42 @@ impl Inner {
             // A backfill whose page never ran, as at close, said nothing worth backing off for.
             ended = backfill => Some(ended.unwrap_or(Ok(()))),
         }
+    }
+
+    /// Tells the schedule of each account the hint holds for that the network may be back
+    /// (`Request::NetworkBack`), and answers at once. The schedule brings its next deadline
+    /// forward (see the module docs). Each account it does not hold for is noted as ignoring it.
+    /// The wake waits for a schedule between waits, as one that has just pulled is.
+    pub(crate) fn network_back(self: &Rc<Self>, id: RequestId) {
+        let links: Vec<(AccountId, Linked)> = {
+            let state = self.state.borrow();
+            let linked = state.adapters.iter();
+            linked
+                .map(|(account_id, linked)| (account_id.clone(), linked.clone()))
+                .collect()
+        };
+        for (account_id, linked) in links {
+            if self.hint_holds(&account_id) {
+                linked.network.notify_one();
+            } else {
+                self.env.noted(Noted::HintIgnored);
+            }
+        }
+        self.respond(id, Response::NetworkBack(Answer::from(Ok(Empty {}))));
+    }
+
+    /// True when a network-back hint should bring the account's next pull forward: its last
+    /// pull found the provider offline, its health still reads offline, as a push or a check
+    /// can have changed it since, and no pull or backfill page is queued or running for it.
+    fn hint_holds(&self, account_id: &AccountId) -> bool {
+        let pulls = self.pulls_ended(account_id);
+        let state = self.state.borrow();
+        let offline = state
+            .world
+            .accounts
+            .get(account_id)
+            .is_some_and(|account| account.health == Health::Offline);
+        pulls.offline && offline && !state.pulls.contains_key(account_id) && !state.backfills.contains_key(account_id)
     }
 
     /// The wait before the next pull, after one that ended with `ended`. `failures` counts the

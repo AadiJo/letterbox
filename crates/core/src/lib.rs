@@ -205,7 +205,7 @@ impl Core {
                     subscriptions: IndexMap::default(),
                     syncing: HashSet::default(),
                     pulls: HashMap::default(),
-                    pulled_well: HashMap::default(),
+                    pulls_ended: HashMap::default(),
                     loading_bodies: HashSet::default(),
                     unreachable_bodies: HashSet::default(),
                     attempts: Attempts::default(),
@@ -307,8 +307,8 @@ struct State {
     syncing: HashSet<AccountId>,
     /// How many passes that pull are queued or running for each account (see `enqueue_pull`).
     pulls: HashMap<AccountId, usize>,
-    /// How many pulls have ended well for each account (see `count_pull` in sync.rs).
-    pulled_well: HashMap<AccountId, u64>,
+    /// How each account's pulls have ended (see `note_pull` in sync.rs).
+    pulls_ended: HashMap<AccountId, crate::sync::PullsEnded>,
     loading_bodies: HashSet<MessageId>,
     unreachable_bodies: HashSet<MessageId>,
     attempts: Attempts,
@@ -338,6 +338,8 @@ struct Linked {
     link: u64,
     /// Wakes the link's sync schedule when the account's health clears (see `record_outcome` in sync.rs).
     wake: Rc<Notify>,
+    /// Wakes the link's sync schedule when the host says the network may be back (schedule.rs).
+    network: Rc<Notify>,
     /// Cancelled when a sign-out or a new sign-in unlinks it, or the core closes. Its sync
     /// schedule ends then, and a scheduled pass still queued for it does not start (schedule.rs).
     stop: CancellationToken,
@@ -350,6 +352,7 @@ impl Linked {
             adapter,
             link,
             wake: Rc::new(Notify::new()),
+            network: Rc::new(Notify::new()),
             stop: closing.child_token(),
         }
     }
