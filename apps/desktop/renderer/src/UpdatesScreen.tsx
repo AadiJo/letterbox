@@ -119,6 +119,7 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
       <ListPane title="Updates" subtitle={subtitle} chrome={chrome} accounts={accounts}>
         <SenderList
           slice={slice}
+          inbox={inbox}
           show={show}
           selected={selected?.id ?? null}
           most={most}
@@ -149,6 +150,7 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
 
 type ListProps = {
   slice: SenderSlice | undefined
+  inbox: MailboxId
   show: (range: Range) => void
   selected: SenderId | null
   most: number
@@ -162,7 +164,7 @@ type ListProps = {
  * The senders on screen plus a small overscan, with spacers standing in for the rest, as
  * MailScreen's list does. It subscribes only to the range on screen.
  */
-function SenderList({ slice, show, selected, most, onSelect, onAct, onUnsubscribe }: ListProps) {
+function SenderList({ slice, inbox, show, selected, most, onSelect, onAct, onUnsubscribe }: ListProps) {
   const list = useRef<HTMLDivElement>(null)
   const [first, setFirst] = useState(0)
   const [fits, setFits] = useState(0)
@@ -216,6 +218,7 @@ function SenderList({ slice, show, selected, most, onSelect, onAct, onUnsubscrib
           <SenderRow
             key={sender.id}
             sender={sender}
+            inbox={inbox}
             most={most}
             selected={sender.id === selected}
             divider={index > 0 && sender.id !== selected && at(index - 1)?.id !== selected}

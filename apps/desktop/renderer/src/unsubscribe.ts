@@ -5,26 +5,30 @@
 // the sender's page is left, a button that opens it. Opening it is the person's own click,
 // through the shell (ShellBridge.openPage), and never counts as done.
 //
-// The core's view of one sender (`useSenderRow`) is the only source of where an unsubscribe has
-// got, for every control: toolbar, row, conversation, ⇧U, the toast and z. A sender with no row
+// The core's view of one sender, one shared live view per sender (`useSenderRow`), is the only
+// source of where an unsubscribe has got, for every control: toolbar, row, conversation, ⇧U,
+// the toast and z. The core refuses a second unsubscribe from a sender while one is on its way
+// (`conflict`) or once one is done (`already-unsubscribed`), so a view that lags can at worst
+// show a refusal. A sender with no row
 // in Updates has no control. The renderer keeps only the senders whose unsubscribe is on its
 // way until their view shows it, and what the toast says. Undo comes only from the view's `held` state and its change, so it is
 // there after a reload too.
 
+import type { Subscription } from '@letterbox/client'
 import type {
   AccountId,
   ChangeId,
   MailboxId,
   MessageId,
   Refusal,
+  SenderSummary,
   ThreadDetail,
   Unsubscribe,
-  Unsubscribed,
 } from '@letterbox/protocol'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { PageOutcome } from '@letterbox/client/message-port'
 import type { Mail } from './actions.ts'
-import { client, commandSettled, lostReason, useView } from './core.ts'
+import { client, commandSettled, lostReason } from './core.ts'
 import { noticeSerial } from './undo.ts'
 
 /** The key, with Shift, that unsubscribes from the open sender or conversation's sender. */
@@ -104,11 +108,77 @@ export const UNSUBSCRIBE_REFUSALS = {
   'refused-by-provider': 'The sender’s server didn’t accept it.',
   unconfirmed: 'It may have gone through. Letterbox won’t retry it on its own.',
   invalid: 'Its unsubscribe address isn’t one Letterbox can use.',
+  'already-unsubscribed': 'You’ve already unsubscribed from this sender.',
 } as const satisfies Record<Refusal, string>
+
+/** Why `target`'s unsubscribe did not go, in words, naming the sender where that reads better. */
+export const refusalFor = (reason: Refusal, target: Target) =>
+  reason === 'already-unsubscribed'
+    ? `You’ve already unsubscribed from ${target.sender}.`
+    : UNSUBSCRIBE_REFUSALS[reason]
 
 /** A sender, by account and address: the key of everything kept per sender here. */
 export const senderKey = (target: Pick<Target, 'accountId' | 'address'>) =>
   `${target.accountId} ${target.address.toLowerCase()}`
+
+/** A sender's Updates row as one inbox has it. */
+type SenderRef = Pick<Target, 'accountId' | 'address' | 'inbox'>
+
+/**
+ * The live view of one sender's Updates row, shared by everything that reads it: the guard in
+ * `unsubscribe`, the toolbar, the row and the toast, so they never disagree. One per sender and
+ * inbox, open while anyone watches it. `latest` is undefined until the core answers, and null
+ * when the sender has no row in Updates.
+ */
+type SenderView = {
+  subscribe: (onChange: () => void) => () => void
+  latest: () => SenderSummary | null | undefined
+}
+
+const senderViews = new Map<string, SenderView>()
+
+function senderView(sender: SenderRef): SenderView {
+  const key = `${sender.inbox} ${senderKey(sender)}`
+  const known = senderViews.get(key)
+  if (known) return known
+  const { accountId, inbox, address } = sender
+  let open: Subscription<'senders'> | undefined
+  let users = 0
+  const view: SenderView = {
+    subscribe: (onChange) => {
+      open ??= client.subscribe({ view: 'senders', accountId, mailboxId: inbox, address, offset: 0, limit: 1 })
+      const subscription = open
+      const stop = subscription.watch(onChange)
+      users += 1
+      return () => {
+        stop()
+        users -= 1
+        // React unsubscribes and subscribes again at once in Strict Mode. Close only if nobody came back.
+        queueMicrotask(() => {
+          if (users > 0 || open !== subscription) return
+          subscription.close()
+          open = undefined
+        })
+      }
+    },
+    latest: () => {
+      const page = open?.latest()
+      return page === undefined ? undefined : (page.senders[0] ?? null)
+    },
+  }
+  senderViews.set(key, view)
+  return view
+}
+
+/**
+ * `sender`'s Updates row, live, from its shared view (`senderView`): the only source of where an
+ * unsubscribe from it has got. Undefined until the core answers, and null when the sender has
+ * no row in Updates, as for a person's mail or archived automated mail.
+ */
+export function useSenderRow(sender: SenderRef) {
+  const view = senderView(sender)
+  return useSyncExternalStore(view.subscribe, view.latest)
+}
 
 const watchers = new Set<() => void>()
 const notify = () => watchers.forEach((watcher) => watcher())
@@ -168,30 +238,12 @@ function show(next: Shown | null, ends = false) {
 const fail = (target: Target, change: ChangeId | null, failed: string) =>
   show({ target, change, failed, serial: noticeSerial() }, true)
 
-/** Opens the live view of `target`'s sender. `shows` resolves once it shows `change`, in any state. */
-function watchFor(target: Target, change: ChangeId) {
-  const { accountId, inbox, address } = target
-  const view = client.subscribe({ view: 'senders', accountId, mailboxId: inbox, address, offset: 0, limit: 1 })
-  const { promise: shows, resolve } = Promise.withResolvers<void>()
-  const look = () => {
-    if (view.latest()?.senders[0]?.unsubscribed?.change === change) resolve()
-  }
-  const unwatch = view.watch(look)
-  look()
-  return {
-    shows,
-    stop: () => {
-      unwatch()
-      view.close()
-    },
-  }
-}
-
 /**
  * Sends the unsubscribe for `target`, unless one for its sender is on its way. The toast
  * follows its change from the start. A refusal, or a failure once it settles, says why on the
  * toast, whatever it shows then, except a conflict over a change the toast already follows.
- * With no answer in ANSWER_MS, the toast goes and the sender's view decides. It never sends again.
+ * With no answer in ANSWER_MS, the sender's view decides: if it shows this change, the toast
+ * follows it, else the toast goes. Both waits on the command end then. It never sends again.
  */
 export async function unsubscribe(target: Target) {
   const key = senderKey(target)
@@ -203,42 +255,58 @@ export async function unsubscribe(target: Target) {
   notify()
   const mine: Shown = { target, change: sent.change, failed: null, serial: noticeSerial() }
   show(mine)
-  const watch = watchFor(target, sent.change)
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<'late'>((resolve) => (timer = setTimeout(() => resolve('late'), ANSWER_MS)))
+  const view = senderView(target)
+  const shows = Promise.withResolvers<void>()
+  const look = () => {
+    if (view.latest()?.unsubscribed?.change === sent.change) shows.resolve()
+  }
+  const leave = view.subscribe(look)
+  look()
+  const late = new Promise<'late'>((resolve) => setTimeout(() => resolve('late'), ANSWER_MS))
+  // In flight until its view shows it, or the core refuses or settles it, or ANSWER_MS pass.
+  void Promise.race([shows.promise, sent.settled, late]).then(() => {
+    if (inFlight.get(key) === sent.change) inFlight.delete(key)
+    notify()
+  })
   try {
     const answer = await Promise.race([sent.answer.catch(() => 'unanswered' as const), late])
-    if (answer === 'late') return void (shown === mine && show(null))
+    if (answer === 'late') {
+      const follows = view.latest()?.unsubscribed?.change === sent.change
+      if (!follows && shown === mine) show(null)
+      // The view shows it held, or on its way: the toast follows it, unless a newer notice took it.
+      if (follows && shown === null && noticeSerial() <= mine.serial) show(mine)
+      sent.cancel()
+      return
+    }
     if (answer === 'unanswered') return fail(target, null, 'Lost the connection. It may or may not have gone through.')
     if (answer.kind === 'rejected') {
       // One from this sender is already on its way: the toast that follows it stays.
       const following = before && !before.failed && before.change && senderKey(before.target) === key
       if (answer.reason === 'conflict' && following) return void (shown === mine && show(before))
-      return fail(target, null, UNSUBSCRIBE_REFUSALS[answer.reason])
+      return fail(target, null, refusalFor(answer.reason, target))
     }
-    await Promise.race([watch.shows, sent.settled, late])
+    const result = await sent.settled
+    if (result === null) {
+      if (shown?.change === sent.change)
+        fail(target, sent.change, 'Lost the connection. It may or may not have gone through.')
+    } else if (typeof result === 'object') fail(target, sent.change, refusalFor(result.failed, target))
+    else if (result === 'undone' && shown?.change === sent.change) show(null)
   } finally {
-    clearTimeout(timer)
-    watch.stop()
-    if (inFlight.get(key) === sent.change) inFlight.delete(key)
-    notify()
+    leave()
   }
-  const result = await sent.settled
-  if (result === null) {
-    if (shown?.change === sent.change)
-      fail(target, sent.change, 'Lost the connection. It may or may not have gone through.')
-  } else if (typeof result === 'object') fail(target, sent.change, UNSUBSCRIBE_REFUSALS[result.failed])
-  else if (result === 'undone' && shown?.change === sent.change) show(null)
 }
 
 /**
- * The shown toast's view says its unsubscribe is now `state`, or null when the view shows another
- * change or no row. Undo follows `held` alone. Once it is done or its page is left, the toast
- * stays a while, then goes. Once the view has shown it and then loses it, as when its sender's
- * last conversation leaves the inbox, the toast goes at once, and z with it.
+ * What the shown toast's view says of its unsubscribe: its sender's row, null once the core says
+ * the sender has no row in Updates, or undefined before it has answered, which says nothing.
+ * Undo follows `held` alone. Once it is done or its page is left, the toast stays a while, then
+ * goes. With no row, or once the view has shown it and then loses it, as when its sender's last
+ * conversation leaves the inbox, the toast goes at once, and z with it.
  */
-export function viewed(change: ChangeId, state: Unsubscribed['state'] | null) {
-  if (shown?.change !== change || shown.failed) return
+export function viewed(change: ChangeId, row: SenderSummary | null | undefined) {
+  if (shown?.change !== change || shown.failed || row === undefined) return
+  if (row === null) return show(null)
+  const state = row.unsubscribed?.change === change ? row.unsubscribed.state : null
   if (state === null) {
     held = null
     if (seen) show(null)
@@ -280,17 +348,6 @@ export function undoFromToast() {
   if (!shown || noticeSerial() > shown.serial) return false
   if (held) void undoUnsubscribe(held)
   return true
-}
-
-/**
- * The Updates row of `address` in `accountId` and `inbox`, live, from the core's view of that one
- * sender: the only source of where an unsubscribe from it has got. Undefined until the core
- * answers, and null when the sender has no row in Updates, as for a person's mail or archived
- * automated mail.
- */
-export function useSenderRow(inbox: MailboxId, accountId: AccountId, address: string) {
-  const page = useView({ view: 'senders', accountId, mailboxId: inbox, address, offset: 0, limit: 1 })
-  return page === undefined ? undefined : (page.senders[0] ?? null)
 }
 
 /** Opens a sender's unsubscribe page in the browser, through the shell, or a new tab outside it. */

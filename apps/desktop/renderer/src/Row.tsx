@@ -2,7 +2,7 @@
 // height, selected or not. Unread rows are bright and their subject is the row's only
 // semibold line. Read rows step down in brightness. The selected row is raised above the list.
 
-import type { Person, SenderId, SenderSummary, ThreadId, ThreadSummary } from '@letterbox/protocol'
+import type { MailboxId, Person, SenderId, SenderSummary, ThreadId, ThreadSummary } from '@letterbox/protocol'
 import { Archive, Flag, Hourglass, MailOpen, MailX } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import { Avatar } from './Avatar.tsx'
@@ -14,6 +14,7 @@ import { useThread } from './threads.ts'
 import { age, isLate, listTime } from './time.ts'
 import { rate, Strip } from './Volume.tsx'
 import { RowUnsubscribed } from './Unsubscribe.tsx'
+import { useSenderRow } from './unsubscribe.ts'
 
 /** Every row's height in px. The windowed list sizes its scroll area by it. */
 export const ROW_HEIGHT = 78
@@ -144,6 +145,8 @@ function RowButton({ label, Glyph, run }: { label: string; Glyph: typeof Archive
 
 type SenderRowProps = {
   sender: SenderSummary
+  /** The inbox the list is of: the sender's unsubscribe state comes from its own view in it. */
+  inbox: MailboxId
   /** The busiest day of any row in the list, so the strips compare. */
   most: number
   selected: boolean
@@ -162,6 +165,7 @@ type SenderRowProps = {
  */
 export function SenderRow({
   sender,
+  inbox,
   most,
   selected,
   divider,
@@ -173,6 +177,10 @@ export function SenderRow({
   const now = useNow()
   const unread = sender.unread > 0 && !selected
   const bright = unread || selected
+  // Where an unsubscribe has got, from the sender's shared view, as the toolbar and toast read it.
+  // Nothing until it answers.
+  const live = useSenderRow({ accountId: sender.accountId, address: sender.address, inbox })
+  const unsubscribed = live?.unsubscribed ?? null
   return (
     <div
       role="option"
@@ -210,7 +218,7 @@ export function SenderRow({
           <span className="-my-[5px] ml-auto hidden flex-none items-center gap-0.5 group-hover:flex">
             {sender.unread > 0 && <RowButton label="Mark read" Glyph={MailOpen} run={() => onMarkRead(sender)} />}
             <RowButton label="Archive all" Glyph={Archive} run={() => onArchive(sender)} />
-            {sender.unsubscribe && !sender.unsubscribed && (
+            {sender.unsubscribe && live && !unsubscribed && (
               <RowButton label="Unsubscribe" Glyph={MailX} run={() => onUnsubscribe(sender)} />
             )}
           </span>
@@ -224,7 +232,7 @@ export function SenderRow({
         <div className="mt-[5px] flex h-3.5 items-center gap-2 text-meta whitespace-nowrap text-muted">
           <Strip days={sender.days} most={most} />
           <span data-field="rate">{rate(sender.days)}</span>
-          {sender.unsubscribed && <RowUnsubscribed state={sender.unsubscribed} />}
+          {unsubscribed && <RowUnsubscribed state={unsubscribed} />}
         </div>
       </div>
     </div>

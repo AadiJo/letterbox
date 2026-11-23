@@ -29,7 +29,9 @@ import { checkOutcomes } from './unsubscribe-outcomes.ts'
 import {
   checkAcceptedGap,
   checkBackToSender,
+  checkGoneUnseen,
   checkLastLeaves,
+  checkLateAnswer,
   checkNoAnswer,
   checkRowOnOpen,
 } from './unsubscribe-races.ts'
@@ -237,6 +239,8 @@ export async function checkUnsubscribe(browser: Browser) {
     await checkOneAtATime(page, relay)
     await checkUndoAfterReload(page, posted)
     await checkLastLeaves(page, relay, running)
+    await checkGoneUnseen(page, relay, running)
+    await checkLateAnswer(page, relay, running)
     await checkDropped(page, relay)
     flags = []
     await page.reload()

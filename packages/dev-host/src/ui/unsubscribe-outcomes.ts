@@ -35,6 +35,7 @@ import {
   where,
 } from './unsubscribe.ts'
 import { archiveOpen, at, checkOverlap, checkScrolledOut, checkZOverDone, deliver, lists } from './unsubscribe-views.ts'
+import { checkStaggered } from './unsubscribe-races.ts'
 import { nav, senderRow } from './updates-edges.ts'
 
 declare global {
@@ -56,6 +57,7 @@ export const REFUSED: Record<Refusal, string> = {
   'refused-by-provider': 'The sender’s server didn’t accept it.',
   unconfirmed: 'It may have gone through. Letterbox won’t retry it on its own.',
   invalid: 'Its unsubscribe address isn’t one Letterbox can use.',
+  'already-unsubscribed': 'You’ve already unsubscribed from Northfield Card.',
 }
 
 /** Searches all mail for `text`, so a conversation outside the list's window has a row. */
@@ -292,6 +294,7 @@ export async function checkOutcomes(page: Page, relay: Relay, running: RunningSi
   await checkMailto(page, relay, running)
   await checkPage(page, running)
   await checkOverlap(page, running)
+  await checkStaggered(page, relay, running)
   await checkRefusals(page, relay)
   await checkConversation(page)
   await checkFarSender(page, running)

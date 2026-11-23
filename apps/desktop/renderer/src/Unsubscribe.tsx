@@ -67,7 +67,7 @@ type ControlProps = {
  * view of the sender. With no answer yet, or no row in Updates, there is nothing to show.
  */
 function Control({ place, target, tooltip }: ControlProps) {
-  const row = useSenderRow(target.inbox, target.accountId, target.address)
+  const row = useSenderRow(target)
   return row ? <ForRow place={place} target={target} row={row} tooltip={tooltip} /> : null
 }
 
@@ -372,11 +372,11 @@ type ShownProps = { shown: Shown; onUndo: () => Promise<void>; onArchiveAll: Arc
 
 function ShownToast({ shown, onUndo, onArchiveAll }: ShownProps) {
   const { target, change, failed } = shown
-  const row = useSenderRow(target.inbox, target.accountId, target.address)
+  const row = useSenderRow(target)
   const state = row?.unsubscribed?.change === change ? row.unsubscribed : null
   useEffect(() => {
-    if (change) viewed(change, state?.state ?? null)
-  }, [change, state])
+    if (change) viewed(change, row)
+  }, [change, row])
   const ghost = 'inline-flex h-[30px] items-center gap-2 rounded-lg pr-2 pl-2.5 text-fg hover:bg-hover'
   const rule = <span aria-hidden className="mx-0.5 h-[18px] w-px bg-hover" />
   if (failed)

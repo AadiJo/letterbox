@@ -102,8 +102,9 @@ export function command(sent: Command, change?: ChangeId) {
 /**
  * Sends `sent` as `command` does, and also waits for the core's last word on it: the answer, and
  * a promise of its `settled` result. That is null for a command the core refused, which never
- * settles, and once the connection ends. The wait is in place before the command goes, so no
- * `settled` comes unheard, and it is gone once it ends.
+ * settles, once the connection ends, and after `cancel`. The wait is in place before the command
+ * goes, so no `settled` comes unheard, and it is gone once it ends. `cancel` drops both waits,
+ * for a caller that has given up on them: a late answer or `settled` then reaches nobody.
  */
 export function commandSettled(sent: Command) {
   const change = newId('change') as ChangeId
@@ -113,7 +114,11 @@ export function commandSettled(sent: Command) {
   const answer = client.command(sent, change)
   const none = () => settledTakers.get(change)?.(null)
   answer.then((first) => first.kind === 'rejected' && none(), none)
-  return { change, answer, settled }
+  const cancel = () => {
+    client.forget(change)
+    none()
+  }
+  return { change, answer, settled, cancel }
 }
 
 // A failed hello ends the connection, which `useLost` reports.

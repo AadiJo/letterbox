@@ -11,6 +11,8 @@
 //   C05 an answer sent from inside `send` arrives before its wait exists and is lost
 //   C06 with 'keep', a message that arrived before its wait is lost
 //   C07 a `send` that throws escapes as a throw, or leaves its wait behind to take a later message
+//   C08 a forgotten command's answer still reaches its wait, or is lost instead of going to `unclaimed`,
+//       or forgetting one drops the wait of another
 
 import type { ClientMessage, CoreMessage, RequestId, SubscriptionId } from '@letterbox/protocol'
 import { createClient, type Listener, type Options } from './client.ts'
@@ -183,6 +185,23 @@ const checks: [string, () => Promise<void>][] = [
       endInsideSend = true
       if (!(await settles(client.hello()))) fail('a hello whose send ended the core never settled')
       if (!(await settles(client.hello()))) fail('a hello after the core ended never settled')
+    },
+  ],
+  [
+    'C08 a forgotten command waits no more, its answer goes to unclaimed, and other commands still hear theirs',
+    async () => {
+      const handed: CoreMessage[] = []
+      const wire = memory()
+      const client = createClient(wire.transport, { newId: ids(), unclaimed: (message) => handed.push(message) })
+      const forgotten = client.command({ kind: 'trash', threadIds: [] }, 'change_a' as never)
+      const kept = client.command({ kind: 'trash', threadIds: [] }, 'change_b' as never)
+      client.forget('change_a' as never)
+      const late: CoreMessage = { kind: 'accepted', change: 'change_a' as never, rev: 1 }
+      wire.deliver(late)
+      wire.deliver({ kind: 'accepted', change: 'change_b' as never, rev: 2 })
+      if (await settles(forgotten)) fail('the forgotten command still heard its answer')
+      if (handed.length !== 1 || handed[0] !== late) fail(`unclaimed got ${JSON.stringify(handed)}`)
+      if ((await kept).kind !== 'accepted') fail('the other command lost its answer')
     },
   ],
 ]

@@ -249,7 +249,8 @@ async function relayCore(page: Page) {
     },
     /**
      * Holds every message the core sends that `test` takes, while everything else passes, until
-     * `release` hands them to the page in order. `first` resolves once it holds one.
+     * `release` hands them to the page in order, or `releaseLast` hands over only the newest, as
+     * a core that sent one update for several changes would. `first` resolves once it holds one.
      */
     holdFromCore: (test: (message: string) => boolean) => {
       const { promise: first, resolve } = Promise.withResolvers<void>()
@@ -257,9 +258,16 @@ async function relayCore(page: Page) {
       coreHolds.add(hold)
       return {
         first,
+        /** How many messages it holds now. */
+        count: () => hold.held.length,
         release: () => {
           coreHolds.delete(hold)
           for (const message of hold.held) toPage?.(message)
+        },
+        releaseLast: () => {
+          coreHolds.delete(hold)
+          const last = hold.held.at(-1)
+          if (last !== undefined) toPage?.(last)
         },
       }
     },

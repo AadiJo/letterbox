@@ -99,6 +99,11 @@ export type Client = {
   query<V extends View>(query: QueryFor<V>): Promise<Queries[V]['result']>
   /** Sends a command and resolves with the core's first answer to it. Without `change`, `newId` names the change. */
   command(command: Command, change?: ChangeId): Promise<Of<'accepted'> | Of<'rejected'>>
+  /**
+   * Stops waiting for the answer to the command named `change`: its promise never settles,
+   * and an answer that comes later goes to `unclaimed`, as one nobody asked for.
+   */
+  forget(change: ChangeId): void
   request<M extends Method>(request: RequestFor<M>): Promise<ResponseFor<M>>
   /** Starts a request without waiting, for a caller that needs its id or two requests in flight. */
   begin<M extends Method>(request: RequestFor<M>): { id: RequestId; done: Promise<ResponseFor<M>> }
@@ -136,6 +141,8 @@ export function createClient(transport: Transport, options: Options): KeepingCli
   /** Held messages no wait has taken yet, with `unclaimed: 'keep'`. */
   const unclaimed: CoreMessage[] = []
   const waiters: Waiter[] = []
+  /** The wait for each command's answer, by change id, while it waits. */
+  const commandWaits = new Map<ChangeId, Waiter['matches']>()
   const subscriptions = new Map<SubscriptionId, Open>()
   let ended: Error | null = null
 
@@ -265,12 +272,21 @@ export function createClient(transport: Transport, options: Options): KeepingCli
       subscription.close()
       return data
     },
-    command: (command, change = options.newId('change') as ChangeId) =>
-      ask(
-        { kind: 'command', change, command },
-        (message): message is Of<'accepted'> | Of<'rejected'> =>
-          (message.kind === 'accepted' || message.kind === 'rejected') && message.change === change,
-      ),
+    command: (command, change = options.newId('change') as ChangeId) => {
+      const matches = (message: CoreMessage): message is Of<'accepted'> | Of<'rejected'> =>
+        (message.kind === 'accepted' || message.kind === 'rejected') && message.change === change
+      commandWaits.set(change, matches)
+      const answer = ask({ kind: 'command', change, command }, matches)
+      const done = () => void (commandWaits.get(change) === matches && commandWaits.delete(change))
+      answer.then(done, done)
+      return answer
+    },
+    forget: (change) => {
+      const matches = commandWaits.get(change)
+      commandWaits.delete(change)
+      const index = waiters.findIndex((waiter) => waiter.matches === matches)
+      if (index !== -1) waiters.splice(index, 1)
+    },
     settled: (change) =>
       waitFor((message): message is Of<'settled'> => message.kind === 'settled' && message.change === change),
     request: (request) => begin(request).done,

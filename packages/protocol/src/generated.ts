@@ -533,7 +533,7 @@ export type Delivery = { "state": "held", change: ChangeId, until: string, } | {
 /**
  * Why the core or the provider said no.
  */
-export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed" | "not-public";
+export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed" | "not-public" | "already-unsubscribed";
 
 /**
  * The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.

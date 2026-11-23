@@ -22,6 +22,9 @@ pub enum Refusal {
     /// The URL's host is not on the public internet: loopback, private, link-local or another
     /// reserved address. Nothing was sent to it.
     NotPublic,
+    /// An unsubscribe from a sender the user has already unsubscribed from: its newest one is
+    /// done, or left its page. Nothing new is stored or sent.
+    AlreadyUnsubscribed,
 }
 
 /// The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.

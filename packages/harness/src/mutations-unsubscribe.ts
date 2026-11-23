@@ -17,8 +17,16 @@ const NOT_VOUCHED = 'a one-click unsubscribe without an aligned signature'
 const SECOND_CORE = 'a second core on the same store is refused'
 const REGISTRABLE = "an unsubscribe's one-click signature aligns only within"
 const ONE_SENDER = 'a senders view of one address holds that sender alone'
+const ONCE = 'a sender already unsubscribed from, done or left at its page, is refused another'
 
 export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
+  {
+    name: 'a sender already unsubscribed from may be asked again, and sent again',
+    file: unsubscribe('mod.rs'),
+    find: 'Some(Unsubscribed::Done { .. } | Unsubscribed::Page { .. }) => return Err(Refusal::AlreadyUnsubscribed),',
+    replace: 'Some(Unsubscribed::Done { .. } | Unsubscribed::Page { .. }) => {}',
+    scenarios: ONCE,
+  },
   {
     name: 'a senders view of one address holds every sender',
     file: 'crates/core/src/senders.rs',

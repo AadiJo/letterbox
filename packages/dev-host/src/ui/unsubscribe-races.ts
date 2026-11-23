@@ -9,13 +9,18 @@
 //     and the toast goes, with z.
 //   - An unsubscribe nothing answers: after 15 s the sender's view decides again, and nothing
 //     is sent twice.
+//   - Staggered views: the core settles one while the sender's own view is held. A second is
+//     refused already-unsubscribed, and one email goes (this one on the core that lets the
+//     window pass).
+//   - A sender's view answering with no row before it showed the change: the toast goes.
+//   - An answer held past 15 s while the view shows the change held: the toast keeps Undo.
 
 import type { Page } from 'playwright'
 import type { RunningSim } from '../sim.ts'
 import { equal, type Relay } from './record.ts'
 import { button, confirm, confirmed, openSender, sentOf, toast } from './unsubscribe.ts'
 import { deliver, lists, settle } from './unsubscribe-views.ts'
-import { senderRow } from './updates-edges.ts'
+import { nav, senderRow } from './updates-edges.ts'
 
 /** The open confirm's title. */
 const confirmFor = (page: Page) => confirm(page).getAttribute('aria-label')
@@ -137,4 +142,126 @@ export async function checkNoAnswer(page: Page, relay: Relay) {
     [true, 0, 1],
     'with no answer, Unsubscribe waits, then after 15 s it is back and the toast gone, and the one unsubscribe was not sent again',
   )
+}
+
+/** A message from the core that updates a live view the page opened of `address` alone: the shared view of one sender. */
+const oneSenderUpdate = (relay: Relay, address: string) => (message: string) => {
+  const sub = /^\{"kind":"update","sub":"([^"]+)"/.exec(message)?.[1]
+  return (
+    sub !== undefined &&
+    relay.fromPage().some((text) => text.includes(`"sub":"${sub}"`) && text.includes(`"address":"${address}"`))
+  )
+}
+
+/**
+ * Staggered views: the core accepts and settles an unsubscribe, and the Updates list hears it,
+ * while the sender's own view is held. The page can ask again, and the core refuses it
+ * `already-unsubscribed`: the toast says so, and one email went, not two.
+ */
+export async function checkStaggered(page: Page, relay: Relay, running: RunningSim) {
+  const [only] = lists('race', 1, 40)
+  if (!only) throw new Error('no list to deliver')
+  await deliver(page, running, [only])
+  // The newest sender sits at the top, which the windowed list may have scrolled past.
+  await nav(page, 'Updates').click()
+  await page.getByRole('listbox', { name: 'Updates' }).evaluate((list) => list.scrollTo({ top: 0 }))
+  await openSender(page, 'race list 0')
+  const before = sentOf(relay, 'unsubscribe')
+  const settledSeen = relay.sees('"kind":"settled"')
+  const own = relay.holdFromCore(oneSenderUpdate(relay, 'list0@race.example'))
+  await confirmed(page)
+  await settledSeen
+  await own.first
+  await settle(page)
+  await button(page).waitFor()
+  await page.keyboard.press('Shift+U')
+  await confirm(page).waitFor()
+  await page.keyboard.press('Enter')
+  await toast(page).filter({ hasText: 'already unsubscribed' }).waitFor()
+  equal(
+    [
+      sentOf(relay, 'unsubscribe') - before,
+      running.mailbox.sent().filter((copy) => copy.recipients.includes('leave@race.example')).length,
+      await toast(page).textContent(),
+      relay
+        .fromPage()
+        .filter((text) => text.includes('"kind":"subscribe"') && text.includes('"address":"list0@race.example"'))
+        .length,
+    ],
+    [2, 1, 'You’ve already unsubscribed from race list 0.', 1],
+    'with its own view held after the core settled it, a second unsubscribe is refused already-unsubscribed, one email went, and the row, toolbar, toast and guard shared one view',
+  )
+  own.release()
+  await page.locator('[data-field="unsubscribe-state"][data-state="done"]').waitFor()
+}
+
+/**
+ * A sender confirmed gone before its view ever showed the change: the view answers with no
+ * row, so the toast goes, and z with it. The relay hands over only the newest of the held
+ * updates, as a core that sent one update for both changes would.
+ */
+export async function checkGoneUnseen(page: Page, relay: Relay, running: RunningSim) {
+  const [only] = lists('unseen', 1, 45)
+  if (!only) throw new Error('no list to deliver')
+  await deliver(page, running, [only])
+  await openSender(page, 'unseen list 0')
+  const accepted = relay.sees('"kind":"accepted"')
+  const own = relay.holdFromCore(oneSenderUpdate(relay, 'list0@unseen.example'))
+  await confirmed(page)
+  await accepted
+  await own.first
+  running.mailbox.move(only.key, 'home')
+  await page.evaluate(() => window.letterboxDev?.sync())
+  // The held state's update, then the empty one, both held.
+  // oxlint-disable-next-line no-await-in-loop -- waits a frame at a time for the relay to hold the second
+  while (own.count() < 2) await settle(page)
+  own.releaseLast()
+  await toast(page).filter({ hasText: 'unseen list 0' }).waitFor({ state: 'detached' })
+  const undos = sentOf(relay, 'undo')
+  await page.keyboard.press('z')
+  await settle(page)
+  equal(
+    [await toast(page).count(), sentOf(relay, 'undo') - undos],
+    [0, 0],
+    'the sender’s view answers with no row before it ever showed the change, so the toast goes, and z undoes nothing',
+  )
+}
+
+/**
+ * The core takes the unsubscribe, but its answer is held past 15 s. The sender's view shows it
+ * held, so after the wait the toast still follows it, with Undo. The answer coming later
+ * changes nothing: the page no longer waits for it. z then takes it back.
+ */
+export async function checkLateAnswer(page: Page, relay: Relay, running: RunningSim) {
+  const [only] = lists('late', 1, 47)
+  if (!only) throw new Error('no list to deliver')
+  await deliver(page, running, [only])
+  await openSender(page, 'late list 0')
+  const answer = relay.holdFromCore((message) => message.startsWith('{"kind":"accepted"'))
+  await confirmed(page)
+  await answer.first
+  await page.getByRole('status').getByRole('button', { name: /^Undo/ }).waitFor()
+  // Past the 15 s the page waits for an answer.
+  await page.waitForTimeout(16_000)
+  const after = [
+    await toast(page).textContent(),
+    await page.getByRole('status').getByRole('button', { name: /^Undo/ }).count(),
+  ]
+  answer.release()
+  await settle(page)
+  const answered = [
+    await toast(page).textContent(),
+    await page.getByRole('status').getByRole('button', { name: /^Undo/ }).count(),
+  ]
+  equal(
+    [after, answered],
+    [
+      ['Unsubscribing from late list 0', 1],
+      ['Unsubscribing from late list 0', 1],
+    ],
+    'with its answer held past 15 s, the toast follows the held change from its view, with Undo, and the late answer changes nothing',
+  )
+  await page.keyboard.press('z')
+  await toast(page).filter({ hasText: 'late list 0' }).waitFor({ state: 'detached' })
+  await button(page).waitFor()
 }
