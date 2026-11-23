@@ -113,9 +113,11 @@ fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
                 reversal.map_err(|gone| (Refusal::Conflict, Some(gone)))?,
             ))
         }
-        Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } | Effect::Images { .. } => {
-            refuse(Refusal::NotSupported)
-        }
+        Effect::Send(_)
+        | Effect::Cancel { .. }
+        | Effect::Unrecorded { .. }
+        | Effect::Images { .. }
+        | Effect::Colors { .. } => refuse(Refusal::NotSupported),
     }
 }
 

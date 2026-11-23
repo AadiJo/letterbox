@@ -110,6 +110,12 @@ const images = type({
   trackers: type({ host: 'string', reason: "'known-host' | 'tiny' | 'hidden' | 'beacon'" }).array(),
 })
 
+const colors = type({
+  scheme: "'dark' | 'original'",
+  look: "'branded' | 'simple'",
+  palette: type({ role: "'text' | 'background' | 'border'", original: 'string', dark: 'string' }).array(),
+})
+
 const body = type({
   state: "'ready'",
   text: 'string',
@@ -118,6 +124,7 @@ const body = type({
   images,
   quote: type({ text: 'number | null', html: 'number | null', inConversation: 'boolean' }).or('null'),
   preview: 'string',
+  colors: colors.or('null'),
 })
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })

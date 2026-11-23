@@ -15,12 +15,12 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapter::{
-    AdapterCapabilities, AdapterFailure, BodyResult, Cursor, MailboxRef, MessageRef, PageToken, RemoteFacts,
-};
+use crate::adapter::{AdapterCapabilities, BodyResult, Cursor, MailboxRef, MessageRef, PageToken, RemoteFacts};
+use crate::body::{SenderKey, SenderRecord};
 use crate::effect::{Effect, effect_or_earlier};
 use crate::maps::{HashMap, IndexMap, IndexSet};
 use crate::store::{Record, Store, Transaction};
+use crate::sync::Health;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,29 +58,6 @@ pub struct SnapshotProgress {
     pub next: Option<PageToken>,
     /// How many messages its pages have listed so far.
     pub listed: u64,
-}
-
-/// How a sync pass ended: `ok`, or the adapter failure that stopped it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Health {
-    Ok,
-    Offline,
-    NeedsSignIn,
-    ProviderError,
-}
-
-impl From<Result<(), AdapterFailure>> for Health {
-    fn from(result: Result<(), AdapterFailure>) -> Self {
-        match result {
-            Ok(()) => Health::Ok,
-            Err(AdapterFailure::Offline) => Health::Offline,
-            Err(AdapterFailure::NeedsSignIn) => Health::NeedsSignIn,
-            // The core answers page-expired itself (see snapshot.rs), so it ends a pass only
-            // when an adapter breaks rule 8 by sending it for the first page.
-            Err(AdapterFailure::ProviderError | AdapterFailure::PageExpired) => Health::ProviderError,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -233,6 +210,7 @@ record!(
     MessageRecord in "messages" by MessageId,
     ThreadRecord in "threads" by ThreadId,
     ChangeRecord in "changes" by ChangeId,
+    SenderRecord in "senders" by SenderKey,
 );
 
 /// One of the world's tables. Outside this file it can only be read. To change a record,
@@ -253,6 +231,8 @@ pub struct World {
     pub threads: Table<IndexMap<ThreadId, ThreadRecord>>,
     /// In the order they were accepted.
     pub changes: Table<IndexMap<ChangeId, ChangeRecord>>,
+    /// The user's choices per sender (body/scheme.rs).
+    pub senders: Table<IndexMap<SenderKey, SenderRecord>>,
     pub message_by_ref: Table<HashMap<String, MessageId>>,
     pub mailbox_by_ref: Table<HashMap<String, MailboxId>>,
     pub messages_by_thread: Table<HashMap<ThreadId, IndexSet<MessageId>>>,
@@ -378,6 +358,7 @@ pub fn load_world(store: &Store) -> World {
         messages: by_id(store),
         threads: by_id(store),
         changes: by_id(store),
+        senders: by_id(store),
         message_by_ref: Table(HashMap::default()),
         mailbox_by_ref: Table(HashMap::default()),
         messages_by_thread: Table(HashMap::default()),
@@ -480,6 +461,27 @@ pub fn remove_change(world: &mut World, tx: &Transaction<'_>, id: &ChangeId) {
         touch_effect(&mut world.touched, &world.messages, Some(&record.effect));
     }
     tx.remove::<ChangeRecord>(id);
+}
+
+/// Writes a sender's choices, and marks each conversation with mail from it, which shows them.
+/// It reads every message, which a user's choice can afford.
+pub fn put_sender(world: &mut World, tx: &Transaction<'_>, record: SenderRecord) {
+    tx.put(&record);
+    let from = |message: &&MessageRecord| {
+        message.account_id == record.account_id && message.facts.from.address.to_lowercase() == record.address
+    };
+    let threads = world
+        .messages
+        .values()
+        .filter(from)
+        .map(|message| message.thread_id.clone());
+    world.touched.threads.extend(threads);
+    world.senders.0.insert(record.id.clone(), record);
+}
+
+pub fn remove_sender(world: &mut World, tx: &Transaction<'_>, id: &SenderKey) {
+    world.senders.0.shift_remove(id);
+    tx.remove::<SenderRecord>(id);
 }
 
 /// The messages of one thread, oldest first.

@@ -17,6 +17,7 @@
 import { type Mutation, runBreaks } from './breaks.ts'
 import { ATTACHMENT_MUTATIONS } from './mutations-attachments.ts'
 import { BODY_MUTATIONS } from './mutations-body.ts'
+import { COLOR_MUTATIONS } from './mutations-colors.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { YOUR_TURN_MUTATIONS } from './mutations-your-turn.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
@@ -429,4 +430,5 @@ await runBreaks([
   ...SCHEDULE_MUTATIONS,
   ...NETWORK_MUTATIONS,
   ...BODY_MUTATIONS,
+  ...COLOR_MUTATIONS,
 ])

@@ -23,8 +23,9 @@ use crate::clock::parse;
 use crate::live_view::LiveView;
 use crate::maps::{HashMap, HashSet};
 use crate::store::Transaction;
+use crate::sync::Health;
 use crate::views::Live;
-use crate::world::{AccountRecord, Health, MessageRecord, World, messages_of};
+use crate::world::{AccountRecord, MessageRecord, World, messages_of};
 use crate::{Inner, Linked, State, Subscription};
 
 /// What a view needs from outside the world while the core answers it.

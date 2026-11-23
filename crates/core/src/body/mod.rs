@@ -4,7 +4,10 @@
 //!   - every other remote image becomes a placeholder, and the core fetches it only once the
 //!     user shows the message's images (html.rs, fetch.rs),
 //!   - the quoted history at the end is found, as an offset a UI can fold at (quote.rs),
-//!   - an unsubscribe link in the body is found, for when the headers name none (unsubscribe.rs).
+//!   - an unsubscribe link in the body is found, for when the headers name none (unsubscribe.rs),
+//!   - every color the HTML sets is named, with its value for a dark reader, and the body is
+//!     judged designed or plain (paint.rs, dark.rs). Which a UI shows is the sender's choice
+//!     (scheme.rs).
 //!
 //! When it runs:
 //!   - A body fetched from the provider is processed in its fetch, in the account's queue,
@@ -16,10 +19,6 @@
 //!     (`reprocess`, from `flush`), never in `flush` itself. It shows `loading` until then.
 //!     Raising VERSION is how a rules change reaches stored bodies, lazily.
 //!
-//! A pass that reads color hints from the HTML, to restyle it for a dark reader, belongs in
-//! html.rs beside `rewrite`, which already reads every element's inline style and every
-//! `<style>` block. What it finds would be kept in `Processed` with the rest, under a new VERSION.
-//!
 //! HTML is hostile, so it is read with lol_html, Cloudflare's streaming rewriter (the engine
 //! behind Workers' HTMLRewriter), and never with patterns. It tokenizes as the HTML standard
 //! says, edits in place so the rest of the markup stays byte for byte, and builds no tree a
@@ -29,18 +28,24 @@
 //! keeps a message safe: the renderer's sandbox and policy, which never reach the network,
 //! stay the last line.
 
+mod color;
+mod dark;
 mod fetch;
 mod html;
+mod paint;
 mod quote;
 mod rewrite;
+mod scheme;
 mod trackers;
 mod unsubscribe;
+
+pub use scheme::{SenderKey, SenderRecord};
 
 use std::rc::Rc;
 
 use letterbox_protocol::{
-    AccountId, Body, ChangeId, ChangeResult, CoreMessage, Images, MessageId, Quote, Refusal, ShowImages, Tracker,
-    Unsubscribe, UnsubscribeSource,
+    AccountId, Body, ChangeId, ChangeResult, ColorRole, Colors, CoreMessage, HtmlLook, Images, MessageId, Quote,
+    Refusal, ShowImages, Swatch, Tracker, Unsubscribe, UnsubscribeSource,
 };
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +55,7 @@ use crate::effect::Effect;
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, World, put_change, put_message, scoped};
 
 /// The version of the rules. Raise it whenever a change to them would change a `Processed`.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 /// The most characters a preview holds.
 const PREVIEW: usize = 200;
@@ -107,6 +112,12 @@ struct Processed {
     withheld: bool,
     /// An unsubscribe link in the body.
     link: Option<String>,
+    /// Each color the HTML sets: its role, the sender's value and the dark one, as hex (paint.rs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    palette: Vec<(ColorRole, String, String)>,
+    /// True for designed mail (`paint::Painted::branded`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    branded: bool,
 }
 
 /// Where a body's quote starts, in UTF-16 code units, in the text and in the HTML.
@@ -138,6 +149,8 @@ fn process(body: &RemoteBody) -> Processed {
             preview: preview_of(new_text),
             link: text_link(),
             withheld: body.html.is_some(),
+            palette: Vec::new(),
+            branded: false,
         };
     };
     let html_at = html.quote.map(|at| units(&html.html, at));
@@ -159,6 +172,13 @@ fn process(body: &RemoteBody) -> Processed {
         remote: html.remote,
         trackers: html.trackers,
         withheld: false,
+        palette: html
+            .painted
+            .palette
+            .into_iter()
+            .map(|(role, original, dark)| (role, original.hex(), dark.hex()))
+            .collect(),
+        branded: html.painted.branded,
     }
 }
 
@@ -229,6 +249,31 @@ pub fn ready(world: &World, record: &MessageRecord, body: &RemoteBody) -> Body {
         }),
         preview: processed.preview.clone(),
         html_withheld: processed.withheld,
+        colors: processed.html.is_some().then(|| colors(world, record, processed)),
+    }
+}
+
+/// How to color a message's HTML: its sender's choice, its look and its palette. A body from a
+/// machine (`is_automated`) counts as branded however plain it is: only a person's plain HTML
+/// takes the reader's type.
+fn colors(world: &World, record: &MessageRecord, processed: &Processed) -> Colors {
+    let look = if processed.branded || crate::turns::is_automated(&record.facts) {
+        HtmlLook::Branded
+    } else {
+        HtmlLook::Simple
+    };
+    Colors {
+        scheme: scheme::of(world, record),
+        look,
+        palette: processed
+            .palette
+            .iter()
+            .map(|(role, original, dark)| Swatch {
+                role: *role,
+                original: original.clone(),
+                dark: dark.clone(),
+            })
+            .collect(),
     }
 }
 

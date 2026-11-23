@@ -132,7 +132,7 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'a body read by the earlier rules reaches the frame with its old html',
     file: body('mod.rs'),
-    find: 'const VERSION: u32 = 4;',
+    find: 'const VERSION: u32 = 5;',
     replace: 'const VERSION: u32 = 3;',
     scenarios: PROCESSING,
   },

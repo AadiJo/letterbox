@@ -1,15 +1,18 @@
 //! Pass 2 over an HTML body (see html.rs): it writes the body a UI shows. Trackers come out
 //! (trackers.rs), each remote image becomes a placeholder that names its index in `Found::remote`,
-//! any `data-letterbox-` attribute the sender wrote is dropped, and a marker comment goes before
-//! the element where the quote starts.
+//! any `data-letterbox-` attribute the sender wrote is dropped, a marker comment goes before
+//! the element where the quote starts, and every color is named (paint.rs).
 
-use std::cell::RefCell;
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use lol_html::html_content::{ContentType, Element};
-use lol_html::{RewriteStrSettings, element, rewrite_str, text};
+use lol_html::{RewriteStrSettings, element, end_tag, rewrite_str, text};
 
 use super::fetch::MAX_IMAGES;
 use super::html::{attribute, image_attribute, set};
+use super::paint::{self, Painter};
 use super::trackers::{self, Reason};
 use crate::maps::HashMap;
 
@@ -30,6 +33,8 @@ pub(super) struct Found {
     /// Each URL in `remote` and its index, so a lookup does not walk the list.
     places: HashMap<String, usize>,
     pub(super) trackers: Vec<(String, Reason)>,
+    /// The colour pass, which runs in the same pass.
+    pub(super) paint: Painter,
 }
 
 /// What pass 2 does with one remote URL.
@@ -80,6 +85,17 @@ impl Found {
             changes.push((found.start, found.end, replacement));
         }
         (!changes.is_empty()).then(|| trackers::replace(css, &changes))
+    }
+
+    /// CSS as pass 2 writes it: the sender's `--letterbox-` names renamed, each remote image
+    /// a placeholder (`css`) and each color named (paint.rs). None when it is unchanged.
+    fn restyle(&mut self, css: &str) -> Option<String> {
+        let own = paint::own(css);
+        let images = self.css(&own);
+        let colored = self.paint.css(images.as_deref().unwrap_or(&own));
+        colored
+            .or(images)
+            .or_else(|| matches!(own, Cow::Owned(_)).then(|| own.into_owned()))
     }
 
     /// A srcset without its remote candidates, each judged, trackers with `element` too. A
@@ -138,6 +154,8 @@ fn placeholder(element: &Element<'_, '_>, index: usize) -> String {
 pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, found: &mut Found) -> Option<String> {
     let found = &RefCell::new(found);
     let mut ordinal = 0;
+    // How many tables are open, so the colour pass knows a table nested in another.
+    let tables = Rc::new(Cell::new(0_u32));
     let on_element = element!("*", move |el| {
         ordinal += 1;
         if boundary == Some(ordinal)
@@ -167,16 +185,31 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
             el.remove_attribute(&name);
         }
         let mut found = found.borrow_mut();
+        if el.has_attribute("background") {
+            found.paint.picture();
+        }
         if let Some(verdict) = attribute(el, "background").and_then(|value| found.judge(&value)) {
             el.remove_attribute("background");
             if let Verdict::Place(index) = verdict {
                 set(el, "data-letterbox-background", &index.to_string());
             }
         }
-        if let Some(css) = attribute(el, "style").and_then(|style| found.css(&style)) {
+        if let Some(css) = attribute(el, "style").and_then(|style| found.restyle(&style)) {
             set(el, "style", &css);
         }
         let name = el.tag_name();
+        found.paint.attributes(el, &name);
+        if name == "table" {
+            found.paint.table(el, tables.get() > 0);
+            if let Some(handlers) = el.end_tag_handlers() {
+                tables.set(tables.get() + 1);
+                let open = Rc::clone(&tables);
+                handlers.push(end_tag!(move |_| {
+                    open.set(open.get().saturating_sub(1));
+                    Ok(())
+                }));
+            }
+        }
         if let Some(loads) = image_attribute(el, &name)
             && let Some(verdict) = attribute(el, loads).and_then(|value| found.judge(&value))
         {
@@ -202,7 +235,7 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         style.push_str(chunk.as_str());
         if chunk.last_in_text_node() {
             let css = std::mem::take(&mut style);
-            let rewritten = found.borrow_mut().css(&css).unwrap_or(css);
+            let rewritten = found.borrow_mut().restyle(&css).unwrap_or(css);
             chunk.replace(&rewritten, ContentType::Html);
         } else {
             chunk.remove();

@@ -74,10 +74,11 @@ impl Inner {
 
         let Some((thread_ids, edit)) = Edit::of(&command) else {
             // Set-turn was answered above. Sends belong to the outbox, undos to undo.rs, and
-            // set-images to the body pipeline (body/mod.rs).
+            // set-images and set-colors to the body pipeline (body/mod.rs).
             return match &command {
                 Command::Send { draft } => self.send_draft(change, draft),
                 Command::SetImages { message_id, show } => self.set_images(change, message_id, *show),
+                Command::SetColors { message_id, scheme } => self.set_colors(change, message_id, *scheme),
                 Command::Undo { change: target } => self.undo(change, target),
                 _ => self.reject(change, Refusal::NotSupported),
             };

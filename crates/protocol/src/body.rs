@@ -4,7 +4,8 @@
 //!   - every remote image is a placeholder, and the core fetches it only once the user shows
 //!     images (`Images`, `Request::Image`),
 //!   - the quoted history at the end is found, so a UI can fold it (`Quote`),
-//!   - and an unsubscribe target is read from the headers or the body (`Unsubscribe`).
+//!   - an unsubscribe target is read from the headers or the body (`Unsubscribe`),
+//!   - and every color the HTML sets is named, with a value for a dark reader (`Colors`).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -36,6 +37,8 @@ pub enum Body {
         /// the text before its quote, or from the HTML's text before its quote when the text is
         /// blank. A folded message row shows it.
         preview: String,
+        /// How to color `html` in a dark reader. None when `html` is.
+        colors: Option<Colors>,
     },
     Loading,
     Unavailable {
@@ -189,4 +192,77 @@ pub enum UnsubscribeSource {
     Header,
     /// A link in the body, before its quote, whose text or address says unsubscribe.
     Body,
+}
+
+/// How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
+/// with `var(--letterbox-color-N, <its own color>)`, where N is the color's index in `palette`:
+/// in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
+/// (`background`, gradients too) and borders (`border*`, `outline`). An element whose `bgcolor`,
+/// `<font color>`, or `<body text>` or `link` set one carries `data-letterbox-bg`,
+/// `data-letterbox-text` or `data-letterbox-link` naming its N, and a `<style>` at the start of
+/// `html` applies it with zero specificity, as the attribute did, so the sender's own rules
+/// still win where they did. A custom property the sender named `--letterbox-…` is renamed
+/// `--sender-letterbox-…`, so only the UI sets these.
+///
+/// With nothing set, the HTML shows the sender's own colors (`original`). For `dark`, the UI sets
+/// each `--letterbox-color-N` to its swatch's `dark` on the frame's root, with
+/// `style.setProperty`, as it does for images, and gives the frame its own dark defaults for what
+/// the HTML leaves unset (the page, text and links).
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Colors {
+    /// The user's choice for the message's sender. Set with the `set-colors` command.
+    pub scheme: ColorScheme,
+    pub look: HtmlLook,
+    /// Each color the HTML sets, once per role, in the order the HTML first sets it, at most 256.
+    /// Colors past that keep their own value in both schemes.
+    pub palette: Vec<Swatch>,
+}
+
+/// How a UI colors a message's HTML. The choice is per sender: by the From address, in the
+/// message's account. A sender's choice applies to all its mail, new mail too. Unlike showing
+/// images, it changes only how the frame paints: nothing is fetched and the sender learns
+/// nothing, so anyone who writes that address in a From gains nothing by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorScheme {
+    /// Restyled for the dark reader with each swatch's `dark`. Every sender starts here.
+    Dark,
+    /// The sender's own colors, which a UI shows on a dimmed card.
+    Original,
+}
+
+/// What kind of HTML a message has, so a UI knows whose type to set it in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum HtmlLook {
+    /// Designed mail: it has background images or gradients, layout tables (one nested in
+    /// another, or marked `role="presentation"`), or three or more colors with a clear hue, or it
+    /// comes from a machine (the core's automated rule). It keeps its layout and type.
+    Branded,
+    /// A person's plain HTML. A UI sets it in the reader's own type, at the reader's measure.
+    Simple,
+}
+
+/// One color the HTML sets, for one role.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+pub struct Swatch {
+    pub role: ColorRole,
+    /// The sender's color, as `#rrggbb`, or `#rrggbbaa` when it is not opaque.
+    pub original: String,
+    /// Its value for the dark reader (crates/core/src/body/dark.rs), in the same form. The same
+    /// hue, with its lightness turned over against the reader's background where the original
+    /// was meant for a light page. Text keeps a contrast of at least 4.5:1 (WCAG AA) on the
+    /// reader's background (#1b1b1e), made more opaque if it must be, and a background keeps
+    /// 4.5:1 under the reader's text (#e4e4e4). A border has no floor.
+    pub dark: String,
+}
+
+/// What a color paints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorRole {
+    Text,
+    Background,
+    Border,
 }

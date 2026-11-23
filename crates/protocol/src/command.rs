@@ -3,10 +3,10 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
-use crate::{ChangeId, Draft, MailboxId, MessageId, ShowImages, ThreadId, Turn, present};
+use crate::{ChangeId, ColorScheme, Draft, MailboxId, MessageId, ShowImages, ThreadId, Turn, present};
 
-/// A user intent. Every command but set-images acts on whole threads.
-/// Only set-turn and set-images work with read-only access, because they never leave the device.
+/// A user intent. Every command but set-images and set-colors acts on whole threads.
+/// Only set-turn, set-images and set-colors work with read-only access, because they never leave the device.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
@@ -45,6 +45,14 @@ pub enum Command {
     SetImages {
         message_id: MessageId,
         show: ShowImages,
+    },
+    /// Sets how the sender of one message has its HTML colored (`Colors::scheme`): by that
+    /// message's From address, in its account, for all of that sender's mail, new mail too. It
+    /// settles at once: it never leaves the device. Refused `unknown-target` for a message that
+    /// is not there, and `not-supported` for an undo.
+    SetColors {
+        message_id: MessageId,
+        scheme: ColorScheme,
     },
     /// Takes back one change, exactly. A change the provider has none of is cancelled: it
     /// never goes out, it settles `undone`, and the undo settles `done`. A change the provider
