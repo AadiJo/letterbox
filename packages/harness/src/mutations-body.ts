@@ -180,9 +180,8 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'what a server sends is passed on whatever its bytes are, SVG included',
     file: body('fetch.rs'),
-    find: '                Fetched::Body { bytes, .. } => return sniff(&bytes).map(|mime| (mime, bytes)).ok_or(ImageError::Refused),',
-    replace:
-      '                Fetched::Body { bytes, .. } => return Ok((sniff(&bytes).unwrap_or("image/svg+xml"), bytes)),',
+    find: '                    return sniff(&bytes).map(|mime| (mime, bytes)).ok_or(ImageError::Refused);',
+    replace: '                    return Ok((sniff(&bytes).unwrap_or("image/svg+xml"), bytes));',
     scenarios: FETCH,
   },
   {
