@@ -212,21 +212,19 @@ const MUTATIONS: Mutation[] = [
     name: 'a body is fetched again every time the conversation opens',
     file: core('sync.rs'),
     find: [
-      '            Ok(body) => {',
       '                self.commit(|world, tx, _| {',
       '                    put_message(',
       '                        world,',
       '                        tx,',
       '                        MessageRecord {',
       '                            body: Some(body),',
+      '                            reading,',
       '                            ..current',
       '                        },',
       '                    );',
       '                });',
-      '            }',
     ].join('\n'),
-    replace:
-      '            Ok(body) => {\n                drop((body, current));\n                self.commit(|_, _, _| {});\n            }',
+    replace: '                drop((body, reading, current));\n                self.commit(|_, _, _| {});',
     scenarios: 'opened, once',
   },
   {
