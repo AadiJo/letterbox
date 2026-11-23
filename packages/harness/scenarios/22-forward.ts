@@ -293,9 +293,14 @@ scenario('a forward without some of the original files carries only the rest, an
     'while it waits in its undo window, it lists only the files it will carry',
   )
   await core.stop()
-  // A restart reads the outbox back, and the files left out must stay out. It starts past the window.
+  // A restart reads the outbox back, and the files left out must stay out. It starts past the
+  // window, so the forward is due before the welcome. Its files stay held until the welcome,
+  // so the pass that carries it commits nothing before it.
+  box.holdAttachments()
   const again = t.startCore({ now: '2026-01-01T02:00:00.000Z' })
   await again.hello()
+  await box.attachmentHeld()
+  box.releaseAttachments()
   await sync(again)
   t.equal((await again.settled(send.change)).result, 'done', 'after a restart the window ends and it goes out')
   const { raw } = delivered(t, box)
