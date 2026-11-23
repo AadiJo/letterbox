@@ -157,7 +157,8 @@ const januaryStatement: SeedMessage = {
  *   - CSS that declares the names a shown CSS image would get without the core's random prefix,
  *     plainly and escaped, around the element that draws it, and reads them on two others,
  *   - body margins, which a frame measured by its body alone would cut off,
- *   - a `<style>` nested in the new part that styles the quote, which a quote shown apart must keep,
+ *   - `<style>`s nested in the new part that style the quote, which a quote shown apart must keep, two
+ *     of them with rules of the same weight, so the later one must still win,
  *   - a link, a base, an iframe and a script in its new part, and a script and a link in its quote.
  */
 const februaryStatement: SeedMessage = {
@@ -181,13 +182,15 @@ const februaryStatement: SeedMessage = {
     `<p><img src="${HARBOUR_LANE_LOGO}" width="160" height="32" alt="Harbour Lane"></p>`,
     '<div class="claim"><div class="paper"></div></div><div class="decoy-plain"></div><div class="decoy-escaped"></div>',
     `<form background="${PAPER}"><input name="setAttribute"><input name="getAttribute"><input name="removeAttribute"></form>`,
+    '<div><style>.quote-tone{color:rgb(200, 0, 0)}</style></div>',
     '<p>Your February statement is ready. The balance is €42.10, due on March 20.</p>',
+    '<div><style>.quote-tone{color:rgb(0, 0, 200)}</style></div>',
     '<div class="note"><style>.gmail_attr{color:rgb(120, 40, 40)}</style>Questions? Reply to this email.</div>',
     '<div class="gmail_quote"><div class="gmail_attr">On Sat, Feb 28, 2026, Harbour Lane Accounts &lt;statements@harbourlane.example&gt; wrote:<br></div>',
     '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">',
     "<script>document.title='a quoted script ran'</script>",
     '<link rel="stylesheet" href="https://cdn.harbourlane.example/quote.css">',
-    '<p>Your January statement is ready. The balance is €0.00.</p></blockquote></div>',
+    '<p class="quote-tone">Your January statement is ready. The balance is €0.00.</p></blockquote></div>',
   ].join(''),
   sentAt: ago(2 * HOUR),
   unread: true,

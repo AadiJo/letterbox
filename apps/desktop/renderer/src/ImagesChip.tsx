@@ -59,16 +59,25 @@ export function ImagesChip({ message }: { message: Message }) {
     const [left, right] = [Math.max(bounds.left, 0) + INSET, Math.min(bounds.right, window.innerWidth) - INSET]
     const [top, bottom] = [Math.max(bounds.top, 0) + INSET, Math.min(bounds.bottom, window.innerHeight) - INSET]
     const chipBox = box.current.getBoundingClientRect()
-    const own = element.getBoundingClientRect()
     const room = right - left
-    const width = Math.min(own.width, room)
+    const clamped = element.getBoundingClientRect().width > room
+    const clamp: CSSProperties = clamped ? { maxWidth: room, minWidth: 0 } : {}
+    // The height as the clamp leaves it, its note wrapped, decides the side: set the clamp for
+    // the measure, then put back what React set.
+    const set = element.style.cssText
+    if (clamped) {
+      element.style.maxWidth = `${room}px`
+      element.style.minWidth = '0'
+    }
+    const own = element.getBoundingClientRect()
+    element.style.cssText = set
     const below = bottom - (chipBox.top + GAP)
     // Above, the menu's foot sits INSET over the chip's top.
     const above = chipBox.top - INSET - top
     setFit({
       style: {
-        ...(own.width > room && { maxWidth: room, minWidth: 0 }),
-        ...(chipBox.left + width > right && { left: right - (chipBox.left + width) }),
+        ...clamp,
+        ...(chipBox.left + own.width > right && { left: right - (chipBox.left + own.width) }),
         ...(own.height > below && above > below && { top: 'auto', bottom: GAP }),
       },
       window: `${window.innerWidth}x${window.innerHeight}`,

@@ -130,6 +130,7 @@ export async function checkStatement(page: Page, relay: Relay) {
       quote?.text,
       quote?.hostile,
       quote?.cite,
+      quote?.tone,
       quote?.fits.scrolls,
       (await readFrame(page, NEWEST))?.quote,
       await stacked(page),
@@ -138,11 +139,12 @@ export async function checkStatement(page: Page, relay: Relay) {
       'On Sat, Feb 28, 2026, Harbour Lane Accounts <statements@harbourlane.example> wrote: Your January statement is ready. The balance is €0.00.',
       0,
       ['rgb(120, 40, 40)'],
+      ['rgb(0, 0, 200)'],
       false,
       0,
       true,
     ],
-    'Show opens the quote in a frame under the line, the new part left out, styled by a <style> nested in it, and nothing hostile in it, while the frame above keeps the new part',
+    'Show opens the quote in a frame under the line, the new part left out, styled by the <style>s nested in it, in the order the sender wrote them, and nothing hostile in it, while the frame above keeps the new part',
   )
   await line.click()
   await frameOf(page, QUOTED).waitFor({ state: 'detached' })

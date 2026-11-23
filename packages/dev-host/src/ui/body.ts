@@ -103,12 +103,16 @@ const menuFit = (page: Page) =>
     }
   })
 
+/** The open menu's height. */
+const menuHeight = (page: Page) => menu(page).evaluate((element) => element.getBoundingClientRect().height)
+
 /**
  * The menu keeps inside the reader: opened wide and the window then narrowed to 640 px, it fits
  * again, its note wrapped. With no room under the chip, it opens above it.
  */
 async function checkMenuFits(page: Page) {
   await chipOf(page).click()
+  const unwrapped = await menuHeight(page)
   await page.setViewportSize(NARROWEST)
   // The window's resize event refits the menu over two renders: wait for the one fitted to 640 px.
   await page.locator(`[data-field="images-menu"][data-fitted="${NARROWEST.width}x${NARROWEST.height}"]`).waitFor()
@@ -118,6 +122,24 @@ async function checkMenuFits(page: Page) {
     'opened wide, then the window narrowed to 640 px: the menu fits the reader again, its note wrapped',
   )
   await page.screenshot({ path: join(ARTIFACTS, 'body-images-menu-640.png'), animations: 'disabled' })
+  const wrapped = await menuHeight(page)
+  await page.keyboard.press('Escape')
+  // At 640 px a window whose room under the chip is between the menu's own height and its
+  // height with the note wrapped: only the wrapped height leaves it no room below.
+  const [chipTop, readerTop] = await chipOf(page).evaluate((element) => {
+    let reader = element.parentElement
+    while (reader && !/auto|scroll/.test(getComputedStyle(reader).overflowY)) reader = reader.parentElement
+    return [element.getBoundingClientRect().top, reader?.getBoundingClientRect().top ?? 0]
+  })
+  const narrowShort = { width: NARROWEST.width, height: Math.ceil(chipTop + 28 + 8 + (unwrapped + wrapped) / 2) }
+  await page.setViewportSize(narrowShort)
+  await chipOf(page).click()
+  await page.locator(`[data-field="images-menu"][data-fitted="${narrowShort.width}x${narrowShort.height}"]`).waitFor()
+  equal(
+    [wrapped > unwrapped, chipTop - 8 - readerTop >= wrapped, await menuFit(page)],
+    [true, true, { inside: true, above: true, wraps: true }],
+    'at 640 px, with room under the chip for the menu only before its note wraps, it opens above, wrapped and inside the reader',
+  )
   await page.keyboard.press('Escape')
   await page.setViewportSize({ width: 1440, height: 900 })
   // A window just tall enough to show the chip leaves no room for the menu under it.

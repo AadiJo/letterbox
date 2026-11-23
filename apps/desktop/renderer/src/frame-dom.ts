@@ -79,18 +79,26 @@ export const frameDom = {
   keepFrom: (doc: Document, marker: string) => {
     const body = bodyOf(doc)
     const head = headOf(doc)
+    // What goes, each with the parent it goes from: every node before the marker, level by level up to the body.
+    const gone: { parent: Node; node: Node }[] = []
     for (let node = markerIn(doc, marker); node && node !== body; node = parentOf(node)) {
       const parent = parentOf(node)
-      for (let before = previousOf(node); before;) {
-        const next = previousOf(before)
-        if (before.nodeType === Node.ELEMENT_NODE && head) {
-          const styles =
-            localName(before) === 'style' ? [before] : [...Element.prototype.querySelectorAll.call(before, 'style')]
-          for (const style of styles) Node.prototype.appendChild.call(head, style)
-        }
-        if (parent && parentOf(before) === parent) Node.prototype.removeChild.call(parent, before)
-        before = next
-      }
+      if (!parent) break
+      for (let before = previousOf(node); before; before = previousOf(before)) gone.push({ parent, node: before })
     }
+    // Their stylesheets move first, kept in document order, so rules of the same weight still
+    // apply in the order the sender wrote them. The walk above went backward, so it sorts them.
+    const styles = gone.flatMap(({ node }) =>
+      node.nodeType !== Node.ELEMENT_NODE
+        ? []
+        : localName(node) === 'style'
+          ? [node]
+          : [...Element.prototype.querySelectorAll.call(node, 'style')],
+    )
+    styles.sort((a, b) =>
+      Node.prototype.compareDocumentPosition.call(a, b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    if (head) for (const style of styles) Node.prototype.appendChild.call(head, style)
+    for (const { parent, node } of gone) if (parentOf(node) === parent) Node.prototype.removeChild.call(parent, node)
   },
 }
