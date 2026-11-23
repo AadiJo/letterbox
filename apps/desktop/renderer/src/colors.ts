@@ -50,7 +50,8 @@ const HEX = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 /**
  * Shows the frame's document `doc` in its scheme, in place: its root says the scheme and the
  * look, which pick the frame's own defaults (Body.tsx), its `color-scheme` is set inline and
- * important, which no stylesheet of the sender's can override, and each color in the palette is
+ * important, which no stylesheet of the sender's can override, any transition the sender set on
+ * the root is turned off first, so the new scheme shows at once, and each color in the palette is
  * `<prefix>color-N` on the root, dark, or taken away for the sender's own. A value that is not a
  * hex color is never written: its `var()` then falls back to the sender's color. Safe to call
  * again on the same document, as the scheme changes.
@@ -59,6 +60,8 @@ export function applyScheme(doc: Document, colors: Colors | null, prefix: string
   const root = frameDom.root(doc)
   if (!root) return
   const scheme = colors?.scheme ?? 'dark'
+  // First, so no transition of the sender's on the root keeps the old scheme a while.
+  frameDom.setProperty(doc, 'transition', 'none', 'important')
   frameDom.set(root, 'data-letterbox-scheme', scheme)
   frameDom.set(root, 'data-letterbox-look', colors?.look ?? 'branded')
   frameDom.setProperty(doc, 'color-scheme', scheme === 'dark' ? 'dark' : 'light', 'important')

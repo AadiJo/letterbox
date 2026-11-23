@@ -20,22 +20,28 @@ const SEGMENTS = [
 
 export function ColorsSwitch({ message }: { message: Message }) {
   const [refused, setRefused] = useState(false)
+  // The scheme the user picked last, until the core reports it: the switch shows it at once, and
+  // a newer pick, sent after it, supersedes it.
+  const [picked, setPicked] = useState<ColorScheme | null>(null)
   const segments = useRef<(HTMLButtonElement | null)[]>([])
   const colors = colorsOf(message)
+  if (picked !== null && picked === colors?.scheme) setPicked(null)
   if (!colors || refused || !choosable(message)) return null
+  const shown = picked ?? colors.scheme
   const choose = (scheme: ColorScheme) => {
-    if (scheme === colors.scheme) return
+    if (scheme === shown) return
+    setPicked(scheme)
     void setColors(message.id, scheme).then((taken) => {
       if (!taken) setRefused(true)
     })
   }
-  // An arrow chooses the segment before or after the chosen one, and focus follows it.
-  const onKeyDown = (event: KeyboardEvent) => {
+  // An arrow chooses the segment before or after the focused one, and focus follows it, so two
+  // quick presses step twice, whatever the core has reported so far.
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, at: number) => {
     const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key]
     if (step === undefined) return
     event.preventDefault()
     event.stopPropagation()
-    const at = SEGMENTS.findIndex((segment) => segment.scheme === colors.scheme)
     const next = (at + step + SEGMENTS.length) % SEGMENTS.length
     const segment = SEGMENTS[next]
     if (!segment) return
@@ -47,11 +53,11 @@ export function ColorsSwitch({ message }: { message: Message }) {
       role="radiogroup"
       aria-label="Colors"
       data-field="colors-switch"
-      data-scheme={colors.scheme}
+      data-scheme={shown}
       className="ml-auto inline-flex h-6 flex-none items-center gap-0.5 rounded-[7px] bg-well p-0.5 text-meta font-medium shadow-well"
     >
       {SEGMENTS.map(({ scheme, label, Icon }, index) => {
-        const on = scheme === colors.scheme
+        const on = scheme === shown
         return (
           <button
             key={scheme}
@@ -62,7 +68,7 @@ export function ColorsSwitch({ message }: { message: Message }) {
             role="radio"
             aria-checked={on}
             tabIndex={on ? 0 : -1}
-            onKeyDown={onKeyDown}
+            onKeyDown={(event) => onKeyDown(event, index)}
             data-scheme-option={scheme}
             onClick={() => choose(scheme)}
             className={cx(

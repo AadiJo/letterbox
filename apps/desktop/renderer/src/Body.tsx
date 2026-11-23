@@ -201,9 +201,12 @@ type HtmlProps = {
 function HtmlBody({ title, html, images, urls, prefix, colors, prepare }: HtmlProps) {
   const [height, setHeight] = useState(0)
   const [frame, setFrame] = useState<Document | null>(null)
-  // The choice of images the current document was loaded for. A new choice loads a new document,
-  // which stays hidden at the old height until it is prepared and shows its scheme.
-  const [loadedFor, setLoadedFor] = useState<string | null>(null)
+  // Each choice of images loads a fresh document in a new frame, numbered here: a frame shows
+  // once its own load has set its scheme, and until then stays hidden at the last height. A
+  // choice made again gets a new number, so a frame from before can never stand for it.
+  const [version, setVersion] = useState({ shown: images.shown, load: 0 })
+  if (version.shown !== images.shown) setVersion({ shown: images.shown, load: version.load + 1 })
+  const [loaded, setLoaded] = useState<number | null>(null)
   const scheme = colors?.scheme ?? 'dark'
   // The scheme changes in place: its colors and defaults are set on the current document, which
   // is measured again. Shown images go in as they arrive, and again after a new document loads.
@@ -228,7 +231,7 @@ function HtmlBody({ title, html, images, urls, prefix, colors, prepare }: HtmlPr
     >
       <iframe
         // Blocking again needs the placeholders back, so a new choice loads a fresh document.
-        key={images.shown}
+        key={version.load}
         title={title}
         data-field={title === 'Message' ? 'body' : 'quoted-body'}
         data-scheme={scheme}
@@ -239,14 +242,16 @@ function HtmlBody({ title, html, images, urls, prefix, colors, prepare }: HtmlPr
         srcDoc={htmlDocument(html)}
         onLoad={(event) => {
           const document = event.currentTarget.contentDocument
-          if (!document) return
-          prepare?.(document)
-          applyScheme(document, colors, prefix)
-          setFrame(document)
-          setHeight(frameDom.height(document))
-          setLoadedFor(images.shown)
+          // A document the reader cannot reach shows as it is, rather than stay hidden.
+          if (document) {
+            prepare?.(document)
+            applyScheme(document, colors, prefix)
+            setFrame(document)
+            setHeight(frameDom.height(document))
+          }
+          setLoaded(version.load)
         }}
-        className={cx('block w-full', original ? 'bg-paper' : 'bg-reader', loadedFor !== images.shown && 'invisible')}
+        className={cx('block w-full', original ? 'bg-paper' : 'bg-reader', loaded !== version.load && 'invisible')}
         style={{ height }}
       />
       {original && <span aria-hidden className="pointer-events-none absolute inset-0 rounded-[10px] shadow-card" />}

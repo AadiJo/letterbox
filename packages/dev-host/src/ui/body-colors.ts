@@ -24,6 +24,8 @@ import { startServer } from '../server.ts'
 import { startSim } from '../sim.ts'
 import {
   choose,
+  unstyledShown,
+  watchUnstyled,
   frameColors,
   markFrame,
   placeholderContrast,
@@ -33,7 +35,7 @@ import {
   switchOf,
   unreadable,
 } from './body-colors-frame.ts'
-import { frameOf, NEWEST, opened } from './body-frame.ts'
+import { chipOf, frameOf, NEWEST, opened } from './body-frame.ts'
 import { appErrors, ARTIFACTS, capture, equal, openPage, type Relay, root } from './record.ts'
 import { open } from './reply-page.ts'
 import { nav, senderRow } from './updates-edges.ts'
@@ -92,7 +94,7 @@ const PLAIN_HTML = [
  * sets, so that text keeps the sender's own color in dark (`as-written`).
  */
 const PROBE_HTML = [
-  '<style>:root{--letterbox-color-0:#ff0000;--letterbox-color-1:#ff0000;color-scheme:light !important}</style>',
+  '<style>:root{--letterbox-color-0:#ff0000;--letterbox-color-1:#ff0000;color-scheme:light !important;transition:color-scheme 10s allow-discrete}</style>',
   '<p class="kept" style="color:#222222">Your settings are saved.</p>',
   '<p class="as-written" style="color:var(--letterbox-color-2, #333333)">Nothing else changed.</p>',
 ].join('')
@@ -131,7 +133,7 @@ const seed: DevSeed = {
 const ISSUE_PARTS = 'h1, div[style*="letter-spacing"], a[style*="border-radius"]'
 
 /** The Long Read: dark by default, Original on a dimmed card, and the choice for every issue, across a reload. */
-async function checkBranded(page: Page) {
+async function checkBranded(page: Page, relay: Relay) {
   await nav(page, 'Updates').click()
   await senderRow(page, 'The Long Read').click()
   await page.locator('[data-field="open-subject"]', { hasText: ISSUE }).waitFor()
@@ -164,6 +166,21 @@ async function checkBranded(page: Page) {
   await page.setViewportSize({ width: 640, height: 700 })
   await page.screenshot({ path: join(ARTIFACTS, 'body-colors-branded-dark-640.png'), animations: 'disabled' })
   await page.setViewportSize({ width: 1440, height: 900 })
+
+  // Blocked, Shown and Blocked again, with the core's two answers held and released together: the
+  // Shown frame is put in and taken out again before it loads, and no frame shows unstyled.
+  await watchUnstyled(page)
+  const held = relay.pauseAfterPageSends('"set-images"')
+  await page.evaluate((subject) => window.letterboxDev?.setImages(subject, ['message', 'blocked']), ISSUE)
+  await held
+  relay.resume()
+  await page.evaluate(() => window.letterboxDev?.settle())
+  await settled(page, NEWEST)
+  equal(
+    [await unstyledShown(page), await chipOf(page).getAttribute('data-images')],
+    [0, 'blocked'],
+    'images shown and blocked again before the new frame loads: no frame shows before its scheme is set',
+  )
 
   await markFrame(page)
   await choose(page, 'original')
@@ -200,10 +217,11 @@ async function checkBranded(page: Page) {
   await nav(page, 'Inbox').click()
   await open(page, OLDER)
   await settled(page, NEWEST)
+  const older = await frameColors(page, NEWEST, 'h1, #probe')
   equal(
-    [(await frameColors(page, NEWEST, 'h1'))?.colorScheme, await switchOf(page).getAttribute('data-scheme')],
-    ['light', 'original'],
-    'the sender’s older newsletter shows its own colors too',
+    [older?.colors, older?.colorScheme, await switchOf(page).getAttribute('data-scheme')],
+    [['rgb(29, 29, 31)', 'rgb(29, 29, 31)'], 'light', 'original'],
+    'the sender’s older newsletter shows its own colors too: its text the light page’s near black',
   )
   await page.reload()
   await nav(page, 'Updates').click()
@@ -247,6 +265,38 @@ async function checkBranded(page: Page) {
       ['rgb(213, 231, 228)'],
     ],
     '↓ on the switch chooses Dark and takes the focus and the tab stop with it, and the reader stays on the issue',
+  )
+
+  // Two quick presses step twice, from the focused segment: Original, then Dark again. The core's
+  // answers wait at the relay until both are sent, so the second press has no report to go by.
+  const sent = relay.fromPage().length
+  const holding = relay.pauseAfterPageSends('"set-colors"')
+  await page.keyboard.press('ArrowDown')
+  await holding
+  await page.keyboard.press('ArrowDown')
+  relay.resume()
+  await page.evaluate(() => window.letterboxDev?.settle())
+  await page.locator('[data-message="open"] iframe[title="Message"][data-scheme="dark"]').last().waitFor()
+  await settled(page, NEWEST)
+  equal(
+    [
+      relay
+        .fromPage()
+        .slice(sent)
+        .filter((text) => text.includes('"set-colors"'))
+        .map((text) => (JSON.parse(text) as { command: { scheme: string } }).command.scheme),
+      await radios(),
+      (await frameColors(page, NEWEST, 'h1'))?.colors,
+    ],
+    [
+      ['original', 'dark'],
+      [
+        ['0', true],
+        ['-1', false],
+      ],
+      ['rgb(213, 231, 228)'],
+    ],
+    'two quick ↓ presses choose Original, then Dark, each from the focused segment, and the last one stands',
   )
 }
 
@@ -313,6 +363,15 @@ async function checkProbeAndNowhere(page: Page, relay: Relay) {
     [['rgb(229, 229, 229)', 'rgb(51, 51, 51)'], 'dark'],
     'the sender sets --letterbox-color-0 to red and the core’s colors ignore it, the variable it reads is never set, and its light color scheme loses to the reader’s',
   )
+  // Its CSS also eases the root's color scheme over ten seconds: the reader's change shows at once.
+  await choose(page, 'original')
+  const eased = (await frameColors(page, NEWEST, 'p'))?.colorScheme
+  await choose(page, 'dark')
+  equal(
+    [eased, (await frameColors(page, NEWEST, 'p'))?.colorScheme],
+    ['light', 'dark'],
+    'a transition the sender puts on the root’s color scheme is turned off: each new scheme shows at once',
+  )
 
   // The same notice again, with every dark value the core sent turned into a url on its way to the page.
   await open(page, PLAIN)
@@ -361,7 +420,7 @@ async function checkQuote(page: Page) {
   await frameOf(page, QUOTED).waitFor()
   await settled(page, QUOTED)
   const looks = async () => ({
-    message: (await frameColors(page, NEWEST, 'body'))?.colorScheme,
+    message: await frameColors(page, NEWEST, 'body'),
     quote: await frameColors(page, QUOTED, '.gmail_attr'),
   })
   const before = await looks()
@@ -370,14 +429,14 @@ async function checkQuote(page: Page) {
   const after = await looks()
   equal(
     [
-      [before.message, before.quote?.colorScheme, before.quote?.colors],
-      [after.message, after.quote?.colorScheme, after.quote?.colors],
+      [before.message?.colors, before.message?.colorScheme, before.quote?.colors, before.quote?.colorScheme],
+      [after.message?.colors, after.message?.colorScheme, after.quote?.colors, after.quote?.colorScheme],
     ],
     [
-      ['dark', 'dark', ['rgb(255, 186, 181)']],
-      ['light', 'light', ['rgb(120, 40, 40)']],
+      [['rgb(228, 228, 228)'], 'dark', ['rgb(255, 186, 181)'], 'dark'],
+      [['rgb(29, 29, 31)'], 'light', ['rgb(120, 40, 40)'], 'light'],
     ],
-    'the open quote’s frame takes the message’s scheme: its attribution dark, then in the sender’s own red',
+    'the open quote’s frame takes the message’s scheme: both frames’ text in the reader’s, then the light page’s, and the attribution dark, then in the sender’s own red',
   )
   await choose(page, 'dark')
 }
@@ -398,7 +457,7 @@ export async function checkColors(browser: Browser) {
   const session = await openPage(browser, server.url, 'trace-body-colors.zip', { deviceScaleFactor: 2 })
   const { page, relay, errors, remote } = session
   try {
-    await checkBranded(page)
+    await checkBranded(page, relay)
     await checkPlain(page)
     await checkProbeAndNowhere(page, relay)
     await checkQuote(page)

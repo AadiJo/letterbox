@@ -202,3 +202,55 @@ export async function placeholderContrast(page: Page) {
     await blank.close()
   }
 }
+
+declare global {
+  interface Window {
+    /** Set by `watchUnstyled`: how many times a message frame showed before its scheme was set. */
+    letterboxUnstyled?: { count: number; stop: () => void }
+  }
+}
+
+/**
+ * Starts counting, in the page, each time the newest open message's frame shows while its
+ * document's root carries no scheme yet: at every change to the reader's tree, as when a frame
+ * is put in, and at every animation frame. `unstyledShown` stops it and gives the count.
+ */
+export const watchUnstyled = (page: Page) =>
+  page.evaluate(() => {
+    const look = () => {
+      const frames = [...document.querySelectorAll('[data-message="open"]')]
+        .at(-1)
+        ?.querySelectorAll<HTMLIFrameElement>('iframe[title="Message"]')
+      for (const frame of frames ?? []) {
+        const doc = frame.contentDocument
+        const top = doc
+          ? (Object.getOwnPropertyDescriptor(Document.prototype, 'documentElement')?.get?.call(doc) as Element | null)
+          : null
+        const shown = !frame.classList.contains('invisible') && frame.isConnected
+        const unstyled = shown && !top?.hasAttribute('data-letterbox-scheme') && watching
+        if (unstyled && window.letterboxUnstyled) window.letterboxUnstyled.count += 1
+      }
+    }
+    let watching = true
+    const observer = new MutationObserver(look)
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
+    const tick = () => {
+      look()
+      if (watching) requestAnimationFrame(tick)
+    }
+    window.letterboxUnstyled = {
+      count: 0,
+      stop: () => {
+        watching = false
+        observer.disconnect()
+      },
+    }
+    requestAnimationFrame(tick)
+  })
+
+/** Stops `watchUnstyled`, and gives how many times a frame showed before its scheme was set. */
+export const unstyledShown = (page: Page) =>
+  page.evaluate(() => {
+    window.letterboxUnstyled?.stop()
+    return window.letterboxUnstyled?.count ?? -1
+  })
