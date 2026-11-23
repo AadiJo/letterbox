@@ -141,6 +141,10 @@ const createAdapter = (socketPath: string, session: Session, first: Link | null)
       const result = await forward({ method: 'attachment', arg })
       return result?.method === 'attachment' ? result.outcome : offline
     },
+    raw: async (ref) => {
+      const result = await forward({ method: 'raw', arg: ref })
+      return result?.method === 'raw' ? result.outcome : offline
+    },
     apply: async (mutation) => {
       const result = await forward({ method: 'apply', arg: mutation })
       return result?.method === 'apply' ? result.outcome : offline

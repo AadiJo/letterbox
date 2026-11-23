@@ -20,6 +20,7 @@ import type {
   Outcome,
   Outgoing,
   PageToken,
+  RawResult,
   SendResult,
   SignInFailure,
   SnapshotPage,
@@ -32,6 +33,7 @@ export type Call =
   | { method: 'changes'; arg: Cursor }
   | { method: 'body'; arg: MessageRef }
   | { method: 'attachment'; arg: AttachmentCall }
+  | { method: 'raw'; arg: MessageRef }
   | { method: 'apply'; arg: Mutation }
   | { method: 'send'; arg: Outgoing }
   | { method: 'find'; arg: string }
@@ -42,6 +44,7 @@ export type CallResult =
   | { method: 'changes'; outcome: Outcome<ChangesResult> }
   | { method: 'body'; outcome: Outcome<BodyResult> }
   | { method: 'attachment'; outcome: Outcome<AttachmentResult> }
+  | { method: 'raw'; outcome: Outcome<RawResult> }
   | { method: 'apply'; outcome: Outcome<ApplyResult> }
   | { method: 'send'; outcome: Outcome<SendResult> }
   | { method: 'find'; outcome: Outcome<Found> }

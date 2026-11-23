@@ -232,7 +232,7 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'an IP literal inside the network is fetched',
     file: 'crates/host/src/web.rs',
-    find: '            (_, Some(Host::Ipv4(ip))) if !public(IpAddr::V4(ip)) => return Fetched::Refused,\n',
+    find: '            (_, Some(Host::Ipv4(ip))) if !public(IpAddr::V4(ip)) => Err(Stop::Refused),\n',
     replace: '',
     scenarios: FETCH,
   },

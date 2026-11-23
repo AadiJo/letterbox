@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AccountId, MailboxId, SenderId, Time, Turn, Unsubscribe, present};
+use crate::{AccountId, MailboxId, SenderId, Time, Turn, Unsubscribe, Unsubscribed, present};
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -42,7 +42,8 @@ pub struct ThreadFilter {
 /// conversation is automated when its newest message from someone else is (see turns.rs in
 /// the core). Its sender is that message's address, compared without case, so news@ and
 /// no-reply@ of one company are two senders. To act on all of a sender's conversations, list
-/// them with `sender` in a threads filter and send one command naming their ids.
+/// them with `sender` in a threads filter and send one command naming their ids: an Archive all
+/// after an unsubscribe archives `threads` conversations holding `messages` messages.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SenderSummary {
@@ -65,6 +66,9 @@ pub struct SenderSummary {
     /// How to unsubscribe, from the message the row's name and address come from: its
     /// List-Unsubscribe header, or else a link in its body if that has loaded.
     pub unsubscribe: Option<Unsubscribe>,
+    /// The user's unsubscribe from this address, while it is held, on its way or done. None
+    /// when there is none, or the last one was undone or failed.
+    pub unsubscribed: Option<Unsubscribed>,
 }
 
 /// One day of a sender's mail in Updates: how many messages were sent that day, and how many

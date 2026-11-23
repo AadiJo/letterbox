@@ -12,6 +12,7 @@ import type {
   Outcome,
   Outgoing,
   PageToken,
+  RawResult,
   SendResult,
   SnapshotPage,
 } from './adapter.ts'
@@ -27,6 +28,7 @@ import type {
 } from './contract.ts'
 import { foldersEngine } from './folders.ts'
 import { labelsEngine } from './labels.ts'
+import { rawOf } from './raw.ts'
 import { readSent } from './sent.ts'
 import { bodyOf, boxOf, contentsOf, factsOf, remoteMailboxes, remoteMessage } from './store.ts'
 import type { Box, Draft, Store, Stored } from './store.ts'
@@ -108,7 +110,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
   const engine = dialect === 'labels' ? labelsEngine(store) : foldersEngine(store)
   // The Message-ID of every key ever delivered. It outlives an expunge, so replies can still name it.
   const messageIds = new Map<string, string>()
-  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, attachment: 0, apply: 0, send: 0, find: 0 }
+  const counts: CallCounts = { snapshot: 0, changes: 0, body: 0, attachment: 0, raw: 0, apply: 0, send: 0, find: 0 }
   const sentCopies: SentCopy[] = []
   const pageSize = seed.pageSize ?? 50
   const canModify = seed.canModify ?? true
@@ -172,6 +174,7 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
       facts: factsOf(message, references, dialect === 'labels' ? (message.bulk ?? false) : null),
       body: bodyOf(message),
       contents: contentsOf(message),
+      raw: rawOf(message, references),
       unread: message.unread ?? true,
       flagged: message.flagged ?? false,
       mailboxes,
@@ -402,7 +405,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
     const copy = readSent(outgoing.raw, dialect === 'labels' ? false : null)
     const key = `sent-${sentCopies.length + 1}`
     const contents = copy.contents.map((content) => () => content)
-    const stored = file({ key, ...copy, contents, unread: false, flagged: false, mailboxes: [sentBox.key] })
+    const sent = { key, ...copy, contents, raw: outgoing.raw }
+    const stored = file({ ...sent, unread: false, flagged: false, mailboxes: [sentBox.key] })
     const recipients = [...copy.facts.to, ...copy.facts.cc].map((address) => address.address)
     sentCopies.push({ key, recipients: [...recipients, ...outgoing.bcc], raw: outgoing.raw })
     return { kind: 'sent', ref: stored.ref }
@@ -421,6 +425,13 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         return { method: 'body', outcome: { ok: true, ...body(call.arg) } }
       case 'attachment':
         return { method: 'attachment', outcome: { ok: true, ...attachment(call.arg) } }
+      case 'raw': {
+        const [message] = targetsOf([call.arg])
+        const raw: RawResult = message
+          ? { kind: 'raw', base64: Buffer.from(message.raw).toString('base64') }
+          : { kind: 'gone' }
+        return { method: 'raw', outcome: { ok: true, ...raw } }
+      }
       case 'apply':
         return { method: 'apply', outcome: { ok: true, ...apply(call.arg) } }
       case 'send':
@@ -455,7 +466,8 @@ export const createMailboxEntry = (dialect: Dialect, seed: Seed): MailboxEntry =
         else applyDamage = null
         reply(result, damage)
       }
-      const hold = call.method === 'changes' || call.method === 'find' || offline ? null : holds[call.method]
+      const unheld = call.method === 'changes' || call.method === 'find' || call.method === 'raw'
+      const hold = unheld || offline ? null : holds[call.method]
       if (!hold?.keep(answerNow)) answerNow()
     },
   }

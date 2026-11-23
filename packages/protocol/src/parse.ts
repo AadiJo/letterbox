@@ -35,7 +35,7 @@ const turnReason = type(
   "'they-wrote-last' | 'i-wrote-last' | 'automated' | 'not-addressed-to-me' | 'asks-nothing' | 'set-by-user'",
 )
 const refusal = type(
-  "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed'",
+  "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed' | 'not-public'",
 )
 const undoField = type({ kind: "'mailbox'", messageId: 'string', mailboxId: 'string' })
   .or({ kind: "'unread'", messageId: 'string' })
@@ -90,6 +90,12 @@ const unsubscribe = type({ method: "'one-click'", url: 'string', verified: 'bool
   .or({ method: "'mailto'", to: 'string', uri: 'string' })
   .or({ method: "'web'", url: 'string', from: "'header' | 'body'" })
 
+const method = type("'one-click' | 'mailto' | 'web'")
+const unsubscribed = type({ state: "'held'", change: 'string', until: 'string', method })
+  .or({ state: "'sending'", change: 'string', method })
+  .or({ state: "'done'", change: 'string', method })
+  .or({ state: "'page'", change: 'string', url: 'string' })
+
 const sender = type({
   id: 'string',
   accountId: 'string',
@@ -102,6 +108,7 @@ const sender = type({
   lastMessageAt: 'string',
   days: type({ messages: 'number', unread: 'number' }).array(),
   unsubscribe: unsubscribe.or('null'),
+  unsubscribed: unsubscribed.or('null'),
 })
 
 const images = type({

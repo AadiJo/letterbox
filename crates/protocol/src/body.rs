@@ -175,9 +175,9 @@ pub enum Unsubscribe {
     /// says `List-Unsubscribe=One-Click`.
     OneClick {
         url: String,
-        /// True once a DKIM signature that covers List-Unsubscribe and List-Unsubscribe-Post is
-        /// verified, as RFC 8058 requires before a POST. The core does not check that yet, so
-        /// it is always false.
+        /// Always false here: the core checks the DKIM signature RFC 8058 requires only when the
+        /// user unsubscribes, so reading mail fetches nothing more. An unsubscribe whose check
+        /// fails goes out as mailto or web instead (see `Command::Unsubscribe`).
         verified: bool,
     },
     /// An email to `to`, from a `mailto:` URI in List-Unsubscribe. `uri` is the whole URI, with
