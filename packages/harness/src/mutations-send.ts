@@ -9,8 +9,8 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'a send goes out without waiting for its undo window',
     file: core('outbox.rs'),
-    find: '        let window = self.env.until(until);',
-    replace: '        let window = self.env.until(&self.env.now());',
+    find: '        self.wait_out(change, self.env.until(until));',
+    replace: '        self.wait_out(change, self.env.until(&self.env.now()));',
     scenarios: 'undo inside the window',
   },
   {
@@ -58,7 +58,17 @@ export const SEND_MUTATIONS: Mutation[] = [
   {
     name: 'a restart forgets a send still in its undo window',
     file: core('outbox.rs'),
-    find: '                Stage::Held { until } => self.hold(change.id, &until),',
+    find: [
+      '                Stage::Held { until } => {',
+      '                    let mut window = self.env.until(&until);',
+      '                    let ended = window.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_ready();',
+      '                    if ended {',
+      '                        self.release(&change.id);',
+      '                    } else {',
+      '                        self.wait_out(change.id, window);',
+      '                    }',
+      '                }',
+    ].join('\n'),
     replace: '                Stage::Held { .. } => drop(change),',
     scenarios: 'restart inside the undo window',
   },

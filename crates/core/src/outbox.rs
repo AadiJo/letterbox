@@ -29,6 +29,7 @@
 //!     it, or fails it with its original (`waiting_on`).
 
 use std::rc::Rc;
+use std::task::{Context, Waker};
 
 use chrono::TimeDelta;
 use letterbox_protocol::{
@@ -37,7 +38,7 @@ use letterbox_protocol::{
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
-use crate::adapter::{BodyResult, MessageRef, Outgoing, SendResult};
+use crate::adapter::{BodyResult, LocalFuture, MessageRef, Outgoing, SendResult};
 use crate::clock::{iso, parse};
 use crate::draft::{Prepared, prepare};
 use crate::effect::Effect;
@@ -262,7 +263,9 @@ impl Inner {
     }
 
     /// Picks up every send a restart found on its way. A held one restarts its undo window,
-    /// and one whose window ended while the core was stopped becomes due at once. Each account
+    /// and one whose window ended while the core was stopped becomes due at once: in this call,
+    /// before the core reads its first message, so the `welcome` a restart sends always counts
+    /// it, and an undo after the restart always finds it due. Each account
     /// with a due send gets one pass, which carries it: a start runs no pass of its own, and a
     /// forward stopped while its files were fetched is due. One that may have reached the
     /// provider (sending or unconfirmed) gets one check, at once (see confirm.rs).
@@ -282,7 +285,15 @@ impl Inner {
         let mut due: Vec<AccountId> = Vec::new();
         for (change, stage) in waiting {
             match stage {
-                Stage::Held { until } => self.hold(change.id, &until),
+                Stage::Held { until } => {
+                    let mut window = self.env.until(&until);
+                    let ended = window.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_ready();
+                    if ended {
+                        self.release(&change.id);
+                    } else {
+                        self.wait_out(change.id, window);
+                    }
+                }
                 Stage::Sending | Stage::Unconfirmed { .. } => self.book_check(&change.account_id, change.id, None),
                 Stage::Due if !due.contains(&change.account_id) => due.push(change.account_id),
                 Stage::Due => {}
@@ -296,7 +307,11 @@ impl Inner {
     /// Waits out one send's undo window, then makes it due. The wait is not work the core
     /// finishes before it closes: a closing core leaves the send held, and the next start resumes it.
     fn hold(self: &Rc<Self>, change: ChangeId, until: &Time) {
-        let window = self.env.until(until);
+        self.wait_out(change, self.env.until(until));
+    }
+
+    /// Waits for `window`, a send's undo window, to end, then makes the send due, as `hold` says.
+    fn wait_out(self: &Rc<Self>, change: ChangeId, window: LocalFuture<'static, ()>) {
         let core = Rc::clone(self);
         spawn_local(async move {
             window.await;
