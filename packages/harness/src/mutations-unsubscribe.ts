@@ -61,7 +61,7 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
     name: 'a one-click that fails its check opens the page instead of sending the mailto',
     file: unsubscribe('mod.rs'),
     find: '                Some(Unsubscribe::Mailto { uri, .. }) => Some(uri),',
-    replace: '                Some(Unsubscribe::Mailto { .. }) => None,',
+    replace: '                Some(Unsubscribe::Mailto { .. }) => None::<String>,',
     scenarios: FALLBACK,
   },
   {
