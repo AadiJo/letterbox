@@ -123,6 +123,7 @@ fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
         | Effect::Cancel { .. }
         | Effect::Unrecorded { .. }
         | Effect::Images { .. }
+        | Effect::Colors { .. }
         | Effect::Unsubscribe(_) => refuse(Refusal::NotSupported),
     }
 }

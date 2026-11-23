@@ -14,6 +14,9 @@ foldhash.workspace = true
 indexmap.workspace = true
 # The body pipeline's HTML parser and rewriter (see src/body/mod.rs for why this one).
 lol_html = "3.0.3"
+# The CSS Syntax tokenizer and rule parser of Servo and Firefox, which lol_html already builds in: the
+# colour pass reads every style attribute and style sheet with it (src/body/css.rs).
+cssparser = "0.36.0"
 # The HTML standard's full table of character references, to read attribute values as a browser does.
 html-escape = "0.3.1"
 regex.workspace = true

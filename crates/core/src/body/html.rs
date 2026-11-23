@@ -16,8 +16,9 @@
 //!      `<noscript>` goes too, and lol_html reads what an SVG `<foreignObject>` or a `<template>`
 //!      holds as markup, so a hint there goes the same way. Then: trackers taken out (trackers.rs), each remote
 //!      image a placeholder that names its index in `Html::remote`, any `data-letterbox-`
-//!      attribute the sender wrote dropped, and a marker comment before the element where the
-//!      quote starts, which `take_marker` turns into an offset.
+//!      attribute the sender wrote dropped, a marker comment before the element where the
+//!      quote starts, which `take_marker` turns into an offset, and every color named
+//!      (paint.rs), with the `<style>` for its color attributes put first once the pass is done.
 //!
 //! An image is anything the renderer's `img-src` governs that the markup names: `<img>` src
 //! and srcset, `<source>` srcset, an image `<input>`, a `<video>` poster, an SVG `<image>`,
@@ -34,6 +35,7 @@ use std::rc::Rc;
 use lol_html::html_content::Element;
 use lol_html::{RewriteStrSettings, doc_text, element, end_tag, rewrite_str, text};
 
+use super::paint::Painted;
 use super::quote::{self, Place, Scan, Tag};
 use super::rewrite::{Found, rewrite};
 use super::trackers::{self, Reason};
@@ -51,6 +53,7 @@ pub struct Html {
     /// The text before the quote, as written, entities decoded, for the message's preview.
     pub words: String,
     pub link: Option<String>,
+    pub painted: Painted,
 }
 
 /// Runs the passes, writing CSS custom property names that start with `prefix`. None when lol_html refuses the markup, as it does when the markup is
@@ -69,6 +72,8 @@ pub fn process(input: &str, prefix: &str) -> Option<Html> {
         &mut found,
     )?;
     let (html, quote) = take_marker(rewritten, marker.as_deref());
+    let (painted, style) = std::mem::take(&mut found.paint).finish();
+    let html = style.clone() + &html;
     if !safe(&html) {
         return None;
     }
@@ -76,9 +81,10 @@ pub fn process(input: &str, prefix: &str) -> Option<Html> {
         html,
         remote: found.remote,
         trackers: found.trackers,
-        quote,
+        quote: quote.map(|at| at + style.len()),
         words,
         link,
+        painted,
     })
 }
 

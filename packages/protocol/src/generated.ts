@@ -148,11 +148,16 @@ preview: string,
 /**
  * The start of every CSS custom property name the core writes into `html`, such as
  * `--letterbox-0123456789abcdef0123456789abcdef-`. A remote CSS image is
- * `var(<cssPrefix>image-i, none)`, which the UI sets on the frame's root. The core
+ * `var(<cssPrefix>image-i, none)`, and a color `var(<cssPrefix>color-N, <its own>)`
+ * (see `Colors`), which the UI sets on the frame's root. The core
  * draws it at random as it processes the body, and the sender never sees the result,
  * so the sender's CSS cannot declare or read these names.
  */
-cssPrefix: string, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
+cssPrefix: string, 
+/**
+ * How to color `html` in a dark reader. None when `html` is.
+ */
+colors: Colors | null, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
 
 export type Unavailable = "offline" | "too-large" | "gone";
 
@@ -265,6 +270,77 @@ mime: string, size: number, };
  * Why the core did not fetch an image.
  */
 export type ImageError = "gone" | "blocked" | "refused" | "too-large" | "unreachable";
+
+/**
+ * How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
+ * with `var(<cssPrefix>color-N, <its own color>)`, where N is the color's index in `palette`:
+ * in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
+ * (`background`) and borders (`border*`, `outline`), in the forms the core reads (with
+ * cssparser, as a browser reads CSS): a color alone, a border or outline with at most one width
+ * and one style, a `text-decoration` with line keywords. Any other form stays as written, a
+ * `var()` or `inherit` too, so a browser still drops an invalid one and the declaration before
+ * it holds. A color left as written keeps the sender's value in both schemes. An element whose `bgcolor` (on body, table parts and cells), `<font color>`,
+ * or `<body text>`, `link`, `vlink` or `alink` set one carries `data-letterbox-bg`, `-text`,
+ * `-link`, `-vlink` or `-alink` naming its N. A `<style>` at the start of `html` applies it
+ * from an anonymous cascade layer, so every rule of the sender's still wins where it did over
+ * the attribute. The prefix is the body's own (`Body::Ready::css_prefix`), so the sender's CSS
+ * can neither set nor read these names.
+ *
+ * With nothing set, the HTML shows the sender's own colors (`original`). For `dark`, the UI sets
+ * each `${cssPrefix}color-${N}` to its swatch's `dark` on the frame's root, the same way it sets
+ * `${cssPrefix}image-${i}`, and gives the frame its own dark defaults for what
+ * the HTML leaves unset (the page, text and links). Those go in a cascade layer declared before
+ * `html`, so they rank below every rule of the sender's and the core's.
+ */
+export type Colors = { 
+/**
+ * The user's choice for the message's sender. Set with the `set-colors` command.
+ */
+scheme: ColorScheme, look: HtmlLook, 
+/**
+ * Each color the HTML sets, once per role, in the order the HTML first sets it, at most 256.
+ * Text set beside a background, in one rule or on one element, is a swatch of its own for
+ * that background when its dark value differs there. Colors past 256 keep their own value in
+ * both schemes.
+ */
+palette: Array<Swatch>, };
+
+/**
+ * How a UI colors a message's HTML. The choice is per sender: by the From address, in the
+ * message's account. A sender's choice applies to all its mail, new mail too. Unlike showing
+ * images, it changes only how the frame paints: nothing is fetched and the sender learns
+ * nothing, so anyone who writes that address in a From gains nothing by it.
+ */
+export type ColorScheme = "dark" | "original";
+
+/**
+ * What kind of HTML a message has, so a UI knows whose type to set it in.
+ */
+export type HtmlLook = "branded" | "simple";
+
+/**
+ * One color the HTML sets, for one role.
+ */
+export type Swatch = { role: ColorRole, 
+/**
+ * The sender's color, as `#rrggbb`, or `#rrggbbaa` when it is not opaque.
+ */
+original: string, 
+/**
+ * Its value for the dark reader (crates/core/src/body/dark.rs), in the same form. The same
+ * hue, with its lightness turned over against the reader's background where the original
+ * was meant for a light page. Text keeps a contrast of at least 4.5:1 (WCAG AA), made more
+ * opaque if it must be, on the dark value of the background its rule or element paints, else
+ * on the reader's background (#1b1b1e). When a background the core cannot read could win
+ * there, it reads the text on the reader's background, and promises nothing about the other. A background keeps 4.5:1 under the reader's text
+ * (#e4e4e4). A border has no floor.
+ */
+dark: string, };
+
+/**
+ * What a color paints.
+ */
+export type ColorRole = "text" | "background" | "border";
 
 export type Attachment = { blobId: BlobId, name: string, mime: string, size: number, inline: boolean, };
 
@@ -405,10 +481,10 @@ export type Recipient = { name: string | null, address: string, lastAt: string, 
 export type ChangeHolder = { threadId: ThreadId | null, };
 
 /**
- * A user intent. Every command but set-images and unsubscribe acts on whole threads.
- * Only set-turn and set-images work with read-only access, because they never leave the device.
+ * A user intent. Every command but set-images, set-colors and unsubscribe acts on whole threads.
+ * Only set-turn, set-images and set-colors work with read-only access, because they never leave the device.
  */
-export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "unsubscribe", messageId: MessageId, } | { "kind": "undo", change: ChangeId, };
+export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "set-colors", messageId: MessageId, scheme: ColorScheme, } | { "kind": "unsubscribe", messageId: MessageId, } | { "kind": "undo", change: ChangeId, };
 
 /**
  * The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.

@@ -13,9 +13,10 @@ use letterbox_protocol::{
 use crate::adapter::{Connection, SignInInput};
 use crate::schedule::Start;
 use crate::sign_in::{Outcome, outcome};
-use crate::sync::Pull;
+use crate::sync::{Health, Pull};
 use crate::world::{
-    AccountRecord, Health, put_account, remove_account, remove_change, remove_mailbox, remove_message, remove_thread,
+    AccountRecord, put_account, remove_account, remove_change, remove_mailbox, remove_message, remove_sender,
+    remove_thread,
 };
 use crate::{Inner, Linked};
 
@@ -211,6 +212,15 @@ impl Inner {
                 .collect();
             for id in &changes {
                 remove_change(world, tx, id);
+            }
+            let senders: Vec<_> = world
+                .senders
+                .values()
+                .filter(|record| record.account_id == account_id)
+                .map(|record| record.id.clone())
+                .collect();
+            for id in &senders {
+                remove_sender(world, tx, id);
             }
             remove_account(world, tx, &account_id);
         });
