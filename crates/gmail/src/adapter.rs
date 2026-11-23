@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use crate::api::{Api, CallError};
 use crate::labels;
 use crate::message::{METADATA_HEADERS, attachment_part, decode_bytes, remote_body, remote_message};
-use crate::verify;
 use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, PartBody, Profile};
 
 /// messages.list allows up to 500. 100 is its default.
@@ -205,21 +204,14 @@ impl GmailAdapter {
         Ok(ChangesResult::Changes(changes))
     }
 
-    /// The body from `format=full`, and whether Google verified its sender, from the start of
-    /// `format=raw` (verify.rs). A raw read that fails leaves the sender unverified.
     async fn body_of(&self, r#ref: MessageRef) -> Outcome<BodyResult> {
-        let path = format!("messages/{}", r#ref.as_str());
-        let mut body = match self.message(r#ref.as_str(), &[("format", "full")]).await {
-            Ok(Some(message)) => remote_body(&message),
-            Ok(None) => return Ok(BodyResult::Gone),
-            Err(error) => return Err(error.failure()),
-        };
-        let raw = self
-            .api
-            .get_prefix(&path, &[("format", "raw")], verify::RAW_PREFIX)
-            .await;
-        body.sender_verified = raw.is_ok_and(|prefix| verify::verified(&prefix));
-        Ok(BodyResult::Body { body })
+        match self.message(r#ref.as_str(), &[("format", "full")]).await {
+            Ok(Some(message)) => Ok(BodyResult::Body {
+                body: remote_body(&message),
+            }),
+            Ok(None) => Ok(BodyResult::Gone),
+            Err(error) => Err(error.failure()),
+        }
     }
 
     /// The content of the attachment at `index`. The attachment id comes from a fresh

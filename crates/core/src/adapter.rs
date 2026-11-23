@@ -192,13 +192,6 @@ pub struct RemoteBody {
     /// Untrusted. The core keeps it as it came, and passes on what body/mod.rs makes of it.
     pub html: Option<String>,
     pub attachments: Vec<RemoteAttachment>,
-    /// True when the provider verified that the From address's domain sent the message, and
-    /// the adapter is sure of it: for Gmail, Google's own verdict in the raw headers
-    /// (crates/gmail/src/verify.rs). False when unsure, for a provider that cannot say, and
-    /// for bodies stored before this was kept. "Always show images from this sender" applies
-    /// only to verified messages (body/mod.rs).
-    #[serde(default)]
-    pub sender_verified: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

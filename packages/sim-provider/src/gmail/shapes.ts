@@ -142,8 +142,6 @@ export const headersOf = (message: Stored): Header[] => {
   const { facts } = message
   const references = facts.references.map((id) => `<${id}>`)
   const list: [string, string | null][] = [
-    // A receiving server writes Authentication-Results on top, above every header the sender wrote.
-    ...(message.authentication ?? []).map((value): [string, string] => ['Authentication-Results', value]),
     ['From', formatAddress(facts.from)],
     ['To', facts.to.map(formatAddress).join(', ')],
     ['Cc', facts.cc.length > 0 ? facts.cc.map(formatAddress).join(', ') : null],
@@ -193,27 +191,6 @@ export const metadataOf = (store: Store, message: Stored, historyId: string, onl
     internalDate: String(Date.parse(message.facts.sentAt)),
     sizeEstimate: message.facts.size,
     payload: { mimeType: contentTypeOf(message.body).split(';')[0], filename: '', headers, body: { size: 0 } },
-  }
-}
-
-/**
- * users.messages.get with format=raw: the message as written, base64url, with its headers in
- * their order, Authentication-Results on top. Its text is the whole body: the adapter reads
- * only the headers (crates/gmail/src/verify.rs).
- */
-export const rawOf = (store: Store, message: Stored, historyId: string) => {
-  const head = headersOf(message)
-    .map(({ name, value }) => `${name}: ${value}\r\n`)
-    .join('')
-  return {
-    id: gmailIdOf(message.ref),
-    threadId: gmailIdOf(message.ref),
-    labelIds: labelIdsOf(store, message),
-    snippet: snippetOf(message.body.text),
-    sizeEstimate: message.facts.size,
-    raw: Buffer.from(`${head}\r\n${message.body.text}`).toString('base64url'),
-    historyId,
-    internalDate: String(Date.parse(message.facts.sentAt)),
   }
 }
 

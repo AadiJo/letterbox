@@ -1,7 +1,8 @@
 // The body pipeline's images (crates/core/src/body). The core takes trackers out of an HTML
 // body for good and turns every other remote image into a placeholder. The renderer never
-// reaches the network: once the user shows a message's images, for the message or for its
-// verified sender, the core fetches each one a UI asks for, and nothing else.
+// reaches the network: once the user shows a message's images, the core fetches each one a UI
+// asks for, and nothing else. The choice is the message's alone: it never carries over to other
+// mail from the same address.
 
 import type { Seed, SeedMessage } from '@letterbox/sim-provider/contract'
 import type { Body, Command, Message, ShowImages } from '@letterbox/protocol'
@@ -10,8 +11,6 @@ import { scenario, type Scenario } from '../src/scenario.ts'
 import type { CoreClient, Subscription } from '../src/client.ts'
 
 const SHOP = { name: 'Shop News', address: 'news@shop.example' }
-/** What Google's receiving server writes for mail the shop's domain really sent. */
-const VERIFIED = ['mx.google.com; dkim=pass header.i=@shop.example; dmarc=pass (p=REJECT) header.from=shop.example']
 
 /**
  * A newsletter with each kind of tracker the rules know, each kind of remote image, and the
@@ -103,7 +102,6 @@ const newsletter = (
   from: SeedMessage['from'],
   html: string,
   sentAt: string,
-  authenticationResults: readonly string[] = VERIFIED,
 ): SeedMessage => ({
   key,
   mailboxes: ['inbox'],
@@ -113,7 +111,7 @@ const newsletter = (
   text: `${subject}.`,
   html,
   sentAt,
-  headers: { listUnsubscribe: true, authenticationResults },
+  headers: { listUnsubscribe: true },
 })
 
 const seed = (): Seed => ({
@@ -125,50 +123,13 @@ const seed = (): Seed => ({
   ],
   messages: [
     newsletter('winter', 'Winter sale', SHOP, NEWSLETTER, '2025-12-01T09:00:00.000Z'),
-    // The same sender, its address in other case.
+    // The same sender: showing one message's images must not show this one's.
     newsletter(
       'spring',
       'Spring sale',
-      { ...SHOP, address: 'News@Shop.example' },
+      SHOP,
       '<p>Spring is here.</p><img src="https://cdn.shop.example/spring.jpg" alt="Spring">',
       '2025-12-02T09:00:00.000Z',
-    ),
-    // Only claims the shop's address: Google's own header says DMARC failed. The pass below it
-    // is the sender's own writing, which counts for nothing.
-    newsletter(
-      'forged',
-      'Your account is locked',
-      SHOP,
-      '<img src="https://cdn.shop.example/forged.png" alt="Locked">',
-      '2025-12-02T10:00:00.000Z',
-      ['mx.google.com; dmarc=fail (p=REJECT) header.from=shop.example', ...VERIFIED],
-    ),
-    // Claims Google's verdict, but the topmost header is another server's.
-    newsletter(
-      'claimed',
-      'Claimed verdict',
-      SHOP,
-      '<img src="https://cdn.shop.example/claimed.png" alt="Claimed">',
-      '2025-12-02T11:00:00.000Z',
-      ['relay.example; dmarc=pass header.from=shop.example'],
-    ),
-    // Google's first verdict passes, but another of Google's below it fails: unsure, so unverified.
-    newsletter(
-      'split',
-      'Split verdict',
-      SHOP,
-      '<img src="https://cdn.shop.example/split.png" alt="Split">',
-      '2025-12-02T11:30:00.000Z',
-      [...VERIFIED, 'mx.google.com; dmarc=fail header.from=shop.example'],
-    ),
-    // Verified, but for evil.example: the shop's address is only in the quoted display name.
-    newsletter(
-      'display',
-      'Display name',
-      { name: 'Shop <news@shop.example>', address: 'x@evil.example' },
-      '<img src="https://cdn.shop.example/display.png" alt="Display">',
-      '2025-12-02T11:45:00.000Z',
-      ['mx.google.com; dmarc=pass header.from=evil.example'],
     ),
     // Images that point inside the network: an IP literal, one in IPv6 form, a name the fake
     // web resolves to loopback, one to a public and a private address, and a redirect to one.
@@ -249,7 +210,6 @@ scenario('trackers leave an html body for good, and its remote images wait until
     'it lists the remote images and the trackers taken out, the one in a noscript and the one in a src beside a srcset too',
   )
   t.equal(first.body.html, HTML, 'each remote image is a placeholder, and the base and every tracker are gone')
-  t.check(first.message.senderVerified, "Google's own verdict verifies the shop")
 
   await done(t, core, show(first.message, 'message'), 'show this message')
   t.equal(
@@ -268,32 +228,6 @@ scenario('trackers leave an html body for good, and its remote images wait until
     ['blocked', '<p>Spring is here.</p><span data-letterbox-image="0">Spring</span>'],
     "showing one message does not show the sender's next",
   )
-  await done(t, core, show(other.message, 'sender'), 'always show this sender')
-  t.equal(bodyOf(spring).body.images.shown, 'sender', 'the message shows its images for its sender')
-  t.equal(bodyOf(winter).body.images.shown, 'sender', "the sender's other message, its address in other case, does too")
-
-  for (const subject of ['Your account is locked', 'Claimed verdict', 'Split verdict']) {
-    const open = await openThread(core, (await thread(core, subject)).id)
-    const forged = bodyOf(open)
-    t.equal(
-      [forged.message.senderVerified, forged.body.images.shown],
-      [false, 'blocked'],
-      `${subject}: mail that only claims the address stays blocked`,
-    )
-    const refused = await core.command(show(forged.message, 'sender'))
-    t.equal(
-      refused.kind === 'rejected' && refused.reason,
-      'not-permitted',
-      `${subject}: its sender cannot be always shown`,
-    )
-  }
-  const display = bodyOf(await openThread(core, (await thread(core, 'Display name')).id))
-  t.equal(
-    [display.message.from.address, display.body.images.shown],
-    ['x@evil.example', 'blocked'],
-    "a mailbox named only in a quoted display name is not the shop's, so its mail stays blocked",
-  )
-
   box.deliver(
     newsletter(
       'summer',
@@ -305,7 +239,7 @@ scenario('trackers leave an html body for good, and its remote images wait until
   )
   await sync(core)
   const summer = await openThread(core, (await thread(core, 'Summer sale')).id)
-  t.equal(bodyOf(summer).body.images.shown, 'sender', "the sender's new verified mail shows its images as it arrives")
+  t.equal(bodyOf(summer).body.images.shown, 'blocked', 'new mail from the same sender arrives blocked too')
 
   const fetched = box.calls().body
   await core.stop()
@@ -315,17 +249,11 @@ scenario('trackers leave an html body for good, and its remote images wait until
   const springAgain = await openThread(again, (await thread(again, 'Spring sale')).id)
   t.equal(
     [bodyOf(winterAgain).body.images.shown, bodyOf(springAgain).body.images.shown],
-    ['sender', 'sender'],
-    'after a restart the sender is still shown',
+    ['message', 'blocked'],
+    'after a restart each message keeps its own choice',
   )
   t.equal(box.calls().body, fetched, 'no body was fetched again')
 
-  await done(t, again, show(bodyOf(springAgain).message, 'blocked'), 'block the sender from its newer message')
-  t.equal(
-    [bodyOf(springAgain).body.images.shown, bodyOf(winterAgain).body.images.shown],
-    ['blocked', 'message'],
-    'that message and the sender are blocked, and the older message keeps its own choice from before the restart',
-  )
   const unknown = await again.command({
     kind: 'set-images',
     messageId: 'message_404' as Message['id'],
@@ -473,3 +401,51 @@ scenario('set-images cannot be undone', async (t) => {
   t.equal(undo.kind === 'rejected' && undo.reason, 'not-supported', 'its undo is refused not-supported')
   t.equal(bodyOf(winter).body.images.shown, 'message', 'and the images stay shown')
 })
+
+scenario(
+  'on gmail, a comment in From or a quoted display name is not read as the address the reader shows',
+  async (t) => {
+    const commented: Seed = {
+      address: ME,
+      password: PASSWORD,
+      mailboxes: [{ key: 'inbox', name: 'Inbox', role: 'inbox' }],
+      messages: [
+        {
+          key: 'commented',
+          mailboxes: ['inbox'],
+          from: 'news@shop.example (Shop <alerts@bank.example>)',
+          to: [ME],
+          subject: 'Commented sender',
+          text: 'Hello.',
+          sentAt: '2025-12-01T09:00:00.000Z',
+        },
+        {
+          key: 'quoted',
+          mailboxes: ['inbox'],
+          from: '"Bank <alerts@bank.example>" <news@shop.example>',
+          to: [ME],
+          subject: 'Quoted sender',
+          text: 'Hello.',
+          sentAt: '2025-12-02T09:00:00.000Z',
+        },
+      ],
+    }
+    const { core } = await start(t, commented)
+    const listed = await thread(core, 'Commented sender')
+    t.equal(
+      listed.people.map((person) => person.address),
+      ['news@shop.example', ME],
+      'the From address is the mailbox, not the one written inside its comment',
+    )
+    const quoted = await thread(core, 'Quoted sender')
+    t.equal(
+      quoted.people.map((person) => [person.name, person.address]),
+      [
+        ['Bank <alerts@bank.example>', 'news@shop.example'],
+        [null, ME],
+      ],
+      'nor one written inside its quoted display name',
+    )
+  },
+  ['gmail'],
+)

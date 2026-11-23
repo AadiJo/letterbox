@@ -100,12 +100,7 @@ export type ThreadDetail = { messages: Array<Message>, id: ThreadId, accountId: 
  */
 pending: boolean, };
 
-export type Message = { id: MessageId, from: Person, 
-/**
- * True when the provider verified that the sender's domain sent it (for Gmail, DMARC
- * passed for the From domain). Only then does `set-images` take `sender` for it.
- */
-senderVerified: boolean, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, 
+export type Message = { id: MessageId, from: Person, to: Array<Person>, cc: Array<Person>, sentAt: string, unread: boolean, body: Body, 
 /**
  * From the List-Unsubscribe header, or else a link in the body once it has loaded.
  */
@@ -176,10 +171,12 @@ remote: Array<string>,
 trackers: Array<Tracker>, };
 
 /**
- * Whose choice shows a message's remote images. The `set-images` command takes one of these
- * for a message, and the message then reports it.
+ * Whether a message's remote images are shown. The `set-images` command takes one of these
+ * for a message, and the message then reports it. The choice is per message only: no provider
+ * gives a sure sign of who sent a message (see crates/core/src/body/mod.rs), so none is
+ * carried over to other mail from the same address.
  */
-export type ShowImages = "blocked" | "message" | "sender";
+export type ShowImages = "blocked" | "message";
 
 /**
  * One remote image the core took out as a tracker.

@@ -248,7 +248,6 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
                     snapshot: None,
                     last_synced_at: None,
                     health: Health::Ok,
-                    images_from: Vec::new(),
                 },
             );
             let incoming = Incoming {

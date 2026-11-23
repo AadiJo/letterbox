@@ -48,9 +48,6 @@ pub struct AccountRecord {
     pub last_synced_at: Option<Time>,
     /// How the last sync pass ended.
     pub health: Health,
-    /// The addresses, lowercase, whose remote images the user always shows (see body/mod.rs).
-    #[serde(default)]
-    pub images_from: Vec<String>,
 }
 
 /// How far a snapshot has got.

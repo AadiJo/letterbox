@@ -2,8 +2,8 @@
 //! rows kept between commits (see rows.rs). Everything here is a pure read.
 
 use letterbox_protocol::{
-    Account, AccountId, AccountStatus, Attachment, Body, Mailbox, Message, Person, ShowImages, SignInOption,
-    ThreadDetail, ThreadFilter, ThreadId, ThreadPage, Time, Unavailable,
+    Account, AccountId, AccountStatus, Attachment, Body, Mailbox, Message, Person, SignInOption, ThreadDetail,
+    ThreadFilter, ThreadId, ThreadPage, Time, Unavailable,
 };
 
 use crate::adapter::{BodyResult, RemoteAddress};
@@ -94,7 +94,6 @@ fn message<'a>(world: &World, record: &'a MessageRecord, pending: &Pending<'a>, 
     Message {
         id: record.id.clone(),
         from: person(&record.facts.from, me),
-        sender_verified: body::sender_verified(record),
         to: record.facts.to.iter().map(|to| person(to, me)).collect(),
         cc: record.facts.cc.iter().map(|cc| person(cc, me)).collect(),
         sent_at: record.facts.sent_at.clone(),
@@ -188,22 +187,18 @@ pub fn thread(world: &World, rows: &Rows, thread_id: &ThreadId, live: &dyn Live)
 }
 
 /// What a conversation's answer reads besides its own records: what it shows for each of its
-/// messages that has no stored body, and whose choice shows each message's images, which
-/// reads the account's senders (see body/mod.rs).
+/// messages that has no stored body.
 #[derive(Debug, PartialEq)]
 pub struct Outside {
     missing: Vec<Body>,
-    images: Vec<ShowImages>,
 }
 
 pub fn outside(world: &World, thread_id: &ThreadId, live: &dyn Live) -> Outside {
-    let records = messages_of(world, thread_id);
     Outside {
-        missing: records
-            .iter()
+        missing: messages_of(world, thread_id)
+            .into_iter()
             .filter(|record| record.body.is_none())
             .map(|record| live.missing_body(record))
             .collect(),
-        images: records.iter().map(|record| body::shown(world, record)).collect(),
     }
 }

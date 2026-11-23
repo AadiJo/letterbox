@@ -238,7 +238,6 @@ pub fn prepare(world: &World, draft: &Draft, now: &Time, random: u64) -> Result<
             text,
             html,
             attachments: files,
-            sender_verified: false,
         },
         server: MessageState {
             mailboxes: sent.map(|mailbox| mailbox.id.clone()).into_iter().collect(),

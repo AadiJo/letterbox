@@ -105,7 +105,7 @@ const sender = type({
 })
 
 const images = type({
-  shown: "'blocked' | 'message' | 'sender'",
+  shown: "'blocked' | 'message'",
   remote: 'string[]',
   trackers: type({ host: 'string', reason: "'known-host' | 'tiny' | 'hidden' | 'beacon'" }).array(),
 })
@@ -128,7 +128,6 @@ const delivery = type({ state: "'held'", change: 'string', until: 'string' })
 const message = type({
   id: 'string',
   from: person,
-  senderVerified: 'boolean',
   to: person.array(),
   cc: person.array(),
   sentAt: 'string',

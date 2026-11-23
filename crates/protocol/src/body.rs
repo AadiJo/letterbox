@@ -70,19 +70,17 @@ pub struct Images {
     pub trackers: Vec<Tracker>,
 }
 
-/// Whose choice shows a message's remote images. The `set-images` command takes one of these
-/// for a message, and the message then reports it.
+/// Whether a message's remote images are shown. The `set-images` command takes one of these
+/// for a message, and the message then reports it. The choice is per message only: no provider
+/// gives a sure sign of who sent a message (see crates/core/src/body/mod.rs), so none is
+/// carried over to other mail from the same address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShowImages {
     /// Not shown. Every message starts here.
     Blocked,
-    /// Shown for this message only.
+    /// Shown for this message.
     Message,
-    /// Shown for every message from this sender's address in this account whose sender the
-    /// provider verified (`Message::sender_verified`). Unverified mail from the address stays
-    /// blocked.
-    Sender,
 }
 
 /// One remote image the core took out as a tracker.

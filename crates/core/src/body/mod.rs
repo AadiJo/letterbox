@@ -47,9 +47,7 @@ use serde::{Deserialize, Serialize};
 use crate::Inner;
 use crate::adapter::{BodyResult, RemoteBody};
 use crate::effect::Effect;
-use crate::world::{
-    AccountRecord, ChangeOutcome, ChangeRecord, MessageRecord, World, put_account, put_change, put_message, scoped,
-};
+use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, World, put_change, put_message, scoped};
 
 /// The version of the rules. Raise it whenever a change to them would change a `Processed`.
 const VERSION: u32 = 2;
@@ -170,22 +168,17 @@ pub fn unprocessed(record: &MessageRecord) -> bool {
     matches!(record.body, Some(BodyResult::Body { .. })) && record.reading.current().is_none()
 }
 
-/// True when the provider verified the sender of a message whose body has loaded
-/// (`RemoteBody::sender_verified`).
-pub fn sender_verified(record: &MessageRecord) -> bool {
-    matches!(&record.body, Some(BodyResult::Body { body }) if body.sender_verified)
-}
-
-/// Whose choice shows a message's images. The sender's applies only to a message whose sender
-/// the provider verified (`sender_verified`), so a message that only claims the address in its
-/// From never inherits it. Else the message's own.
-pub fn shown(world: &World, record: &MessageRecord) -> ShowImages {
-    let address = record.facts.from.address.to_lowercase();
-    let account = world.accounts.get(&record.account_id);
-    let trusted = sender_verified(record) && !address.is_empty();
-    if trusted && account.is_some_and(|account| account.images_from.contains(&address)) {
-        ShowImages::Sender
-    } else if record.reading.show_images {
+/// Whether a message's images are shown: by the user's choice for that message alone.
+///
+/// There is no choice for a sender. Showing images tells the server the mail was opened, so a
+/// choice that carried over to other mail from an address would let anyone who writes that
+/// address in a From learn when mail is read. No provider gives a sure sign of who sent a
+/// message: Gmail documents nothing that tells mail its inbound check passed from mail that
+/// skipped it (an API insert, IMAP APPEND, POP or Gmailify fetches, a migration), and IMAP
+/// folders carry no verdict at all. A choice per sender waits for a sign that can be trusted,
+/// such as a validated ARC verdict from Google.
+pub fn shown(record: &MessageRecord) -> ShowImages {
+    if record.reading.show_images {
         ShowImages::Message
     } else {
         ShowImages::Blocked
@@ -213,7 +206,7 @@ pub fn ready(world: &World, record: &MessageRecord, body: &RemoteBody) -> Body {
         text: body.text.clone(),
         html: processed.html.clone(),
         images: Images {
-            shown: shown(world, record),
+            shown: shown(record),
             remote: processed.remote.clone(),
             trackers: processed
                 .trackers
@@ -312,46 +305,16 @@ impl Inner {
         });
     }
 
-    /// Answers set-images: keeps the choice for the message and its sender, and settles at
-    /// once, since it never leaves the device. See `Command::SetImages`.
+    /// Answers set-images: keeps the choice for the message, and settles at once, since it
+    /// never leaves the device. See `Command::SetImages`.
     pub(crate) fn set_images(self: &Rc<Self>, change: ChangeId, message_id: &MessageId, show: ShowImages) {
-        let found = {
-            let world = &self.state.borrow().world;
-            world.messages.get(message_id).cloned().and_then(|record| {
-                let account = world.accounts.get(&record.account_id)?.clone();
-                Some((record, account))
-            })
-        };
-        let Some((record, account)) = found else {
+        let record = self.state.borrow().world.messages.get(message_id).cloned();
+        let Some(record) = record else {
             return self.reject(change, Refusal::UnknownTarget);
         };
-        let address = record.facts.from.address.to_lowercase();
-        if show == ShowImages::Sender && (!sender_verified(&record) || address.is_empty()) {
-            return self.reject(change, Refusal::NotPermitted);
-        }
-        let mut senders: Vec<String> = account
-            .images_from
-            .iter()
-            .filter(|known| **known != address)
-            .cloned()
-            .collect();
-        if show == ShowImages::Sender {
-            senders.push(address);
-        }
-        let show_images = match show {
-            ShowImages::Blocked => false,
-            ShowImages::Message => true,
-            ShowImages::Sender => record.reading.show_images,
-        };
+        let show_images = show == ShowImages::Message;
         let rev = self.commit_then(
             |world, tx, at| {
-                if senders != account.images_from {
-                    let account = AccountRecord {
-                        images_from: senders,
-                        ..account.clone()
-                    };
-                    put_account(world, tx, account);
-                }
                 if show_images != record.reading.show_images {
                     let reading = Reading {
                         show_images,
@@ -370,17 +333,15 @@ impl Inner {
                     rev: at,
                     result: ChangeResult::Done,
                 });
-                let effect = Effect::Images {
-                    message_id: message_id.clone(),
-                };
-                let account_id = account.id.clone();
                 put_change(
                     world,
                     tx,
                     ChangeRecord {
                         id: change.clone(),
-                        account_id,
-                        effect,
+                        account_id: record.account_id.clone(),
+                        effect: Effect::Images {
+                            message_id: message_id.clone(),
+                        },
                         accepted_rev: at,
                         outcome,
                     },

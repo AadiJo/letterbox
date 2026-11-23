@@ -48,8 +48,6 @@ export type Stored = {
    * their bytes. A sent copy's files are the bytes the core sent, kept as they came.
    */
   contents: readonly (() => Buffer)[]
-  /** Its Authentication-Results headers, topmost first, as its seed gave them. The fake Gmail writes them. */
-  authentication?: readonly string[]
   unread: boolean
   flagged: boolean
   /** Mailbox keys. */
@@ -145,33 +143,6 @@ const listUnsubscribeOf = (seed: SeedMessage): string => {
   return given ? '<mailto:unsubscribe@list.example>' : ''
 }
 
-/**
- * True when Google verified a seed's From domain, by the rule crates/gmail (verify.rs) applies to
- * a raw message: its first Authentication-Results header names mx.google.com and says DMARC
- * passed for that domain, and no other one that names mx.google.com says otherwise. So the
- * sim's dialects verify a seed the way the fake Gmail's adapter does.
- */
-/** True when an Authentication-Results value names Google's authserv-id. */
-const byGoogle = (value: string) => value.split(';')[0]?.trim().split(/\s+/)[0]?.toLowerCase() === 'mx.google.com'
-
-export const senderVerified = (seed: SeedMessage): boolean => {
-  const results = seed.headers?.authenticationResults ?? []
-  const domain = addressOf(seed.from).address.split('@')[1]?.toLowerCase()
-  if (!domain) return false
-  const passes = (value: string) =>
-    byGoogle(value) &&
-    value
-      .split(';')
-      .slice(1)
-      .some((result) => {
-        const words = result.trim().split(/\s+/)
-        const named = words.flatMap((word) => (word.startsWith('header.from=') ? [word.slice(12).toLowerCase()] : []))
-        return words[0]?.toLowerCase() === 'dmarc=pass' && named.includes(domain)
-      })
-  const [first, ...rest] = results
-  return first !== undefined && passes(first) && rest.filter(byGoogle).every(passes)
-}
-
 /** The facts a seed message reports. `references` and `bulk` come from the caller, which knows the dialect. */
 export const factsOf = (seed: SeedMessage, references: string[], bulk: boolean | null): RemoteFacts => ({
   messageId: bareMessageId(seed),
@@ -200,7 +171,6 @@ export const bodyOf = (seed: SeedMessage): RemoteBody => ({
   text: seed.text,
   html: seed.html ?? null,
   attachments: attachmentsOf(seed).map(({ name, mime, size }) => ({ name, mime, size, inline: false })),
-  ...(senderVerified(seed) && { senderVerified: true }),
 })
 
 /** What a seed attachment holds: its name and a line end, over and over, to its size, or to `served` when it has one. */

@@ -219,9 +219,6 @@ pub struct ThreadDetail {
 pub struct Message {
     pub id: MessageId,
     pub from: Person,
-    /// True when the provider verified that the sender's domain sent it (for Gmail, DMARC
-    /// passed for the From domain). Only then does `set-images` take `sender` for it.
-    pub sender_verified: bool,
     pub to: Vec<Person>,
     pub cc: Vec<Person>,
     pub sent_at: Time,

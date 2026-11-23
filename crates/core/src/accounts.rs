@@ -120,9 +120,6 @@ impl Inner {
                     // A snapshot that was under way resumes from its saved page.
                     round: existing.as_ref().map_or(0, |account| account.round),
                     snapshot: existing.as_ref().and_then(|account| account.snapshot.clone()),
-                    images_from: existing
-                        .as_ref()
-                        .map_or_else(Vec::new, |account| account.images_from.clone()),
                     last_synced_at: existing.and_then(|account| account.last_synced_at),
                     health: Health::Ok,
                 },

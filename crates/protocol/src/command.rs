@@ -40,11 +40,8 @@ pub enum Command {
         draft: Draft,
     },
     /// Shows or blocks one message's remote images, and settles at once: it never leaves the
-    /// device. `sender` shows every verified message from its sender's address in this
-    /// account, now and later, and is refused `not-permitted` for a message whose sender is not
-    /// verified (`Message::sender_verified`) or has no address. `message` shows this one and
-    /// stops showing the sender's. `blocked` blocks this one and stops showing the sender's.
-    /// The message then reports `show` in `body.images.shown`. Refused `not-supported` for an undo.
+    /// device. The message then reports `show` in `body.images.shown`, and no other message
+    /// changes. Refused `not-supported` for an undo.
     SetImages {
         message_id: MessageId,
         show: ShowImages,

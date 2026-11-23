@@ -50,7 +50,7 @@ impl Inner {
                     let url = index
                         .and_then(|index| processed.remote.get(index))
                         .ok_or(ImageError::Gone)?;
-                    if shown(world, record) == ShowImages::Blocked {
+                    if shown(record) == ShowImages::Blocked {
                         return Err(ImageError::Blocked);
                     }
                     Ok(url.clone())
@@ -76,9 +76,9 @@ impl Inner {
     fn still_shown(&self, message_id: &MessageId) -> Result<(), ImageError> {
         let state = self.state.borrow();
         let record = state.world.messages.get(message_id).ok_or(ImageError::Gone)?;
-        match shown(&state.world, record) {
+        match shown(record) {
             ShowImages::Blocked => Err(ImageError::Blocked),
-            ShowImages::Message | ShowImages::Sender => Ok(()),
+            ShowImages::Message => Ok(()),
         }
     }
 

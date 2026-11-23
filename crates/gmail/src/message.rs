@@ -52,6 +52,31 @@ fn message_ids(value: &str) -> impl Iterator<Item = String> + '_ {
         .filter(|id| !id.is_empty())
 }
 
+/// An address header's value without its comments (RFC 5322 section 3.2.2): parenthesized text
+/// outside a quoted string, which may nest and escape a character with a backslash. A comment
+/// is not part of any address, so `x@shop.example (<y@evil.example>)` is shop.example's.
+fn without_comments(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let (mut depth, mut quoted, mut escaped) = (0_u32, false, false);
+    for c in value.chars() {
+        let in_comment = depth > 0;
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted || in_comment => escaped = true,
+            '"' if !in_comment => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if in_comment => depth -= 1,
+            _ => {}
+        }
+        // A quoted string is kept whole. Outside one, a comment goes with its parentheses.
+        let kept = quoted || !in_comment && depth == 0 && c != ')';
+        if kept {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Splits an address list on the commas between addresses, not those inside quotes or angle brackets.
 fn split_addresses(value: &str) -> Vec<&str> {
     let mut parts = Vec::new();
@@ -120,7 +145,9 @@ fn address(text: &str) -> RemoteAddress {
 }
 
 fn addresses(message: &Message, name: &str) -> Vec<RemoteAddress> {
-    header(message, name)
+    let value = header(message, name).map(without_comments);
+    value
+        .as_deref()
         .map(split_addresses)
         .unwrap_or_default()
         .into_iter()
@@ -306,7 +333,5 @@ pub fn remote_body(message: &Message) -> RemoteBody {
         text: text.unwrap_or_default(),
         html,
         attachments: attachments.collect(),
-        // The adapter reads the verdict from the raw message (verify.rs).
-        sender_verified: false,
     }
 }

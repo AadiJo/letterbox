@@ -257,28 +257,6 @@ impl Api {
         .await
     }
 
-    /// GET `users/me/<path>` with a query, within the call budget, and read at most `limit`
-    /// bytes of a success body, then drop the rest: the start of a raw message, for its headers.
-    pub async fn get_prefix(&self, path: &str, query: &[(&str, &str)], limit: usize) -> Result<Vec<u8>, CallError> {
-        let url = self.url(path);
-        let mut response = self
-            .send(&self.http, self.config.timeouts.call, |http| {
-                http.get(&url).query(query)
-            })
-            .await?;
-        let mut bytes = Vec::new();
-        while bytes.len() < limit {
-            match response.chunk().await {
-                Ok(Some(chunk)) => bytes.extend_from_slice(&chunk),
-                Ok(None) => break,
-                Err(error) if error.is_timeout() => return Err(CallError::Lost),
-                Err(_) => return Err(CallError::Unreadable),
-            }
-        }
-        bytes.truncate(limit);
-        Ok(bytes)
-    }
-
     /// GET `users/me/<path>`, within the transfer budget and on the client with a stall
     /// budget: an attachment's download.
     pub async fn get_transfer<T: DeserializeOwned>(&self, path: &str) -> Result<T, CallError> {

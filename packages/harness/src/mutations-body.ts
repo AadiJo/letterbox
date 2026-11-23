@@ -1,5 +1,5 @@
 // Breaks in the body pipeline (crates/core/src/body): trackers, remote images and their
-// fetch, verified senders, unsubscribe targets, quoted history and when the pipeline runs.
+// fetch, the From address, unsubscribe targets, quoted history and when the pipeline runs.
 // mutations.ts runs them with the others.
 
 import type { Mutation } from './breaks.ts'
@@ -11,6 +11,7 @@ const FETCH = 'the core fetches a shown image'
 const UNSUBSCRIBE = 'unsubscribe targets come from the headers'
 const QUOTES = 'the quote at the end of a body'
 const PROCESSING = 'a stored reading survives a restart'
+const FROM = 'on gmail, a comment in From'
 
 export const BODY_MUTATIONS: Mutation[] = [
   {
@@ -121,14 +122,6 @@ export const BODY_MUTATIONS: Mutation[] = [
     scenarios: IMAGES,
   },
   {
-    name: "a sender's address is matched with its case, so their other mail stays blocked",
-    file: body('mod.rs'),
-    find: '    let address = record.facts.from.address.to_lowercase();\n    let account = world.accounts.get(&record.account_id);',
-    replace:
-      '    let address = record.facts.from.address.clone();\n    let account = world.accounts.get(&record.account_id);',
-    scenarios: IMAGES,
-  },
-  {
     name: "a message's own choice to show images is lost on restart",
     file: body('mod.rs'),
     find: '    #[serde(default, skip_serializing_if = "std::ops::Not::not")]\n    show_images: bool,',
@@ -136,31 +129,10 @@ export const BODY_MUTATIONS: Mutation[] = [
     scenarios: IMAGES,
   },
   {
-    name: 'mail that only claims an always-shown address shows its images',
-    file: body('mod.rs'),
-    find: '    let trusted = sender_verified(record) && !address.is_empty();',
-    replace: '    let trusted = !address.is_empty();',
-    scenarios: IMAGES,
-  },
-  {
-    name: 'an unverified sender can be always shown',
-    file: body('mod.rs'),
-    find: '        if show == ShowImages::Sender && (!sender_verified(&record) || address.is_empty()) {',
-    replace: '        if show == ShowImages::Sender && address.is_empty() {',
-    scenarios: IMAGES,
-  },
-  {
-    name: 'the Gmail adapter trusts an Authentication-Results any server wrote at the top',
-    file: 'crates/gmail/src/verify.rs',
-    find: '    says_pass(first) && results.filter(|value| by_google(value)).all(says_pass)',
-    replace: '    (says_pass(first) || !by_google(first)) && results.filter(|value| by_google(value)).all(says_pass)',
-    scenarios: IMAGES,
-  },
-  {
     name: 'the core fetches an image while the message blocks images',
     file: body('fetch.rs'),
-    find: '                if shown(world, record) == ShowImages::Blocked {',
-    replace: '                if shown(world, record) == ShowImages::Blocked && false {',
+    find: '                    if shown(record) == ShowImages::Blocked {',
+    replace: '                    if shown(record) == ShowImages::Blocked && false {',
     // The check before every hop would catch it too, so both go.
     also: [
       {
@@ -267,14 +239,14 @@ export const BODY_MUTATIONS: Mutation[] = [
     file: 'crates/gmail/src/message.rs',
     find: "            '<' if !quoted => return Some(index),",
     replace: "            '<' => return Some(index),",
-    scenarios: IMAGES,
+    scenarios: FROM,
   },
   {
-    name: 'a second Google verdict that disagrees is ignored',
-    file: 'crates/gmail/src/verify.rs',
-    find: '    says_pass(first) && results.filter(|value| by_google(value)).all(says_pass)',
-    replace: '    let _ = results;\n    says_pass(first)',
-    scenarios: IMAGES,
+    name: 'the Gmail adapter reads an address written inside a comment in From',
+    file: 'crates/gmail/src/message.rs',
+    find: '    let value = header(message, name).map(without_comments);',
+    replace: '    let value = header(message, name).map(str::to_owned);',
+    scenarios: FROM,
   },
   {
     name: 'a quote offset counts bytes, which JavaScript does not',
