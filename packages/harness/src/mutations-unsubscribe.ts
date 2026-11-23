@@ -25,10 +25,10 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
     scenarios: HELD,
   },
   {
-    name: 'Updates shows nothing while an unsubscribe is held',
+    name: 'Updates shows a held unsubscribe as already on its way',
     file: unsubscribe('mod.rs'),
-    find: '        (None, Some(until)) => Some(Unsubscribed::Held { change, until, method }),',
-    replace: '        (None, Some(_)) => None,',
+    find: '        (None, Some(Stage::Held { until })) => Some(Unsubscribed::Held {',
+    replace: '        (None, Some(Stage::Held { until })) if until.is_empty() => Some(Unsubscribed::Held {',
     scenarios: HELD,
   },
   {
@@ -55,8 +55,8 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
   {
     name: 'a signature that does not cover List-Unsubscribe-Post is enough for a one-click',
     file: unsubscribe('dkim.rs'),
-    find: '    names("List-Unsubscribe") && names("List-Unsubscribe-Post")',
-    replace: '    names("List-Unsubscribe")',
+    find: '    names("From") && names("List-Unsubscribe") && names("List-Unsubscribe-Post")',
+    replace: '    names("From") && names("List-Unsubscribe")',
     scenarios: FALLBACK,
   },
   {
