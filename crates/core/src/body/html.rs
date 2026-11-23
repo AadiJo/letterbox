@@ -28,15 +28,15 @@
 //! Attribute values come from lol_html as written, so each is read with its entities decoded
 //! (`attribute`), as a browser reads it, and written back with `&` escaped (`set`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use lol_html::html_content::Element;
-use lol_html::{RewriteStrSettings, doc_text, element, end_tag, rewrite_str};
+use lol_html::{RewriteStrSettings, doc_text, element, end_tag, rewrite_str, text};
 
 use super::quote::{self, Place, Scan, Tag};
 use super::rewrite::{Found, rewrite};
-use super::trackers::Reason;
+use super::trackers::{self, Reason};
 use super::unsubscribe::{self, Link};
 
 /// What the passes made of one HTML body.
@@ -54,8 +54,9 @@ pub struct Html {
 }
 
 /// Runs the passes. None when lol_html refuses the markup, as it does when the markup is
-/// ambiguous enough that it cannot be sure how a browser would read it: then the caller
-/// shows the plain text instead.
+/// ambiguous enough that it cannot be sure how a browser would read it, or when the check on
+/// the result (`safe`) finds what the passes should have taken out: then the caller shows the
+/// plain text instead, and says the HTML was withheld.
 pub fn process(input: &str) -> Option<Html> {
     let input = unwrap(input)?;
     let Scanned { boundary, words, link } = scan(&input)?;
@@ -68,6 +69,9 @@ pub fn process(input: &str) -> Option<Html> {
         &mut found,
     )?;
     let (html, quote) = take_marker(rewritten, marker.as_deref());
+    if !safe(&html) {
+        return None;
+    }
     Some(Html {
         html,
         remote: found.remote,
@@ -283,4 +287,70 @@ fn scan(input: &str) -> Option<Scanned> {
         words: html_escape::decode_html_entities(&words).into_owned(),
         link: links.first().map(|(_, _, url)| url.clone()),
     })
+}
+
+/// The check on what the frame will get, after every pass and the marker are done: the HTML
+/// read once more, as markup, failing closed. False when lol_html refuses it, or it holds an
+/// element the passes take out (`base`, `link`, `meta http-equiv`, `script`, `noscript`, and
+/// every embedded document), or a remote URL where the frame could load it: in `src`, `srcset`,
+/// `poster` or `background`, in `href` or `xlink:href` on anything but a link (`a`, `area`),
+/// or in a `url()` of a style attribute or `<style>`. The passes leave none of these, so a false
+/// here means a gap in them, such as an image attribute they do not know (an SVG `feImage`, a
+/// `video`'s src): the HTML is withheld rather than passed on.
+fn safe(html: &str) -> bool {
+    let bad = &Cell::new(false);
+    let on_element = element!("*", move |el| {
+        let name = el.tag_name();
+        let forbidden = matches!(
+            name.as_str(),
+            "base"
+                | "link"
+                | "script"
+                | "noscript"
+                | "iframe"
+                | "frame"
+                | "frameset"
+                | "object"
+                | "embed"
+                | "portal"
+                | "applet"
+        ) || name == "meta" && el.has_attribute("http-equiv");
+        let remote = |name: &str| attribute(el, name).is_some_and(|value| trackers::remote(&value).is_some());
+        let link = matches!(name.as_str(), "a" | "area");
+        let in_srcset = attribute(el, "srcset").is_some_and(|value| {
+            trackers::srcset(&value)
+                .iter()
+                .any(|candidate| trackers::remote(candidate.url).is_some())
+        });
+        let loads = ["src", "poster", "background"].into_iter().any(remote)
+            || !link && ["href", "xlink:href"].into_iter().any(remote)
+            || in_srcset
+            || attribute(el, "style").is_some_and(|style| remote_css(&style));
+        if forbidden || loads {
+            bad.set(true);
+        }
+        Ok(())
+    });
+    let mut style = String::new();
+    let on_style = text!("style", move |chunk| {
+        style.push_str(chunk.as_str());
+        if chunk.last_in_text_node() {
+            if remote_css(&style) {
+                bad.set(true);
+            }
+            style.clear();
+        }
+        Ok(())
+    });
+    let settings = RewriteStrSettings::new()
+        .append_element_content_handler(on_element)
+        .append_element_content_handler(on_style);
+    rewrite_str(html, settings).is_ok() && !bad.get()
+}
+
+/// True when CSS names a remote image in a `url()` (see `trackers::css_urls`).
+fn remote_css(css: &str) -> bool {
+    trackers::css_urls(css)
+        .iter()
+        .any(|found| trackers::remote(&found.url).is_some())
 }

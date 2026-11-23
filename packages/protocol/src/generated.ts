@@ -127,7 +127,14 @@ text: string,
  * The HTML, the same in every state: trackers gone, each remote image a placeholder
  * (see `Images`), and no `<base>`.
  */
-html: string | null, images: Images, 
+html: string | null, 
+/**
+ * True when the message has HTML the core would not pass on, so `html` is null: the
+ * parser could not be sure how a browser would read it, or the check on the core's
+ * own output found something its rules take out. The UI shows `text` instead, or says
+ * the formatting could not be shown safely when `text` is blank.
+ */
+htmlWithheld: boolean, images: Images, 
 /**
  * None when the body ends in no quote.
  */

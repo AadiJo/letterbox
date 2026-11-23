@@ -108,9 +108,23 @@ fn split_addresses(value: &str) -> Vec<&str> {
         .collect()
 }
 
-/// A mailbox as written, without the space a comment or folding left in it: an address has none.
+/// A mailbox as written, without the space a comment or folding left in it. Space outside a
+/// quoted string is never part of an address. Inside one, as in `"first last"@example.com`,
+/// it is, so it stays.
 fn mailbox(text: &str) -> String {
-    text.split_whitespace().collect()
+    let (mut quoted, mut escaped) = (false, false);
+    text.chars()
+        .filter(|&c| {
+            let kept = quoted || !c.is_whitespace();
+            match c {
+                _ if escaped => escaped = false,
+                '\\' if quoted => escaped = true,
+                '"' => quoted = !quoted,
+                _ => {}
+            }
+            kept
+        })
+        .collect()
 }
 
 /// One `Name <address>` or bare address. Encoded words (RFC 2047) are left as they are.

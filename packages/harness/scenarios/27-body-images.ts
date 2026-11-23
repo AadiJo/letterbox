@@ -88,8 +88,15 @@ const REMOTE = [
 ]
 
 /** The html a UI shows, in every state: each remote image a placeholder that names its place in REMOTE. */
+/** What each deleted element leaves, so the text on its two sides never meets (rewrite.rs). */
+const GONE = '<!---->'
+
 const HTML = [
-  '<svg><foreignObject></foreignObject></svg><template></template>',
+  // The three links, the meta, the noscript's preconnect and refresh, and the five embedded documents.
+  GONE.repeat(11),
+  `<svg><foreignObject>${GONE}</foreignObject></svg><template>${GONE}</template>`,
+  // The base.
+  GONE,
   '<table><tr><td data-letterbox-background="0">',
   '<span data-letterbox-image="1" data-letterbox-width="600">Winter sale</span>',
   '<img src="cid:logo" alt="Shop">',
@@ -99,8 +106,12 @@ const HTML = [
   '<svg><image width="20" height="20" data-letterbox-image="4" /></svg>',
   '<span data-letterbox-image="5">Promo</span>',
   '</td></tr></table>',
+  // The tiny tracker that was in the noscript.
+  GONE,
   '<img src="rel/photo.png" alt="Relative">',
   `<div style="background-image:image-set('https://cdn.shop.example/set.png' 1x)">Set</div>`,
+  // The seven trackers.
+  GONE.repeat(7),
   '<div style="background:none">Thanks for reading.</div>',
 ].join('')
 
@@ -138,6 +149,28 @@ const seed = (): Seed => ({
       SHOP,
       '<p>Spring is here.</p><img src="https://cdn.shop.example/spring.jpg" alt="Spring">',
       '2025-12-02T09:00:00.000Z',
+    ),
+    // Deleted elements between `<` and the rest of a tag: text that would read as a link, a
+    // refresh and a base if the two sides met.
+    newsletter(
+      'joined',
+      'Joined',
+      SHOP,
+      [
+        '<p>Joined.</p>',
+        '<<iframe></iframe>link rel=dns-prefetch href=//x.example>',
+        '<<object></object>meta http-equiv=refresh content="0;url=https://x.example">',
+        '<<embed>base href=https://x.example/>',
+      ].join(''),
+      '2025-12-02T10:50:00.000Z',
+    ),
+    // An image attribute the rewrite does not know: the check on its output withholds the HTML.
+    newsletter(
+      'gap',
+      'Gap',
+      SHOP,
+      '<p>Gap.</p><svg><filter><feImage href="https://cdn.shop.example/f.png"/></filter></svg>',
+      '2025-12-02T10:55:00.000Z',
     ),
     // A frameset, apart: lol_html refuses one beside the newsletter's noscript as ambiguous.
     newsletter(
@@ -231,7 +264,22 @@ scenario('trackers leave an html body for good, and its remote images wait until
     'each remote image is a placeholder, and the base, every embedded document, every hint and every tracker are gone',
   )
   const framed = bodyOf(await openThread(core, (await thread(core, 'Framed')).id))
-  t.equal(framed.body.html, '<p>Framed.</p>', 'a frameset goes too')
+  t.equal(framed.body.html, '<p>Framed.</p><!---->', 'a frameset goes too')
+  const joined = bodyOf(await openThread(core, (await thread(core, 'Joined')).id))
+  t.equal(
+    [joined.body.html, joined.body.htmlWithheld],
+    [
+      '<p>Joined.</p><<!---->link rel=dns-prefetch href=//x.example><<!---->meta http-equiv=refresh content="0;url=https://x.example"><<!---->base href=https://x.example/>',
+      false,
+    ],
+    'a deleted element leaves an empty comment, so the text around it never forms a link, refresh or base tag',
+  )
+  const gap = bodyOf(await openThread(core, (await thread(core, 'Gap')).id))
+  t.equal(
+    [gap.body.html, gap.body.htmlWithheld, gap.body.text],
+    [null, true, 'Gap.'],
+    'a remote URL the rewrite does not know withholds the html, and the plain text stands in',
+  )
 
   await done(t, core, show(first.message, 'message'), 'show this message')
   t.equal(
@@ -423,66 +471,3 @@ scenario('set-images cannot be undone', async (t) => {
   t.equal(undo.kind === 'rejected' && undo.reason, 'not-supported', 'its undo is refused not-supported')
   t.equal(bodyOf(winter).body.images.shown, 'message', 'and the images stay shown')
 })
-
-scenario(
-  'on gmail, a comment in From or a quoted display name is not read as the address the reader shows',
-  async (t) => {
-    const commented: Seed = {
-      address: ME,
-      password: PASSWORD,
-      mailboxes: [{ key: 'inbox', name: 'Inbox', role: 'inbox' }],
-      messages: [
-        {
-          key: 'commented',
-          mailboxes: ['inbox'],
-          from: 'news@shop.example (Shop <alerts@bank.example>)',
-          to: [ME],
-          subject: 'Commented sender',
-          text: 'Hello.',
-          sentAt: '2025-12-01T09:00:00.000Z',
-        },
-        {
-          key: 'spaced',
-          mailboxes: ['inbox'],
-          from: 'Jane(her work address)Doe  <jane@example.com>',
-          to: [ME],
-          subject: 'Spaced sender',
-          text: 'Hello.',
-          sentAt: '2025-12-03T09:00:00.000Z',
-        },
-        {
-          key: 'quoted',
-          mailboxes: ['inbox'],
-          from: '"Bank <alerts@bank.example>" <news@shop.example>',
-          to: [ME],
-          subject: 'Quoted sender',
-          text: 'Hello.',
-          sentAt: '2025-12-02T09:00:00.000Z',
-        },
-      ],
-    }
-    const { core } = await start(t, commented)
-    const listed = await thread(core, 'Commented sender')
-    t.equal(
-      listed.people.map((person) => person.address),
-      ['news@shop.example', ME],
-      'the From address is the mailbox, not the one written inside its comment',
-    )
-    const quoted = await thread(core, 'Quoted sender')
-    t.equal(
-      quoted.people.map((person) => [person.name, person.address]),
-      [
-        ['Bank <alerts@bank.example>', 'news@shop.example'],
-        [null, ME],
-      ],
-      'nor one written inside its quoted display name',
-    )
-    const spaced = await thread(core, 'Spaced sender')
-    t.equal(
-      spaced.people[0],
-      { name: 'Jane Doe', address: 'jane@example.com', isMe: false },
-      'a comment in a display name separates words as a space does, and runs of space are one',
-    )
-  },
-  ['gmail'],
-)

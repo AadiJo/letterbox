@@ -13,6 +13,16 @@ use super::html::{attribute, image_attribute, set};
 use super::trackers::{self, Reason};
 use crate::maps::HashMap;
 
+/// What a deleted element leaves: an empty comment. Without it, the text on either side would
+/// meet, and `<` before the element and `link href=…>` after it would read as a tag the passes
+/// never saw. Nothing reparses this pass's output but the frame and the check in html.rs.
+const BOUNDARY: &str = "<!---->";
+
+/// Deletes an element, leaving BOUNDARY in its place.
+fn delete(element: &mut Element<'_, '_>) {
+    element.replace(BOUNDARY, ContentType::Html);
+}
+
 /// What pass 2 found.
 #[derive(Default)]
 pub(super) struct Found {
@@ -135,16 +145,16 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         {
             el.before(marker, ContentType::Html);
         }
-        // Hints a browser acts on outside the image policy, and every element that embeds a
-        // document of its own, whose content (an iframe's `srcdoc`, an object's data) no pass
-        // reads and which a browser acts on apart from this document's opt-outs (see html.rs).
+        // Hints a browser acts on outside the image policy, every element that embeds a document
+        // of its own, whose content (an iframe's `srcdoc`, an object's data) no pass reads and
+        // which a browser acts on apart from this document's opt-outs, and scripts (see html.rs).
         let name = el.tag_name();
         let hint = matches!(
             name.as_str(),
-            "base" | "link" | "iframe" | "frame" | "frameset" | "object" | "embed" | "portal" | "applet"
+            "base" | "link" | "script" | "iframe" | "frame" | "frameset" | "object" | "embed" | "portal" | "applet"
         ) || name == "meta" && el.has_attribute("http-equiv");
         if hint {
-            el.remove();
+            delete(el);
             return Ok(());
         }
         let ours: Vec<String> = el
@@ -237,7 +247,7 @@ fn image(el: &mut Element<'_, '_>, found: &mut Found) {
             for url in &urls {
                 found.sort(url, Some(reason));
             }
-            el.remove();
+            delete(el);
             return;
         }
     }
@@ -261,7 +271,7 @@ fn image(el: &mut Element<'_, '_>, found: &mut Found) {
         el.remove_attribute("src");
         let alt = attribute(el, "alt").unwrap_or_default();
         if !el.has_attribute("srcset") && alt.trim().is_empty() {
-            el.remove();
+            delete(el);
         }
     }
 }

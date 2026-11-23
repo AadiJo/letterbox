@@ -29,8 +29,10 @@ const retired = seed.conversations
 const conversations = seed.seed.messages.filter((message) => (message.replyTo ?? []).length === 0).length
 
 const htmlMessage = seed.seed.messages.find(
-  (message): message is SeedMessage & { html: string } => message.html !== undefined,
+  (message): message is SeedMessage & { html: string } =>
+    message.key === 'html-newsletter' && message.html !== undefined,
 )
+const withheldMessage = seed.seed.messages.find((message) => message.key === 'withheld-newsletter')
 
 /** One field of every row in a People section, top to bottom. */
 const column = (page: Page, section: string, field: string) =>
@@ -190,6 +192,17 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await page.locator('[data-list="mail"] [role="option"]').first().click()
   await page.locator('[data-message="open"] [data-field="body"]').waitFor()
   await capture(page, 'all-mail')
+
+  // A message whose HTML the core withheld, with no plain text, says so in the reader.
+  if (!withheldMessage) throw new Error('people-first has no withheld message')
+  await page.locator('[data-list="mail"] [role="option"]', { hasText: withheldMessage.subject }).click()
+  const said = page.locator('[data-message="open"] [data-field="body"]')
+  await said.filter({ hasText: 'shown safely' }).waitFor()
+  equal(
+    await said.textContent(),
+    "This message's formatting couldn't be shown safely.",
+    'a body whose html the core withheld, with no plain text, says its formatting could not be shown safely',
+  )
 
   // An HTML body renders, and nothing in it runs or loads from the network.
   if (!htmlMessage) throw new Error('people-first has no HTML message')

@@ -50,7 +50,7 @@ use crate::effect::Effect;
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, World, put_change, put_message, scoped};
 
 /// The version of the rules. Raise it whenever a change to them would change a `Processed`.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// The most characters a preview holds.
 const PREVIEW: usize = 200;
@@ -102,6 +102,9 @@ struct Processed {
     quote: Option<Folded>,
     /// The start of the new part (see `Body::Ready::preview`).
     preview: String,
+    /// True when the message has HTML that `html::process` would not pass on (see `Body::Ready::html_withheld`).
+    #[serde(default)]
+    withheld: bool,
     /// An unsubscribe link in the body.
     link: Option<String>,
 }
@@ -134,6 +137,7 @@ fn process(body: &RemoteBody) -> Processed {
             }),
             preview: preview_of(new_text),
             link: text_link(),
+            withheld: body.html.is_some(),
         };
     };
     let html_at = html.quote.map(|at| units(&html.html, at));
@@ -154,6 +158,7 @@ fn process(body: &RemoteBody) -> Processed {
         html: Some(html.html),
         remote: html.remote,
         trackers: html.trackers,
+        withheld: false,
     }
 }
 
@@ -223,6 +228,7 @@ pub fn ready(world: &World, record: &MessageRecord, body: &RemoteBody) -> Body {
             in_conversation: in_conversation(world, record),
         }),
         preview: processed.preview.clone(),
+        html_withheld: processed.withheld,
     }
 }
 

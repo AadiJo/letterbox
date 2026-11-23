@@ -45,7 +45,7 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'a hidden or tiny image stays, as a remote image',
     file: body('rewrite.rs'),
-    find: '            for url in &urls {\n                found.sort(url, Some(reason));\n            }\n            el.remove();\n            return;',
+    find: '            for url in &urls {\n                found.sort(url, Some(reason));\n            }\n            delete(el);\n            return;',
     replace: '            drop((urls, reason));',
     scenarios: IMAGES,
   },
@@ -103,22 +103,22 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: "a sender's link stays, so its prefetch and preconnect hints reach the resolver",
     file: body('rewrite.rs'),
-    find: '"base" | "link" | "iframe"',
-    replace: '"base" | "iframe"',
+    find: '"base" | "link" | "script"',
+    replace: '"base" | "script"',
     scenarios: IMAGES,
   },
   {
     name: "a sender's base href stays, so relative images point at the sender",
     file: body('rewrite.rs'),
-    find: '"base" | "link" | "iframe"',
-    replace: '"link" | "iframe"',
+    find: '"base" | "link" | "script"',
+    replace: '"link" | "script"',
     scenarios: IMAGES,
   },
   {
     name: "an iframe's srcdoc reaches the frame, hints and all",
     file: body('rewrite.rs'),
-    find: '"base" | "link" | "iframe" | "frame"',
-    replace: '"base" | "link" | "frame"',
+    find: '"script" | "iframe" | "frame"',
+    replace: '"script" | "frame"',
     scenarios: IMAGES,
   },
   {
@@ -132,9 +132,23 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'a body read by the earlier rules reaches the frame with its old html',
     file: body('mod.rs'),
-    find: 'const VERSION: u32 = 3;',
-    replace: 'const VERSION: u32 = 2;',
+    find: 'const VERSION: u32 = 4;',
+    replace: 'const VERSION: u32 = 3;',
     scenarios: PROCESSING,
+  },
+  {
+    name: 'a deleted element leaves nothing, so the text around it joins into a tag',
+    file: body('rewrite.rs'),
+    find: 'const BOUNDARY: &str = "<!---->";',
+    replace: 'const BOUNDARY: &str = "";',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'the html goes to the frame unchecked, so an image attribute the rewrite does not know loads',
+    file: body('html.rs'),
+    find: '    if !safe(&html) {',
+    replace: '    if !safe(&html) && false {',
+    scenarios: IMAGES,
   },
   {
     name: 'a blocked image shows without its alt text',
@@ -268,6 +282,13 @@ export const BODY_MUTATIONS: Mutation[] = [
     file: 'crates/gmail/src/message.rs',
     find: "        } else if in_comment && depth == 0 {\n            out.push(' ');",
     replace: '        } else if in_comment && depth == 0 {\n            out.push_str("");',
+    scenarios: FROM,
+  },
+  {
+    name: 'the space inside a quoted local part is taken out of the mailbox',
+    file: 'crates/gmail/src/message.rs',
+    find: '            let kept = quoted || !c.is_whitespace();',
+    replace: '            let kept = !c.is_whitespace();',
     scenarios: FROM,
   },
   {

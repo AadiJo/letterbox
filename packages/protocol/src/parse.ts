@@ -114,6 +114,7 @@ const body = type({
   state: "'ready'",
   text: 'string',
   html: 'string | null',
+  htmlWithheld: 'boolean',
   images,
   quote: type({ text: 'number | null', html: 'number | null', inConversation: 'boolean' }).or('null'),
   preview: 'string',

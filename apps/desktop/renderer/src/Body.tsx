@@ -32,10 +32,20 @@ const UNAVAILABLE = {
   gone: 'This message is no longer on the server.',
 } as const
 
+/** Shown when the core withheld a message's HTML and the message has no plain text. */
+const WITHHELD = "This message's formatting couldn't be shown safely."
+
 export function Body({ body }: { body: MessageBody }) {
   if (body.state === 'loading') return <p className="text-row text-muted">Loading the message</p>
   if (body.state === 'unavailable') return <p className="text-row text-muted">{UNAVAILABLE[body.reason]}</p>
   if (body.html !== null) return <HtmlBody html={body.html} />
+  // The core withheld HTML it could not make safe (protocol.Body), and there is no plain part to show instead.
+  if (body.htmlWithheld && body.text.trim() === '')
+    return (
+      <p data-field="body" className="text-row text-muted">
+        {WITHHELD}
+      </p>
+    )
   return (
     <div data-field="body">
       {body.text

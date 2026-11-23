@@ -24,6 +24,11 @@ pub enum Body {
         /// The HTML, the same in every state: trackers gone, each remote image a placeholder
         /// (see `Images`), and no `<base>`.
         html: Option<String>,
+        /// True when the message has HTML the core would not pass on, so `html` is null: the
+        /// parser could not be sure how a browser would read it, or the check on the core's
+        /// own output found something its rules take out. The UI shows `text` instead, or says
+        /// the formatting could not be shown safely when `text` is blank.
+        html_withheld: bool,
         images: Images,
         /// None when the body ends in no quote.
         quote: Option<Quote>,

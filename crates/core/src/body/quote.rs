@@ -114,9 +114,8 @@ pub struct Scan {
     /// The Border candidates with no text yet, innermost last. A chunk that is not blank moves
     /// every open one to `collecting` and drops the closed ones, so a blank chunk visits none.
     waiting: Vec<usize>,
-    /// The Border candidates with some text and less than BORDER_TEXT, innermost last. Each was
-    /// open when `waiting` last emptied, so all are older than any in `waiting`. Elements close
-    /// innermost first, so one that closed or is full leaves from the top.
+    /// The Border candidates with some text and less than BORDER_TEXT. Each chunk of text
+    /// removes the ones that closed or filled up as it goes through them, wherever they sit.
     collecting: Vec<usize>,
 }
 
@@ -199,17 +198,15 @@ impl Scan {
         self.drop_finished();
     }
 
-    /// Takes the Border candidates that closed or hold enough text off the top of both lists.
+    /// Takes the Border candidates that closed off the top of `waiting`.
     fn drop_finished(&mut self) {
         let candidates = &self.candidates;
-        let finished = |index: &usize| {
-            let candidate = &candidates[*index];
-            candidate.end != u32::MAX || candidate.text.len() >= BORDER_TEXT
-        };
-        for list in [&mut self.waiting, &mut self.collecting] {
-            while list.last().is_some_and(finished) {
-                list.pop();
-            }
+        while self
+            .waiting
+            .last()
+            .is_some_and(|index| candidates[*index].end != u32::MAX)
+        {
+            self.waiting.pop();
         }
     }
 
@@ -227,12 +224,15 @@ impl Scan {
             let kept = tail(&self.block_text, BLOCK_TEXT).len();
             self.block_text.drain(..self.block_text.len() - kept);
         }
-        for &index in &self.collecting {
-            let candidate = &mut self.candidates[index];
-            if candidate.end == u32::MAX && candidate.text.len() < BORDER_TEXT {
-                candidate.text.push_str(head(text, BORDER_TEXT - candidate.text.len()));
+        let candidates = &mut self.candidates;
+        self.collecting.retain(|&index| {
+            let candidate = &mut candidates[index];
+            if candidate.end != u32::MAX {
+                return false;
             }
-        }
+            candidate.text.push_str(head(text, BORDER_TEXT - candidate.text.len()));
+            candidate.text.len() < BORDER_TEXT
+        });
         // A candidate's text starts at its first character that is not space, so a blank chunk
         // leaves `waiting` alone, and any other is trimmed once for all of them.
         let trimmed = text.trim_start();
@@ -241,7 +241,9 @@ impl Scan {
                 let candidate = &mut self.candidates[index];
                 if candidate.end == u32::MAX && pos >= candidate.start.pos {
                     candidate.text.push_str(head(trimmed, BORDER_TEXT));
-                    self.collecting.push(index);
+                    if candidate.text.len() < BORDER_TEXT {
+                        self.collecting.push(index);
+                    }
                 }
             }
         }

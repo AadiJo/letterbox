@@ -177,7 +177,7 @@ scenario('a body loads when a conversation is opened, once', async (t) => {
   )
   t.equal(
     message.body.html,
-    '<p>Here are the photos.</p>',
+    '<p>Here are the photos.</p><!---->',
     'the html, still for the UI to sandbox, has no tracker in it',
   )
   t.equal(
