@@ -64,6 +64,8 @@ export const readFrame = (page: Page, where: Where) =>
       // The frame's own `<base target="_blank">` names no URL. One from the mail would.
       hostile: all(doc, 'link, base[href], iframe, script').length,
       quote: all(doc, '.gmail_quote, blockquote').length,
+      // The color of each quote attribution, which a `<style>` in the new part sets.
+      cite: all(doc, '.gmail_attr').map((element) => view.getComputedStyle(element).color),
       title: get<string>(Document.prototype, 'title', doc),
       fits: {
         frame: frame.getBoundingClientRect().height,

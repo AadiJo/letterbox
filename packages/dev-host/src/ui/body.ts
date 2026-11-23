@@ -37,7 +37,7 @@ import {
   readFrame,
   waitImages,
 } from './body-frame.ts'
-import { checkDara, checkDeep, checkInes, checkStatement, checkUpdatesMovesOn } from './body-quotes.ts'
+import { checkDara, checkDeep, checkInes, checkStatement, checkTemplate, checkUpdatesMovesOn } from './body-quotes.ts'
 import { appErrors, ARTIFACTS, equal, openPage, type Relay, root } from './record.ts'
 import { open } from './reply-page.ts'
 import { nav, senderRow } from './updates-edges.ts'
@@ -82,27 +82,51 @@ async function blockFromMenu(page: Page) {
   await blockedAgain(page)
 }
 
-/** At 640 px the menu keeps inside the reader and the window, and its note wraps. */
-async function checkNarrowestMenu(page: Page) {
-  await page.setViewportSize(NARROWEST)
-  await chipOf(page).click()
-  const fit = await menu(page).evaluate((element) => {
+/** Where the open menu sits: inside the reader and the window, above or below the chip, and whether its note wraps. */
+const menuFit = (page: Page) =>
+  menu(page).evaluate((element) => {
     const box = element.getBoundingClientRect()
     let reader = element.parentElement
     while (reader && !/auto|scroll/.test(getComputedStyle(reader).overflowY)) reader = reader.parentElement
     const bounds = reader?.getBoundingClientRect()
+    const chip = element.parentElement?.querySelector('[data-field="images-chip"]')?.getBoundingClientRect()
     const note = element.querySelector('[data-field="tracker-note"]')?.getBoundingClientRect().height ?? 0
     return {
-      inside: bounds !== undefined && box.left >= bounds.left && box.right <= bounds.right && box.right <= innerWidth,
+      inside:
+        bounds !== undefined &&
+        box.left >= bounds.left &&
+        box.right <= Math.min(bounds.right, innerWidth) &&
+        box.top >= bounds.top &&
+        box.bottom <= Math.min(bounds.bottom, innerHeight),
+      above: chip !== undefined && box.bottom <= chip.top,
       wraps: note > 40,
     }
   })
+
+/**
+ * The menu keeps inside the reader: opened wide and the window then narrowed to 640 px, it fits
+ * again, its note wrapped. With no room under the chip, it opens above it.
+ */
+async function checkMenuFits(page: Page) {
+  await chipOf(page).click()
+  await page.setViewportSize(NARROWEST)
   equal(
-    fit,
-    { inside: true, wraps: true },
-    'at 640 px the menu keeps inside the reader and the window, its note wrapped',
+    await menuFit(page),
+    { inside: true, above: false, wraps: true },
+    'opened wide, then the window narrowed to 640 px: the menu fits the reader again, its note wrapped',
   )
   await page.screenshot({ path: join(ARTIFACTS, 'body-images-menu-640.png'), animations: 'disabled' })
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  // A window just tall enough to show the chip leaves no room for the menu under it.
+  const chipBottom = await chipOf(page).evaluate((element) => element.getBoundingClientRect().bottom)
+  await page.setViewportSize({ width: 1440, height: Math.ceil(chipBottom) + 48 })
+  await chipOf(page).click()
+  equal(
+    await menuFit(page),
+    { inside: true, above: true, wraps: false },
+    'with no room under the chip, the menu opens above it, inside the reader',
+  )
   await page.keyboard.press('Escape')
   await page.setViewportSize({ width: 1440, height: 900 })
 }
@@ -146,7 +170,7 @@ async function checkIssue(page: Page, relay: Relay, web: FakeWeb) {
   await page.keyboard.press('Escape')
   await menu(page).waitFor({ state: 'detached' })
   equal(await focused(chipOf(page)), true, 'Esc puts the menu away and gives focus back to the chip')
-  await checkNarrowestMenu(page)
+  await checkMenuFits(page)
 
   // Three fetches at most run at once: with the first three held, nothing else is asked for.
   const held = ISSUE_IMAGES.slice(0, 3).map((url) => web.hold(url))
@@ -284,11 +308,12 @@ export async function checkBody(browser: Browser) {
   try {
     await checkIssue(page, relay, running.web)
     await checkOlder(page, relay)
-    await checkStatement(page)
+    await checkStatement(page, relay)
+    await checkTemplate(page, relay)
     await checkInes(page)
     await checkDara(page)
     await checkDeep(page)
-    await checkUpdatesMovesOn(page, running.mailbox)
+    await checkUpdatesMovesOn(page, running.mailbox, relay)
     equal(remote, [], 'the page never reached past 127.0.0.1: every image came through the core')
     equal(appErrors(errors), [], 'the body page logged no errors')
   } finally {

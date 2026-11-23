@@ -14,6 +14,7 @@ function getter<Value>(prototype: object, name: string): (target: object) => Val
 
 const rootOf = getter<HTMLElement | null>(Document.prototype, 'documentElement')
 const bodyOf = getter<HTMLElement | null>(Document.prototype, 'body')
+const headOf = getter<HTMLHeadElement | null>(Document.prototype, 'head')
 const localName = getter<string>(Element.prototype, 'localName')
 const textOf = getter<string | null>(Node.prototype, 'textContent')
 const parentOf = getter<Node | null>(Node.prototype, 'parentNode')
@@ -25,6 +26,17 @@ const clientHeight = getter<number>(Element.prototype, 'clientHeight')
 const offsetHeight = getter<number>(HTMLElement.prototype, 'offsetHeight')
 /** `createElement` with one signature, so `call` takes any tag name. */
 const createElement: (this: Document, name: string) => Element = Document.prototype.createElement
+
+/** The comment `marker` in the body's tree, or null. A TreeWalker does not go into a `<template>`'s content. */
+function markerIn(doc: Document, marker: string): Node | null {
+  const body = bodyOf(doc)
+  if (!body) return null
+  const walker = Document.prototype.createTreeWalker.call(doc, body, NodeFilter.SHOW_COMMENT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (valueOf(node) === marker) return node
+  }
+  return null
+}
 
 export const frameDom = {
   root: rootOf,
@@ -55,25 +67,28 @@ export const frameDom = {
     const scrolled = scrollHeight(root)
     return scrolled > clientHeight(root) ? scrolled : offsetHeight(root)
   },
+  /** True when the comment `marker` is in the body's tree. One in a `<template>`'s content is not. */
+  hasMarker: (doc: Document, marker: string) => markerIn(doc, marker) !== null,
   /**
    * Takes out everything before the comment `marker` in reading order, up to the body, so the
-   * frame shows only what follows it: the quoted history, in the same wrappers and styles.
-   * The sender's `<style>` elements stay. Does nothing when the marker is not there.
+   * frame shows only what follows it: the quoted history, in the same wrappers and styles. Every
+   * `<style>` in what goes is moved into the head first, so the sender's styles all still apply.
+   * A selector that counts on the siblings taken out, such as `p + div`, may then match less.
+   * Does nothing when the marker is not in the body's tree.
    */
   keepFrom: (doc: Document, marker: string) => {
     const body = bodyOf(doc)
-    if (!body) return
-    const walker = Document.prototype.createTreeWalker.call(doc, body, NodeFilter.SHOW_COMMENT)
-    let found: Node | null = null
-    for (let node = walker.nextNode(); node && !found; node = walker.nextNode()) {
-      if (valueOf(node) === marker) found = node
-    }
-    for (let node = found; node && node !== body; node = parentOf(node)) {
+    const head = headOf(doc)
+    for (let node = markerIn(doc, marker); node && node !== body; node = parentOf(node)) {
       const parent = parentOf(node)
       for (let before = previousOf(node); before;) {
         const next = previousOf(before)
-        const kept = before.nodeType === Node.ELEMENT_NODE && localName(before) === 'style'
-        if (!kept && parent) Node.prototype.removeChild.call(parent, before)
+        if (before.nodeType === Node.ELEMENT_NODE && head) {
+          const styles =
+            localName(before) === 'style' ? [before] : [...Element.prototype.querySelectorAll.call(before, 'style')]
+          for (const style of styles) Node.prototype.appendChild.call(head, style)
+        }
+        if (parent && parentOf(before) === parent) Node.prototype.removeChild.call(parent, before)
         before = next
       }
     }

@@ -120,12 +120,18 @@ struct Folded {
     html: Option<u64>,
 }
 
-/// Runs the pipeline on one body, naming its CSS custom properties with `prefix`.
-fn process(body: &RemoteBody, prefix: String) -> Processed {
+/// Runs the pipeline on one body, naming its CSS custom properties with `prefix`. Without a
+/// prefix, its HTML is withheld.
+fn process(body: &RemoteBody, prefix: Option<String>) -> Processed {
     let units = |text: &str, at: usize| text[..at].encode_utf16().count() as u64;
     let text_quote = quote::text(&body.text);
     let new_text = &body.text[..text_quote.unwrap_or(body.text.len())];
-    let html = body.html.as_deref().and_then(|html| html::process(html, &prefix));
+    let html = body
+        .html
+        .as_deref()
+        .zip(prefix.as_deref())
+        .and_then(|(html, prefix)| html::process(html, prefix));
+    let prefix = prefix.unwrap_or_default();
     let text_link = || unsubscribe::link_in_text(new_text);
     let text_at = text_quote.map(|at| units(&body.text, at));
     let Some(html) = html else {
@@ -252,14 +258,18 @@ pub fn unsubscribe_of(record: &MessageRecord) -> Option<Unsubscribe> {
 
 impl Inner {
     /// `reading` with `body` processed now. A gone body leaves it as it is. Each processing
-    /// draws a new CSS prefix of 128 random bits from the environment: the system's random
-    /// source in the app, a counter on the test clock, so a scenario's runs stay the same.
+    /// draws a new CSS prefix of 128 bits from `Environment::secret`: the operating system's
+    /// cryptographic source in the app, a counter on the test clock, so a scenario's runs stay
+    /// the same. Should the source fail, the HTML is withheld, as for HTML the core cannot make safe.
     pub(crate) fn processed_now(&self, body: &BodyResult, reading: Reading) -> Reading {
         let BodyResult::Body { body } = body else {
             return reading;
         };
         self.meter.processed();
-        let prefix = format!("--letterbox-{:016x}{:016x}-", self.env.random(), self.env.random());
+        let prefix = self.env.secret().map(|bytes| {
+            let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            format!("--letterbox-{hex}-")
+        });
         reading.with(process(body, prefix))
     }
 

@@ -300,7 +300,7 @@ function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary;
           </div>
           <div className="flex min-w-0 items-center gap-1.5 text-addr text-muted">
             <span className="truncate">{message.from.address} · to you</span>
-            <ImagesChip message={message} />
+            <ImagesChip key={message.id} message={message} />
           </div>
         </div>
       </div>

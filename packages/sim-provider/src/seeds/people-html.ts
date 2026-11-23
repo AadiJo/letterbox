@@ -157,6 +157,7 @@ const januaryStatement: SeedMessage = {
  *   - CSS that declares the names a shown CSS image would get without the core's random prefix,
  *     plainly and escaped, around the element that draws it, and reads them on two others,
  *   - body margins, which a frame measured by its body alone would cut off,
+ *   - a `<style>` nested in the new part that styles the quote, which a quote shown apart must keep,
  *   - a link, a base, an iframe and a script in its new part, and a script and a link in its quote.
  */
 const februaryStatement: SeedMessage = {
@@ -181,6 +182,7 @@ const februaryStatement: SeedMessage = {
     '<div class="claim"><div class="paper"></div></div><div class="decoy-plain"></div><div class="decoy-escaped"></div>',
     `<form background="${PAPER}"><input name="setAttribute"><input name="getAttribute"><input name="removeAttribute"></form>`,
     '<p>Your February statement is ready. The balance is €42.10, due on March 20.</p>',
+    '<div class="note"><style>.gmail_attr{color:rgb(120, 40, 40)}</style>Questions? Reply to this email.</div>',
     '<div class="gmail_quote"><div class="gmail_attr">On Sat, Feb 28, 2026, Harbour Lane Accounts &lt;statements@harbourlane.example&gt; wrote:<br></div>',
     '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">',
     "<script>document.title='a quoted script ran'</script>",
@@ -190,6 +192,26 @@ const februaryStatement: SeedMessage = {
   sentAt: ago(2 * HOUR),
   unread: true,
   replyTo: ['html-statement-1'],
+  ...STATEMENT_MARKS,
+}
+
+/** The card statement's HTML before its `<template>`: where the core's quote would start, less `<template>`. */
+const TEMPLATE_NEW = '<p>Your card statement is ready.</p>'
+
+/**
+ * A card statement whose quote the core finds inside a `<template>`, whose content a frame never
+ * shows: the reader cannot fold there, so it shows the body whole, with no line.
+ */
+const templateQuote: SeedMessage = {
+  key: 'html-template-quote',
+  mailboxes: ['inbox'],
+  from: { name: 'Northfield Card', address: 'cards@northfield.example' },
+  to: [ME],
+  subject: 'Your card statement',
+  text: 'Your card statement is ready.',
+  html: `${TEMPLATE_NEW}<template><div class="gmail_quote"><div class="gmail_attr">On Mon, Feb 9, 2026, Northfield Card wrote:</div><blockquote class="gmail_quote">Last month's statement.</blockquote></div></template>`,
+  sentAt: ago(4 * HOUR),
+  unread: false,
   ...STATEMENT_MARKS,
 }
 
@@ -232,5 +254,6 @@ export const HTML_MAIL: readonly SeedMessage[] = [
   januaryStatement,
   februaryStatement,
   deepQuote,
+  templateQuote,
   withheldNewsletter,
 ]

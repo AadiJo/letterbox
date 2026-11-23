@@ -22,6 +22,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "time"] }
 tokio-util.workspace = true
+# The operating system's cryptographic random source, for the body pipeline's CSS prefix (clock.rs).
+getrandom = "0.4"
 # WHATWG URL parsing, as browsers do it, for the hosts of remote images and unsubscribe targets.
 url = "2.5.8"
 

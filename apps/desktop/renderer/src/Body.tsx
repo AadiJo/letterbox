@@ -59,6 +59,9 @@ const WITHHELD = "This message's formatting couldn't be shown safely."
 const quoteMarker = () =>
   `letterbox-quote-${Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(16)).join('')}`
 
+/** `html` with the comment `marker` at `cut`, where the core says its quote starts, before an element. */
+const marked = (html: string, cut: number, marker: string) => `${html.slice(0, cut)}<!--${marker}-->${html.slice(cut)}`
+
 /**
  * One message's body, by its id, which shown images are fetched for. A reader keys it by that
  * id, so nothing in it, the frame, its images or the open quote, carries over to another message.
@@ -67,12 +70,22 @@ export function Body({ id, body }: { id: MessageId; body: MessageBody }) {
   const [quoteOpen, setQuoteOpen] = useState(false)
   const [marker] = useState(quoteMarker)
   const urls = useImageUrls(id, body.state === 'ready' ? body.images : null)
+  const html = body.state === 'ready' ? body.html : null
+  const htmlCut = body.state === 'ready' ? (body.quote?.html ?? null) : null
+  // The HTML folds only where its quote frame can find the quote: the marker must land in the
+  // body's tree, not in a `<template>`'s content. Read in an inert document, which loads nothing.
+  // React Compiler keeps the result while the body and marker stay the same.
+  const folds =
+    html !== null &&
+    htmlCut !== null &&
+    frameDom.hasMarker(new DOMParser().parseFromString(marked(html, htmlCut, marker), 'text/html'), marker)
   if (body.state === 'loading') return <p className="text-row text-muted">Loading the message</p>
   if (body.state === 'unavailable') return <p className="text-row text-muted">{UNAVAILABLE[body.reason]}</p>
   const line = (quote: Quote) => <QuoteLine quote={quote} open={quoteOpen} onToggle={() => setQuoteOpen(!quoteOpen)} />
   if (body.html !== null) {
     // The new part is a prefix the core cut before an element, which the browser closes by itself.
-    const cut = body.quote?.html ?? null
+    // HTML that cannot fold shows whole, with no line.
+    const cut = folds ? htmlCut : null
     const frame = { images: body.images, urls, prefix: body.cssPrefix }
     return (
       <>
@@ -85,7 +98,7 @@ export function Body({ id, body }: { id: MessageId; body: MessageBody }) {
             <HtmlBody
               {...frame}
               title="Quoted history"
-              html={`${body.html.slice(0, cut)}<!--${marker}-->${body.html.slice(cut)}`}
+              html={marked(body.html, cut, marker)}
               prepare={(doc) => frameDom.keepFrom(doc, marker)}
             />
           </div>

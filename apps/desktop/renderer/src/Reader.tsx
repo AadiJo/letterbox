@@ -315,7 +315,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
             <span className="truncate">
               {[from.address, ...(to.length > 0 ? [`to ${to.join(', ')}`] : [])].join(' · ')}
             </span>
-            <ImagesChip message={message} />
+            <ImagesChip key={message.id} message={message} />
           </div>
         </div>
       </div>

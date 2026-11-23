@@ -28,7 +28,7 @@ import {
   readFrame,
   waitImages,
 } from './body-frame.ts'
-import { equal } from './record.ts'
+import { equal, type Relay } from './record.ts'
 import { ME, open, seed } from './reply-page.ts'
 import { nav, senderRow } from './updates-edges.ts'
 
@@ -58,7 +58,7 @@ const stacked = (page: Page) =>
   }, LINE)
 
 /** Harbour Lane's statements: hostile markup, prefixed CSS images, two open messages, and the quote's own frame. */
-export async function checkStatement(page: Page) {
+export async function checkStatement(page: Page, relay: Relay) {
   await nav(page, 'Inbox').click()
   await open(page, STATEMENT)
   const folded = await readFrame(page, NEWEST)
@@ -71,19 +71,39 @@ export async function checkStatement(page: Page) {
       folded?.fits.scrolls,
       folded?.fits.frame === folded?.fits.document,
     ],
-    ['Harbour Lane Your February statement is ready. The balance is €42.10, due on March 20.', 0, 0, '', false, true],
+    [
+      'Harbour Lane Your February statement is ready. The balance is €42.10, due on March 20. Questions? Reply to this email.',
+      0,
+      0,
+      '',
+      false,
+      true,
+    ],
     'folded, the frame holds the new part only, none of the link, base, iframe and scripts reach it, nothing ran, and it is as tall as its document, body margins and all',
   )
 
-  // Two open messages, both with images off: I in the older one's menu shows the older one's.
+  // Two open messages, both with images off: I held down in the older one's menu shows the
+  // older one's, and its repeats show nothing more.
   await page.locator('[data-message="folded"]').first().click()
   await chipOf(page, 0).click()
-  await page.keyboard.press('i')
+  const sent = relay.fromPage().length
+  await page.keyboard.down('i')
+  await page.keyboard.down('i')
+  await page.keyboard.up('i')
+  // The page's next message to the core goes after every command the key sent.
+  await page.evaluate(() => window.letterboxDev?.settle())
   await page.locator('[data-message="open"]').first().locator('[data-images="message"]').waitFor()
   equal(
-    [await chipOf(page, 1).getAttribute('data-images'), await focused(chipOf(page, 0))],
-    ['blocked', true],
-    'I in the older message’s menu shows that message’s images, not the newest’s, and focus goes back to its chip',
+    [
+      relay
+        .fromPage()
+        .slice(sent)
+        .filter((text) => text.includes('"set-images"')).length,
+      await chipOf(page, 1).getAttribute('data-images'),
+      await focused(chipOf(page, 0)),
+    ],
+    [1, 'blocked', true],
+    'I held in the older message’s menu shows that message’s images once, its repeats nothing, and focus goes back to its chip',
   )
   // Outside a menu, I shows the newest open message's.
   await page.keyboard.press('i')
@@ -106,15 +126,23 @@ export async function checkStatement(page: Page) {
   await quoteLoaded(page)
   const quote = await readFrame(page, QUOTED)
   equal(
-    [quote?.text, quote?.hostile, quote?.fits.scrolls, (await readFrame(page, NEWEST))?.quote, await stacked(page)],
+    [
+      quote?.text,
+      quote?.hostile,
+      quote?.cite,
+      quote?.fits.scrolls,
+      (await readFrame(page, NEWEST))?.quote,
+      await stacked(page),
+    ],
     [
       'On Sat, Feb 28, 2026, Harbour Lane Accounts <statements@harbourlane.example> wrote: Your January statement is ready. The balance is €0.00.',
       0,
+      ['rgb(120, 40, 40)'],
       false,
       0,
       true,
     ],
-    'Show opens the quote in a frame under the line, the new part left out and nothing hostile in it, while the frame above keeps the new part',
+    'Show opens the quote in a frame under the line, the new part left out, styled by a <style> nested in it, and nothing hostile in it, while the frame above keeps the new part',
   )
   await line.click()
   await frameOf(page, QUOTED).waitFor({ state: 'detached' })
@@ -244,14 +272,40 @@ export async function checkDeep(page: Page) {
   )
 }
 
+/** A quote the core finds in a `<template>` cannot fold: the body shows whole, with no line. */
+export async function checkTemplate(page: Page, relay: Relay) {
+  // Where the core says the quote starts: inside the template, which a frame never shows.
+  const cut = '<p>Your card statement is ready.</p><template>'.length
+  const found = relay.sees(`"quote":{"text":null,"html":${cut},`)
+  await nav(page, 'Inbox').click()
+  await open(page, 'Your card statement')
+  await found
+  equal(
+    [
+      await opened(page, -1).locator(LINE).count(),
+      await frameOf(page, QUOTED).count(),
+      (await readFrame(page, NEWEST))?.text,
+    ],
+    [0, 0, 'Your card statement is ready.'],
+    'a quote the core finds inside a template cannot fold: the body shows whole, with no line',
+  )
+}
+
 /** One more message in Harbour Lane's conversation, from the sim provider, as new mail. */
-const statementNote = (key: string, text: string, secondsAgo: number, replyTo: string[]): SeedMessage => ({
+const statementNote = (
+  key: string,
+  text: string,
+  secondsAgo: number,
+  replyTo: string[],
+  html?: string,
+): SeedMessage => ({
   key,
   mailboxes: ['inbox'],
   from: HARBOUR,
   to: [ME],
   subject: STATEMENT,
   text,
+  ...(html !== undefined && { html }),
   sentAt: new Date(Date.parse(seed.now) - secondsAgo * 1000).toISOString(),
   replyTo,
   headers: { listUnsubscribe: true, listId: true, precedence: 'bulk' },
@@ -266,7 +320,7 @@ async function arrives(page: Page, mailbox: SimMailbox, message: SeedMessage, sh
 }
 
 /** In Updates, a new message in the open conversation takes the open one's place folded. */
-export async function checkUpdatesMovesOn(page: Page, mailbox: SimMailbox) {
+export async function checkUpdatesMovesOn(page: Page, mailbox: SimMailbox, relay: Relay) {
   await nav(page, 'Updates').click()
   await senderRow(page, HARBOUR.name).click()
   const before = ['html-statement-1', 'html-statement-2']
@@ -299,4 +353,40 @@ export async function checkUpdatesMovesOn(page: Page, mailbox: SimMailbox) {
     'false',
     'a new message in the open conversation shows with its quote folded: nothing of the one before carries over',
   )
+
+  // A message whose images menu is open gives way to a new one: the menu goes with it, and nothing is fetched.
+  const notes = [...before, 'statement-paid', 'statement-next']
+  await delivered(page, mailbox, statementNote('statement-april', 'April.', 40, notes, withLogo('April')), 'April')
+  await chipOf(page).click()
+  await menu(page).waitFor()
+  const sent = relay.fromPage().length
+  await delivered(
+    page,
+    mailbox,
+    statementNote('statement-may', 'May.', 20, [...notes, 'statement-april'], withLogo('May')),
+    'May',
+  )
+  await page.evaluate(() => window.letterboxDev?.settle())
+  equal(
+    [
+      await menu(page).count(),
+      relay
+        .fromPage()
+        .slice(sent)
+        .filter((text) => text.includes('"set-images"') || text.includes('"method":"image"')).length,
+    ],
+    [0, 0],
+    'a new message in the open conversation closes the images menu of the one before, and nothing is shown or fetched',
+  )
+}
+
+/** A monthly statement with Harbour Lane's logo, its images off. */
+const withLogo = (month: string) =>
+  `<p><img src="https://brand.harbourlane.example/logo.png" width="160" height="32" alt="Harbour Lane"></p><p>Your ${month} statement is ready.</p>`
+
+/** Delivers an HTML `message` at the provider and waits for the open message's frame to hold `shows`. */
+async function delivered(page: Page, mailbox: SimMailbox, message: SeedMessage, shows: string) {
+  mailbox.deliver(message)
+  await page.evaluate(() => window.letterboxDev?.sync())
+  await opened(page, -1).locator(`iframe[title="Message"][srcdoc*="${shows} statement"]`).waitFor()
 }

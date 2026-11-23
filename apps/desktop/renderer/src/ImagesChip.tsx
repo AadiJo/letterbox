@@ -3,8 +3,10 @@
 // "Images on" quietly and opens a menu with Block images again. Either menu notes the trackers
 // the core took out, which showing images never brings back. A message whose images are all
 // trackers, or that has none, has no chip. The choice is the message's own (protocol `ShowImages`).
-// I inside an open menu acts on that menu's message. The menu keeps inside the reader, and
-// closing it from the keyboard gives focus back to the chip.
+// I inside an open menu acts on that menu's message. The menu keeps inside the reader, as the
+// window resizes too, opening upward when there is no room below, and closing it from the
+// keyboard gives focus back to the chip. A reader keys the chip by its message, so an open
+// menu never carries over to another message.
 
 import type { Message, ShowImages } from '@letterbox/protocol'
 import { ChevronDown, Image as ImageIcon, ImageOff } from 'lucide-react'
@@ -15,6 +17,9 @@ import { Key } from './Key.tsx'
 
 /** How far the menu stays from the edges of the reader it opens in. */
 const INSET = 8
+
+/** The gap between the chip's box and the menu: its 20 px plus 8 px, as `top-7` places it below. */
+const GAP = 28
 
 /** The box of the nearest element around `element` that scrolls: the reader's visible part. */
 function visibleBounds(element: Element) {
@@ -28,7 +33,8 @@ export function ImagesChip({ message }: { message: Message }) {
   const { body } = message
   // The menu is open for the choice it was opened at, so it closes once the core takes a new one.
   const [openAt, setOpenAt] = useState<ShowImages | null>(null)
-  // Where the menu sits once fitted into the reader, when it would run past the reader's edge.
+  // Where the menu sits once fitted into the reader. Null while it shows at its own size, to be
+  // measured: as it opens, and again when the window resizes.
   const [fit, setFit] = useState<CSSProperties | null>(null)
   const box = useRef<HTMLSpanElement>(null)
   const chip = useRef<HTMLButtonElement>(null)
@@ -43,18 +49,35 @@ export function ImagesChip({ message }: { message: Message }) {
     if (refocus) chip.current?.focus()
   }
 
-  // Opened, the menu keeps inside the reader's visible part: narrower, so its note wraps, and
-  // moved left as far as it must.
+  // Opened, the menu keeps inside the reader's visible part: narrower, so its note wraps, moved
+  // left as far as it must, and above the chip when there is not room below it and there is
+  // more above. It is measured at its own size, before it paints, each time `fit` is cleared.
   useLayoutEffect(() => {
     const element = menu.current
-    if (!open || !element || !box.current) return
+    if (!open || fit !== null || !element || !box.current) return
     const bounds = visibleBounds(box.current)
-    const room = Math.min(bounds.right, window.innerWidth) - Math.max(bounds.left, 0) - 2 * INSET
-    const from = box.current.getBoundingClientRect().left
-    const width = Math.min(element.getBoundingClientRect().width, room)
-    const right = Math.min(bounds.right, window.innerWidth) - INSET
-    if (from + width <= right && element.getBoundingClientRect().width <= room) return
-    setFit({ left: Math.min(0, right - (from + width)), maxWidth: room, minWidth: 0 })
+    const [left, right] = [Math.max(bounds.left, 0) + INSET, Math.min(bounds.right, window.innerWidth) - INSET]
+    const [top, bottom] = [Math.max(bounds.top, 0) + INSET, Math.min(bounds.bottom, window.innerHeight) - INSET]
+    const chipBox = box.current.getBoundingClientRect()
+    const own = element.getBoundingClientRect()
+    const room = right - left
+    const width = Math.min(own.width, room)
+    const below = bottom - (chipBox.top + GAP)
+    // Above, the menu's foot sits INSET over the chip's top.
+    const above = chipBox.top - INSET - top
+    setFit({
+      ...(own.width > room && { maxWidth: room, minWidth: 0 }),
+      ...(chipBox.left + width > right && { left: right - (chipBox.left + width) }),
+      ...(own.height > below && above > below && { top: 'auto', bottom: GAP }),
+    })
+  }, [open, fit])
+
+  // A window that resizes while the menu is open fits it again.
+  useEffect(() => {
+    if (!open) return
+    const refit = () => setFit(null)
+    window.addEventListener('resize', refit)
+    return () => window.removeEventListener('resize', refit)
   }, [open])
 
   // A click outside the menu, or Esc, puts it away.

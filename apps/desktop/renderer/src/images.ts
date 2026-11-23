@@ -128,7 +128,9 @@ export function bindImages(doc: Document, urls: ReadonlyMap<number, string>, pre
 /** While the reader shows `message`, I shows its images if they are off. */
 export function useShowImagesKey(message: Message | undefined) {
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return
+    // A held key repeats. Only its first press acts, so holding I in a menu shows that menu's
+    // message alone, and the repeats do not go on to the newest.
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return
     if (event.key !== SHOW_IMAGES_KEY || message?.body.state !== 'ready' || !imagesOff(message.body.images)) return
     setImages(message.id, 'message')
     event.preventDefault()
