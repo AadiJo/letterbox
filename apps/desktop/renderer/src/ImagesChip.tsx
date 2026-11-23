@@ -33,9 +33,9 @@ export function ImagesChip({ message }: { message: Message }) {
   const { body } = message
   // The menu is open for the choice it was opened at, so it closes once the core takes a new one.
   const [openAt, setOpenAt] = useState<ShowImages | null>(null)
-  // Where the menu sits once fitted into the reader. Null while it shows at its own size, to be
-  // measured: as it opens, and again when the window resizes.
-  const [fit, setFit] = useState<CSSProperties | null>(null)
+  // Where the menu sits once fitted into the reader, and the window size it was fitted for. Null
+  // while it shows at its own size, to be measured: as it opens, and again when the window resizes.
+  const [fit, setFit] = useState<{ style: CSSProperties; window: string } | null>(null)
   const box = useRef<HTMLSpanElement>(null)
   const chip = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -66,9 +66,12 @@ export function ImagesChip({ message }: { message: Message }) {
     // Above, the menu's foot sits INSET over the chip's top.
     const above = chipBox.top - INSET - top
     setFit({
-      ...(own.width > room && { maxWidth: room, minWidth: 0 }),
-      ...(chipBox.left + width > right && { left: right - (chipBox.left + width) }),
-      ...(own.height > below && above > below && { top: 'auto', bottom: GAP }),
+      style: {
+        ...(own.width > room && { maxWidth: room, minWidth: 0 }),
+        ...(chipBox.left + width > right && { left: right - (chipBox.left + width) }),
+        ...(own.height > below && above > below && { top: 'auto', bottom: GAP }),
+      },
+      window: `${window.innerWidth}x${window.innerHeight}`,
     })
   }, [open, fit])
 
@@ -148,7 +151,9 @@ export function ImagesChip({ message }: { message: Message }) {
             event.stopPropagation()
             if (blocked) choose('message')
           }}
-          style={fit ?? undefined}
+          style={fit?.style}
+          // The window size the menu was last fitted for, so a check can wait for a refit to land.
+          data-fitted={fit?.window}
           className="absolute top-7 left-0 z-30 w-max min-w-[300px] rounded-xl bg-float p-1.5 shadow-float wide:min-w-[316px]"
         >
           <button

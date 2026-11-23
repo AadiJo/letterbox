@@ -110,6 +110,8 @@ const menuFit = (page: Page) =>
 async function checkMenuFits(page: Page) {
   await chipOf(page).click()
   await page.setViewportSize(NARROWEST)
+  // The window's resize event refits the menu over two renders: wait for the one fitted to 640 px.
+  await page.locator(`[data-field="images-menu"][data-fitted="${NARROWEST.width}x${NARROWEST.height}"]`).waitFor()
   equal(
     await menuFit(page),
     { inside: true, above: false, wraps: true },
@@ -120,8 +122,10 @@ async function checkMenuFits(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 })
   // A window just tall enough to show the chip leaves no room for the menu under it.
   const chipBottom = await chipOf(page).evaluate((element) => element.getBoundingClientRect().bottom)
-  await page.setViewportSize({ width: 1440, height: Math.ceil(chipBottom) + 48 })
+  const short = { width: 1440, height: Math.ceil(chipBottom) + 48 }
+  await page.setViewportSize(short)
   await chipOf(page).click()
+  await page.locator(`[data-field="images-menu"][data-fitted="${short.width}x${short.height}"]`).waitFor()
   equal(
     await menuFit(page),
     { inside: true, above: true, wraps: false },

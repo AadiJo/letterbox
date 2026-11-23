@@ -140,8 +140,8 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'the CSS prefix is fixed, so a sender can write the names a shown image is set on',
     file: body('mod.rs'),
-    find: 'let prefix = format!("--letterbox-{:016x}{:016x}-", self.env.random(), self.env.random());',
-    replace: 'let prefix = String::from("--letterbox-");',
+    find: 'format!("--letterbox-{hex}-")',
+    replace: 'String::from("--letterbox-")',
     scenarios: PREFIX,
   },
   {
