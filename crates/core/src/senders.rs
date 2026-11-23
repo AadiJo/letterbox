@@ -85,7 +85,8 @@ pub struct Senders {
 }
 
 impl Senders {
-    /// Groups every thread in the rows. Reads every row, so only a new view or a full refresh calls it.
+    /// Groups every thread in the rows: every row, or for a view of one address only that
+    /// sender's threads (`Rows::of_address`). Only a new view or a full refresh calls it.
     pub fn open(
         filter: ThreadFilter,
         address: Option<String>,
@@ -107,9 +108,13 @@ impl Senders {
             zone,
             today: day_of(zone, &live.now()),
         };
-        for listed in rows.all() {
+        let listed: Box<dyn Iterator<Item = &Listed>> = match &senders.address {
+            Some(address) => Box::new(rows.of_address(address)),
+            None => Box::new(rows.all()),
+        };
+        for one in listed {
             meter.matched();
-            senders.add(listed);
+            senders.add(one);
         }
         senders
     }

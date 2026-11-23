@@ -1,6 +1,6 @@
 // One sender's Updates row (crates/core/src/senders.rs): a senders view with `address` holds
-// only that sender, compared without case, wherever it sits among the others, and follows where
-// an unsubscribe from it has got. A UI reads a conversation's sender's state by it.
+// only that sender, compared without case, wherever it sits among the others, gains no other
+// sender as their mail changes, and follows where an unsubscribe from it has got. A UI reads a conversation's sender's state by it.
 
 import { mailbox } from '../src/fixtures.ts'
 import { HELD_WINDOW, scenario } from '../src/scenario.ts'
@@ -35,9 +35,29 @@ scenario(
       "a view of one address holds that sender's row alone, as the full list has it, though it is the last",
     )
 
+    // Another sender's mail changes while the view is open, before the unsubscribe. The view
+    // takes changes in order, so the page that shows the unsubscribe has seen this one too.
+    const newest = all.senders[0]
+    if (!newest || newest.address === oldest?.address) throw new Error('the seed has no other sender')
+    const theirs = await core.query({
+      view: 'threads',
+      filter: { mailboxId: inbox.id, sender: newest.id },
+      offset: 0,
+      limit: 1,
+    })
+    const other = theirs.threads[0]
+    if (!other) throw new Error(`${newest.address} has no conversation`)
+    const flip = await accept(t, core, { kind: 'set-flags', threadIds: [other.id], unread: !other.unread }, 'the flip')
+    t.equal((await core.settled(flip)).result, 'done', "another sender's mail changes while the view is open")
+
     const change = await unsubscribe(t, core, 'Site notes')
     let page = one.latest() ?? first
     while (page.senders[0]?.unsubscribed?.state !== 'held') page = await one.next()
+    t.equal(
+      [page.total, page.senders.map((sender) => sender.address)],
+      [1, ['site@x.github.io']],
+      "the other sender's change adds no row to it",
+    )
     t.equal(
       page.senders[0]?.unsubscribed?.state === 'held' && page.senders[0].unsubscribed.change,
       change,

@@ -1,14 +1,23 @@
 // Unsubscribe A: an outlined Unsubscribe beside Archive all in a sender's toolbar and before
 // Search in a conversation's, ⇧U, and a third button on a hovered Updates row. Each opens one
-// confirm, a float under the toolbar's button, pinned to the message it opened on. Once
-// confirmed, the button and the row say where it has got, from the sender's Updates row:
+// confirm, a float under the toolbar's button, pinned to the message it opened on. Everything
+// they say comes from the core's view of that one sender (unsubscribe.ts): with no answer yet, or
+// no row in Updates, there is no control. Once confirmed, the button says where it has got:
 // "Unsubscribing" while held or sending, with Undo while held, "Unsubscribed" once done, or a
 // button that opens the sender's page when only that is left. The toast says the same, with
-// Undo while held and Archive all once done (unsubscribe.ts).
+// Undo while held and Archive all once done.
 
 import type { MailboxId, SenderSummary, ThreadId, Unsubscribed } from '@letterbox/protocol'
 import { Archive, CircleCheck, Clock, ExternalLink, Info, MailX, Zap } from 'lucide-react'
-import { type CSSProperties, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { Mail } from './actions.ts'
 import { useSecondsUntil } from './clock.ts'
 import { useLost } from './core.ts'
@@ -22,18 +31,20 @@ import {
   type ConfirmPlace,
   hostOf,
   howItGoes,
-  observed,
   openConfirm,
   openUnsubscribePage,
+  PAGE_REFUSALS,
   type Target,
   targetIn,
   undoUnsubscribe,
   unsubscribe,
   UNSUBSCRIBE_KEY,
+  useConfirmClaim,
   useConfirming,
-  usePending,
+  useInFlight,
   useSenderRow,
-  useTracked,
+  useShown,
+  viewed,
   whatItTells,
 } from './unsubscribe.ts'
 
@@ -46,32 +57,27 @@ const OUTLINED =
 type ControlProps = {
   place: ConfirmPlace
   target: Target
-  /** The sender's Updates row, which says where an unsubscribe has got. Undefined until known. */
-  row: SenderSummary | undefined
   /** In a conversation's toolbar, its tooltip names the sender and ⇧U. */
   tooltip: boolean
 }
 
-/** Whether two targets are the same sender. */
-const sameSender = (a: Target, b: Target) =>
-  a.accountId === b.accountId && a.address.toLowerCase() === b.address.toLowerCase()
+/**
+ * The toolbar's Unsubscribe, its confirm, and what it says once confirmed, all from the core's
+ * view of the sender. With no answer yet, or no row in Updates, there is nothing to show.
+ */
+function Control({ place, target, tooltip }: ControlProps) {
+  const row = useSenderRow(target.inbox, target.accountId, target.address)
+  return row ? <ForRow place={place} target={target} row={row} tooltip={tooltip} /> : null
+}
 
-/** The toolbar's Unsubscribe, its confirm, and what it says once confirmed. */
-function Control({ place, target, row, tooltip }: ControlProps) {
+function ForRow({ place, target, row, tooltip }: ControlProps & { row: SenderSummary }) {
   const lost = useLost() !== null
   const confirming = useConfirming(place)
-  const pending = usePending(target)
+  const inFlight = useInFlight(target)
   const trigger = useRef<HTMLButtonElement>(null)
-  const state = row?.unsubscribed ?? null
-  const blocked = lost || pending || state !== null
-  // A request to open (⇧U, a row's button) pins the target this button has now. A confirm
-  // pinned to another sender, as when the selection moved, or one this button cannot start, closes.
-  useEffect(() => {
-    if (!confirming) return
-    if (blocked) return closeConfirm()
-    if (confirming.target === null) openConfirm(place, target)
-    else if (!sameSender(confirming.target, target)) closeConfirm()
-  }, [confirming, blocked, place, target])
+  const state = row.unsubscribed
+  const eligible = !lost && !inFlight && state === null
+  useConfirmClaim(place, target, eligible)
   if (state) return <Where state={state} />
   const open = confirming?.target ?? null
   const label = `Unsubscribe from ${target.sender}`
@@ -84,9 +90,9 @@ function Control({ place, target, row, tooltip }: ControlProps) {
       aria-keyshortcuts="Shift+U"
       aria-expanded={open !== null}
       data-field="unsubscribe"
-      disabled={blocked}
+      disabled={!eligible}
       onClick={() => (open ? closeConfirm() : openConfirm(place, target))}
-      className={cx(OUTLINED, open && 'bg-hover', lost && 'opacity-40', pending && 'disabled:text-faint')}
+      className={cx(OUTLINED, open && 'bg-hover', lost && 'opacity-40', inFlight && 'disabled:text-faint')}
     >
       <MailX className="size-4" strokeWidth={1.75} aria-hidden />
       {/* A narrow window shows the mark alone. */}
@@ -154,18 +160,40 @@ function Where({ state }: { state: Unsubscribed }) {
       )
     case 'page':
       return (
-        <button
-          type="button"
-          title={`Opens ${hostOf(state.url)} in your browser`}
-          data-field="unsubscribe-page"
-          onClick={() => openUnsubscribePage(state.url)}
-          className={OUTLINED}
-        >
+        <PageButton url={state.url} className={OUTLINED} field="unsubscribe-page">
           <ExternalLink className="size-4" strokeWidth={1.75} aria-hidden />
           <span className="hidden wide:inline">Unsubscribe page</span>
-        </button>
+        </PageButton>
       )
   }
+}
+
+type PageButtonProps = { url: string; className: string; field: string; children: ReactNode }
+
+/** A button that opens a sender's unsubscribe page, and says in a few words why when the shell refuses. */
+function PageButton({ url, className, field, children }: PageButtonProps) {
+  const [said, setSaid] = useState<string | null>(null)
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button
+        type="button"
+        title={`Opens ${hostOf(url)} in your browser`}
+        data-field={field}
+        onClick={async () => {
+          const outcome = await openUnsubscribePage(url)
+          setSaid(outcome === 'opened' ? null : PAGE_REFUSALS[outcome])
+        }}
+        className={className}
+      >
+        {children}
+      </button>
+      {said && (
+        <span role="status" className="text-meta font-normal text-muted" data-field="page-refused">
+          {said}
+        </span>
+      )}
+    </span>
+  )
 }
 
 /**
@@ -272,20 +300,19 @@ function Confirm({ target, close }: { target: Target; close: (refocus: boolean) 
 /** A conversation's Unsubscribe, before Search, when its newest message from the sender names a way. */
 export function ConversationUnsubscribe({ id, mail }: { id: ThreadId; mail: Mail }) {
   const target = targetIn(useThreadDetail(id), mail)
-  return target ? <WithRow target={target} /> : null
-}
-
-/** The conversation's control, with its sender's Updates row. */
-function WithRow({ target }: { target: Target }) {
-  const row = useSenderRow(target.inbox, target.accountId, target.address)
-  return <Control place="toolbar" target={target} row={row} tooltip />
+  return target ? <Control place="toolbar" target={target} tooltip /> : null
 }
 
 /** A sender's Unsubscribe, beside Archive all, from its newest conversation's target. */
-export function SenderUnsubscribe({ sender, newest, mail }: { sender: SenderSummary; newest: ThreadId; mail: Mail }) {
-  const target = targetIn(useThreadDetail(newest), mail)
-  if (!target) return null
-  return <Control place="sender" target={target} row={sender} tooltip={false} />
+export function SenderUnsubscribe({ newest, mail }: { newest: ThreadId; mail: Mail }) {
+  const detail = useThreadDetail(newest)
+  const found = targetIn(detail, mail)
+  // While a newer conversation from the sender loads, its target stays as it was, so the
+  // Unsubscribe, and a confirm open on it, stay up.
+  const [kept, keep] = useState(found)
+  if (detail !== undefined && found?.messageId !== kept?.messageId) keep(found)
+  const target = detail === undefined ? kept : found
+  return target ? <Control place="sender" target={target} tooltip={false} /> : null
 }
 
 /** On an Updates row, where an unsubscribe from its sender has got, in its volume line. */
@@ -311,38 +338,38 @@ export function RowUnsubscribed({ state }: { state: Unsubscribed }) {
 export type ArchiveAll = (row: SenderSummary, inbox: MailboxId) => void
 
 /**
- * The toast for the followed unsubscribe, from its sender's row: Undo with the seconds left
+ * The toast for the unsubscribe it shows, from its sender's view: Undo with the seconds left
  * while held, quiet while sending, then "Unsubscribed" with Archive all, or the page to open.
  */
 export function UnsubscribeToast({ onUndo, onArchiveAll }: { onUndo: () => Promise<void>; onArchiveAll: ArchiveAll }) {
-  const followed = useTracked()
-  if (!followed) return null
+  const shown = useShown()
+  if (!shown) return null
   return (
-    <Followed
-      key={`${followed.target.messageId} ${followed.change ?? ''}`}
-      followed={followed}
+    <ShownToast
+      key={`${shown.target.messageId} ${shown.change ?? ''} ${shown.failed ?? ''}`}
+      shown={shown}
       onUndo={onUndo}
       onArchiveAll={onArchiveAll}
     />
   )
 }
 
-type Followed = NonNullable<ReturnType<typeof useTracked>>
+type Shown = NonNullable<ReturnType<typeof useShown>>
 
 /** A toast's lead icon, at the toast's size. */
 const icon = (Glyph: typeof Clock, tone = 'text-fg2') => (
   <Glyph className={`size-[17px] ${tone}`} strokeWidth={2} aria-hidden />
 )
 
-type FollowedProps = { followed: Followed; onUndo: () => Promise<void>; onArchiveAll: ArchiveAll }
+type ShownProps = { shown: Shown; onUndo: () => Promise<void>; onArchiveAll: ArchiveAll }
 
-function Followed({ followed, onUndo, onArchiveAll }: FollowedProps) {
-  const { target, change, failed } = followed
+function ShownToast({ shown, onUndo, onArchiveAll }: ShownProps) {
+  const { target, change, failed } = shown
   const row = useSenderRow(target.inbox, target.accountId, target.address)
-  const state = row?.unsubscribed?.change === change ? row?.unsubscribed : null
+  const state = row?.unsubscribed?.change === change ? row.unsubscribed : null
   useEffect(() => {
-    if (state && change) observed(target, change, state.state)
-  }, [target, change, state])
+    if (change) viewed(change, state?.state ?? null)
+  }, [change, state])
   const ghost = 'inline-flex h-[30px] items-center gap-2 rounded-lg pr-2 pl-2.5 text-fg hover:bg-hover'
   const rule = <span aria-hidden className="mx-0.5 h-[18px] w-px bg-hover" />
   if (failed)
@@ -376,14 +403,14 @@ function Followed({ followed, onUndo, onArchiveAll }: FollowedProps) {
         {icon(Info)}
         <span data-field="toast">{target.sender} unsubscribes on its own page</span>
         {rule}
-        <button type="button" className={ghost} onClick={() => openUnsubscribePage(state.url)}>
+        <PageButton url={state.url} className={ghost} field="toast-page">
           <ExternalLink className="size-[15px]" strokeWidth={1.75} aria-hidden />
           Open unsubscribe page
           <span className="font-normal text-muted">· {hostOf(state.url)}</span>
-        </button>
+        </PageButton>
       </Frame>
     )
-  // Undo only once the core's row says it holds it, under this change.
+  // Undo only once the core's view says it holds it, under this change.
   return (
     <Frame undo={state?.state === 'held' ? 'ready' : 'none'} onUndo={onUndo}>
       {icon(Clock)}

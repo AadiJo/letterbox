@@ -7,13 +7,15 @@
 //   - Fernhill Garden Club: its signature does not cover List-Unsubscribe-Post, so it goes out as
 //     an email, which shows in Sent.
 //   - Bramble Books: only its page is left. Nothing opens until the toast's button is clicked.
-//   - Quayside Pharmacy and Kestrel Air fail not-public and refused-by-provider, in words.
+//   - Quayside Pharmacy and Kestrel Air fail not-public and refused-by-provider, in words, one
+//     confirmed while the other waits (unsubscribe-views.ts, with the cases below marked so).
+//   - z over Fernhill's done toast, with an archive behind it, sends nothing (views).
+//   - A sender unsubscribed while open still says so once its row leaves Updates' window (views).
 //   - Every reason the core can refuse one, given by the relay, in words.
 //   - A conversation's toolbar: Unsubscribe before Search, its tooltip, ⇧U and Esc.
 //   - A sender past the newest 100 in Updates still shows where its unsubscribe has got.
 
 import type { Refusal } from '@letterbox/protocol'
-import type { SeedMessage } from '@letterbox/sim-provider/contract'
 import { devSeeds } from '@letterbox/sim-provider/seeds'
 import type { Page } from 'playwright'
 import type { RunningSim } from '../sim.ts'
@@ -32,6 +34,7 @@ import {
   toast,
   where,
 } from './unsubscribe.ts'
+import { archiveOpen, at, checkOverlap, checkScrolledOut, checkZOverDone, deliver, lists } from './unsubscribe-views.ts'
 import { nav, senderRow } from './updates-edges.ts'
 
 declare global {
@@ -44,7 +47,7 @@ declare global {
 const seed = devSeeds.updates
 
 /** Every reason the core can refuse or fail an unsubscribe, in the words the toast uses. */
-const REFUSED: Record<Refusal, string> = {
+export const REFUSED: Record<Refusal, string> = {
   'unknown-target': 'That message is no longer here, so nothing was sent.',
   'not-supported': 'This message names no way to unsubscribe.',
   'not-permitted': 'This account can’t send mail, so it can’t unsubscribe by email.',
@@ -53,15 +56,6 @@ const REFUSED: Record<Refusal, string> = {
   'refused-by-provider': 'The sender’s server didn’t accept it.',
   unconfirmed: 'It may have gone through. Letterbox won’t retry it on its own.',
   invalid: 'Its unsubscribe address isn’t one Letterbox can use.',
-}
-
-/** A message `seconds` before the seed's time, as new mail. */
-const at = (seconds: number) => new Date(Date.parse(seed.now) - seconds * 1000).toISOString()
-
-/** Delivers `messages` at the provider, then syncs, so the core has them. */
-async function deliver(page: Page, running: RunningSim, messages: readonly SeedMessage[]) {
-  for (const message of messages) running.mailbox.deliver(message)
-  await page.evaluate(() => window.letterboxDev?.sync())
 }
 
 /** Searches all mail for `text`, so a conversation outside the list's window has a row. */
@@ -152,12 +146,17 @@ async function checkClosesOnSelect(page: Page) {
   equal(await confirm(page).count(), 0, 'another sender opening closes the confirm')
 }
 
-/** A signature that does not cover List-Unsubscribe-Post: it goes out as an email, which shows in Sent. */
-async function checkMailto(page: Page, running: RunningSim) {
+/**
+ * A signature that does not cover List-Unsubscribe-Post: it goes out as an email, which shows in
+ * Sent. An archive's notice is behind its toast, for z once it is done (unsubscribe-views.ts).
+ */
+async function checkMailto(page: Page, relay: Relay, running: RunningSim) {
   const posts = running.web.posted().length
+  await archiveOpen(page, 'Huddle')
   await openSender(page, 'Fernhill Garden Club')
   await confirmed(page)
   await toast(page).filter({ hasText: 'Unsubscribed from Fernhill Garden Club' }).waitFor()
+  await checkZOverDone(page, relay, 'Huddle')
   await nav(page, 'Sent').click()
   await row(page, 'Unsubscribe').first().waitFor()
   equal(
@@ -215,19 +214,12 @@ async function checkPage(page: Page, running: RunningSim) {
     ['https://bramblebooks.example/unsubscribe?u=9'],
     'its button opens the page, and only then',
   )
-}
-
-/** A one-click that fails once out of its window, in words. */
-async function checkFailed(page: Page, name: string, reason: Refusal) {
-  await openSender(page, name)
-  await confirmed(page)
-  await toast(page).filter({ hasText: REFUSED[reason] }).waitFor()
-  await button(page).waitFor()
-  equal(
-    await toast(page).textContent(),
-    REFUSED[reason],
-    `${name}'s unsubscribe fails ${reason}, in words, and Unsubscribe is back`,
-  )
+  // The shell refuses the next one, as when pages come too fast: the toolbar's button says so.
+  await page.evaluate(() => Reflect.set(window, 'letterbox', { openPage: async () => 'refused-rate' }))
+  await page.locator('[data-field="unsubscribe-page"]').click()
+  const refused = await page.locator('[data-field="page-refused"]').textContent()
+  await page.evaluate(() => Reflect.deleteProperty(window, 'letterbox'))
+  equal(refused, 'Wait a moment, then try again.', 'when the shell refuses the page, its button says why')
 }
 
 /** Every reason the core can refuse one, as the toast says it. The relay gives each, so the core never sees them. */
@@ -269,23 +261,10 @@ async function checkConversation(page: Page) {
   )
 }
 
-/** How many new senders push The Long Read past the newest 100 in Updates. */
-const NEWER = 101
-
 /** A sender past the newest 100 in Updates: its conversation's toast still follows its row to the end. */
 async function checkFarSender(page: Page, running: RunningSim) {
-  const newer = Array.from({ length: NEWER }, (_, index): SeedMessage => ({
-    key: `list-newer-${index}`,
-    mailboxes: ['inbox'],
-    from: { name: `Newer list ${index}`, address: `list${index}@newer.example` },
-    to: [ME],
-    subject: `Newer list issue ${index}`,
-    text: 'A newer list.',
-    sentAt: at(30 - index * 0.1),
-    headers: { listId: true, precedence: 'bulk' },
-    bulk: true,
-  }))
-  await deliver(page, running, newer)
+  // 101 newer senders push The Long Read out of the window.
+  await deliver(page, running, lists('newer', 101, 30))
   await searchFor(page, 'Issue 212')
   await open(page, 'Issue 212: the quiet web')
   await confirmed(page)
@@ -301,11 +280,11 @@ async function checkFarSender(page: Page, running: RunningSim) {
 export async function checkOutcomes(page: Page, relay: Relay, running: RunningSim) {
   await checkOneClick(page, relay, running)
   await checkClosesOnSelect(page)
-  await checkMailto(page, running)
+  await checkMailto(page, relay, running)
   await checkPage(page, running)
-  await checkFailed(page, 'Quayside Pharmacy', 'not-public')
-  await checkFailed(page, 'Kestrel Air', 'refused-by-provider')
+  await checkOverlap(page, running)
   await checkRefusals(page, relay)
   await checkConversation(page)
   await checkFarSender(page, running)
+  await checkScrolledOut(page, running, 'newer list 100')
 }

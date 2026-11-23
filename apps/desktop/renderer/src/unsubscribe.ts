@@ -5,9 +5,11 @@
 // the sender's page is left, a button that opens it. Opening it is the person's own click,
 // through the shell (ShellBridge.openPage), and never counts as done.
 //
-// Only Updates rows carry where an unsubscribe has got, so a conversation reads its sender's row
-// from a senders view of that one address (`useSenderRow`). Undo comes only from the row's held
-// state and its change, so it is there after a reload too.
+// The core's view of one sender (`useSenderRow`) is the only source of where an unsubscribe has
+// got, for every control: toolbar, row, conversation, ⇧U, the toast and z. A sender with no row
+// in Updates has no control. The renderer keeps only the senders whose command is on its way,
+// and what the toast says. Undo comes only from the view's `held` state and its change, so it is
+// there after a reload too.
 
 import type {
   AccountId,
@@ -19,7 +21,8 @@ import type {
   Unsubscribe,
   Unsubscribed,
 } from '@letterbox/protocol'
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
+import type { PageOutcome } from '@letterbox/client/message-port'
 import type { Mail } from './actions.ts'
 import { client, commandSettled, lostReason, useView } from './core.ts'
 import { noticeSerial } from './undo.ts'
@@ -103,180 +106,169 @@ export const UNSUBSCRIBE_REFUSALS = {
   invalid: 'Its unsubscribe address isn’t one Letterbox can use.',
 } as const satisfies Record<Refusal, string>
 
-/** The unsubscribe the toast follows, from its confirm until it ends or the toast moves on. */
-type Tracked = {
-  target: Target
-  /** The change the core accepted, or null until it answers. */
-  change: ChangeId | null
-  /** Why it did not go, once the core says. */
-  failed: string | null
-  /** The notice the toast showed when this began. A newer one takes the toast. */
-  serial: number
-  /** True once it has reached where it ends: done, its page, or failed. */
-  over: boolean
-}
-
-let tracked: Tracked | null = null
-let expiry: ReturnType<typeof setTimeout> | undefined
-const watchers = new Set<() => void>()
-
-const notify = () => watchers.forEach((watcher) => watcher())
-
-const set = (next: Tracked | null) => {
-  tracked = next
-  notify()
-}
-
-/** How long the toast stays once the unsubscribe has got where it ends. */
-const OVER_MS = 8000
-
-/** A sender, by account and address: one unsubscribe at a time goes to each. */
+/** A sender, by account and address: the key of everything kept per sender here. */
 const senderKey = (target: Pick<Target, 'accountId' | 'address'>) =>
   `${target.accountId} ${target.address.toLowerCase()}`
 
+const watchers = new Set<() => void>()
+const notify = () => watchers.forEach((watcher) => watcher())
+const subscribe = (onChange: () => void) => {
+  watchers.add(onChange)
+  return () => void watchers.delete(onChange)
+}
+
 /**
- * The senders whose unsubscribe was confirmed and whose row does not show it yet. Neither the
- * confirm nor ⇧U starts another for them, so no second command goes before the row says where
- * the first has got.
+ * The senders whose unsubscribe command is on its way: from the confirm until the core accepts
+ * or refuses it. This is the only state kept here: once the core accepts, its view of the sender
+ * says the rest.
  */
-const pending = new Set<string>()
+const inFlight = new Set<string>()
 
-/** True while an unsubscribe from `target`'s sender is confirmed and its row does not show it yet. */
-export const usePending = (target: Target) =>
-  useSyncExternalStore(
-    (onChange) => {
-      watchers.add(onChange)
-      return () => void watchers.delete(onChange)
-    },
-    () => pending.has(senderKey(target)),
-  )
+/** True while an unsubscribe command for `target`'s sender is on its way. */
+export const useInFlight = (target: Target) => useSyncExternalStore(subscribe, () => inFlight.has(senderKey(target)))
 
 /**
- * Sends the unsubscribe for `target` and follows it in the toast: the core's refusal, or its
- * row until it settles, and why it failed if it does. With the core lost, nothing is sent. Does
- * nothing while one from the same sender is pending. A `conflict` the core gives anyway leaves
- * the toast on the one it holds.
+ * What the toast shows of one unsubscribe: whose, under which change once the core accepted it,
+ * and why it did not go if it did not. Where it has got comes from the sender's view.
+ */
+export type Shown = {
+  target: Target
+  change: ChangeId | null
+  failed: string | null
+  /** The notice the toast showed as this came. A newer one takes the toast. */
+  serial: number
+}
+
+let shown: Shown | null = null
+let expiry: ReturnType<typeof setTimeout> | undefined
+/** The change the shown toast's view says the core holds now: the only one z and Undo take back. */
+let held: ChangeId | null = null
+
+/** How long the toast stays once its unsubscribe has got where it ends. */
+const OVER_MS = 8000
+
+/** Puts `next` on the toast, and takes it down OVER_MS later when `ends`. */
+function show(next: Shown | null, ends = false) {
+  clearTimeout(expiry)
+  shown = next
+  held = null
+  notify()
+  if (next && ends) expiry = setTimeout(() => shown === next && show(null), OVER_MS)
+}
+
+/** Says why `target`'s unsubscribe did not go, on the toast, over whatever it showed. */
+const fail = (target: Target, change: ChangeId | null, failed: string) =>
+  show({ target, change, failed, serial: noticeSerial() }, true)
+
+/**
+ * Sends the unsubscribe for `target`, unless one for its sender is on its way. The toast follows
+ * it. A refusal, or a failure once it settles, says why on the toast, whatever it shows then.
  */
 export async function unsubscribe(target: Target) {
   const key = senderKey(target)
-  if (pending.has(key)) return
-  clearTimeout(expiry)
-  const before = tracked
-  const mine: Tracked = { target, change: null, failed: null, serial: noticeSerial(), over: false }
-  if (lostReason() !== null) return set({ ...mine, failed: 'Lost the connection, so nothing was sent.', over: true })
-  pending.add(key)
-  set(mine)
+  if (inFlight.has(key)) return
+  if (lostReason() !== null) return fail(target, null, 'Lost the connection, so nothing was sent.')
+  inFlight.add(key)
+  const mine: Shown = { target, change: null, failed: null, serial: noticeSerial() }
+  show(mine)
   const sent = commandSettled({ kind: 'unsubscribe', messageId: target.messageId })
   const answer = await sent.answer.catch(() => 'unanswered' as const)
-  if (answer === 'unanswered' || answer.kind === 'rejected') pending.delete(key)
-  if (tracked !== mine) return
-  if (answer === 'unanswered') return end({ failed: 'Lost the connection. It may or may not have gone through.' })
-  if (answer.kind === 'rejected') {
-    // The one the core already holds from this sender keeps the toast, and its Undo.
-    if (answer.reason === 'conflict' && before?.change && senderKey(before.target) === key) return set(before)
-    return end({ failed: UNSUBSCRIBE_REFUSALS[answer.reason] })
-  }
-  set({ ...mine, change: sent.change })
-  // The row says how it gets on. Only a failure's reason comes in `settled` alone.
-  const result = await sent.settled
-  pending.delete(key)
+  inFlight.delete(key)
   notify()
-  if (tracked?.change !== sent.change) return
-  if (result === null) return end({ failed: 'Lost the connection. It may or may not have gone through.' })
-  if (typeof result === 'object') end({ failed: UNSUBSCRIBE_REFUSALS[result.failed] })
-  if (result === 'undone') stop()
-}
-
-/** Marks the followed unsubscribe as over, with why it failed if it did, and lets the toast go a while later. */
-function end(with_: Partial<Tracked> = {}) {
-  if (!tracked) return
-  set({ ...tracked, ...with_, over: true, serial: with_.failed ? noticeSerial() : tracked.serial })
-  clearTimeout(expiry)
-  const done = tracked
-  expiry = setTimeout(() => tracked === done && set(null), OVER_MS)
-}
-
-/** Stops following it: the toast goes. */
-const stop = () => {
-  clearTimeout(expiry)
-  set(null)
+  if (answer === 'unanswered') return fail(target, null, 'Lost the connection. It may or may not have gone through.')
+  // A conflict too: one from this sender is already held, and its view says so in the toolbar.
+  if (answer.kind === 'rejected') return fail(target, null, UNSUBSCRIBE_REFUSALS[answer.reason])
+  if (shown === mine) show({ ...mine, change: sent.change })
+  const result = await sent.settled
+  if (result === null) {
+    if (shown?.change === sent.change)
+      fail(target, sent.change, 'Lost the connection. It may or may not have gone through.')
+  } else if (typeof result === 'object') fail(target, sent.change, UNSUBSCRIBE_REFUSALS[result.failed])
+  else if (result === 'undone' && shown?.change === sent.change) show(null)
 }
 
 /**
- * The toast's row now shows the followed unsubscribe as `state`. Its sender is no longer
- * pending, Undo follows the core's held state alone, and once it has got where it ends the
- * toast stays a while, then goes.
+ * The shown toast's view says its unsubscribe is now `state`, or null when the view shows another
+ * change or no row: Undo follows `held` alone, and once it is done or its page is left, the toast
+ * stays a while, then goes.
  */
-export const observed = (target: Target, change: ChangeId, state: Unsubscribed['state']) => {
-  if (pending.delete(senderKey(target))) notify()
-  if (tracked?.change !== change) return
-  heldChange = state === 'held' ? change : null
-  if ((state === 'done' || state === 'page') && !tracked.over) end()
+export function viewed(change: ChangeId, state: Unsubscribed['state'] | null) {
+  if (shown?.change !== change || shown.failed) return
+  held = state === 'held' ? change : null
+  if (state === 'done' || state === 'page') {
+    clearTimeout(expiry)
+    const now = shown
+    expiry = setTimeout(() => shown === now && show(null), OVER_MS)
+  }
 }
 
-/** The followed unsubscribe's change while the core holds it, the only time Undo is offered. */
-let heldChange: ChangeId | null = null
-
-/**
- * Takes back the unsubscribe the core holds as `change` (from a row's `held` state) with the
- * core's `undo`. The toast goes once the core accepts. If the window ended first, the toast says
- * it is on its way.
- */
+/** Takes back the unsubscribe the core holds as `change`, from a view's `held` state, with the core's `undo`. */
 export async function undoUnsubscribe(change: ChangeId) {
   const answer = await client.command({ kind: 'undo', change }).catch(() => null)
-  if (tracked?.change !== change) return
-  if (answer?.kind === 'accepted') return stop()
-  end({
-    failed: answer ? 'Too late to undo. It’s on its way.' : 'Lost the connection. It may or may not have been undone.',
-  })
-}
-
-/** The followed unsubscribe, while the toast shows it: no newer notice took the toast. */
-export function useTracked() {
-  const followed = useSyncExternalStore(
-    (onChange) => {
-      watchers.add(onChange)
-      return () => void watchers.delete(onChange)
-    },
-    () => tracked,
+  if (shown?.change !== change) return
+  if (answer?.kind === 'accepted') return show(null)
+  fail(
+    shown.target,
+    change,
+    answer ? 'Too late to undo. It’s on its way.' : 'Lost the connection. It may or may not have been undone.',
   )
-  // A notice newer than it (undo.ts) takes the toast.
-  return followed && noticeSerial() <= followed.serial ? followed : null
+}
+
+/** The toast's unsubscribe, while no newer notice (undo.ts) took the toast. */
+export function useShown() {
+  const now = useSyncExternalStore(subscribe, () => shown)
+  return now && noticeSerial() <= now.serial ? now : null
 }
 
 /**
- * The held unsubscribe z and the toast's Undo take back: the followed one, while the toast shows
- * it and its row says the core holds it. Null otherwise, so z goes on to anything else.
+ * z and the toast's Undo, while the toast shows an unsubscribe: they are its, and go no further.
+ * Undo goes only when its view says the core holds it, for that change. Otherwise they do
+ * nothing. False when the toast shows no unsubscribe, so z goes on to what it shows.
  */
-export const undoableUnsubscribe = () =>
-  tracked && noticeSerial() <= tracked.serial && tracked.change === heldChange ? heldChange : null
+export function undoFromToast() {
+  if (!shown || noticeSerial() > shown.serial) return false
+  if (held) void undoUnsubscribe(held)
+  return true
+}
 
 /**
- * The Updates row of `address` in `accountId` and `inbox`, live, wherever it sits: a senders
- * view of that one address. Undefined while the core has not answered, and when the sender has
- * no row in Updates.
+ * The Updates row of `address` in `accountId` and `inbox`, live, from the core's view of that one
+ * sender: the only source of where an unsubscribe from it has got. Undefined until the core
+ * answers, and null when the sender has no row in Updates, as for a person's mail or archived
+ * automated mail.
  */
 export function useSenderRow(inbox: MailboxId, accountId: AccountId, address: string) {
-  return useView({ view: 'senders', accountId, mailboxId: inbox, address, offset: 0, limit: 1 })?.senders[0]
+  const page = useView({ view: 'senders', accountId, mailboxId: inbox, address, offset: 0, limit: 1 })
+  return page === undefined ? undefined : (page.senders[0] ?? null)
 }
 
 /** Opens a sender's unsubscribe page in the browser, through the shell, or a new tab outside it. */
-export function openUnsubscribePage(url: string) {
-  if (window.letterbox) return window.letterbox.openPage(url)
+export async function openUnsubscribePage(url: string): Promise<PageOutcome> {
+  if (window.letterbox) return window.letterbox.openPage(url).catch(() => 'refused-url' as const)
   window.open(url, '_blank', 'noopener,noreferrer')
+  return 'opened'
 }
+
+/** What the page's button says when the shell refused to open it. */
+export const PAGE_REFUSALS = {
+  'refused-rate': 'Wait a moment, then try again.',
+  'refused-url': 'This page can’t be opened.',
+} as const satisfies Record<Exclude<PageOutcome, 'opened'>, string>
 
 /** Where the confirm can open: under the sender's toolbar button, or the conversation's. */
 export type ConfirmPlace = 'toolbar' | 'sender'
 
-/**
- * The open confirm: where, and the target it pinned as it opened, so a newer message arriving
- * while it is up changes nothing it sends. `target` is null between a request to open it (⇧U,
- * a row's button) and its button pinning the target it has then.
- */
-type Confirming = { place: ConfirmPlace; target: Target | null }
+/** The open confirm: where, and the target it pinned as it opened. */
+type Confirming = { place: ConfirmPlace; target: Target }
 
 let confirming: Confirming | null = null
+/**
+ * A request from a row's Unsubscribe to open the confirm of the sender it names once that
+ * sender's button is up: by place and sender. Only that sender's button takes it.
+ */
+let requested: { place: ConfirmPlace; key: string } | null = null
+/** The confirm-opening of each mounted button that can start an unsubscribe now, by place. */
+const claims = new Map<ConfirmPlace, () => void>()
 const confirmWatchers = new Set<() => void>()
 
 const setConfirm = (next: Confirming | null) => {
@@ -284,21 +276,61 @@ const setConfirm = (next: Confirming | null) => {
   confirmWatchers.forEach((watcher) => watcher())
 }
 
-/** Asks the button at `place` to open its confirm, on the target it has. */
-export const requestConfirm = (place: ConfirmPlace) => setConfirm({ place, target: null })
-
 /** Opens the confirm at `place` on `target`, pinned. */
-export const openConfirm = (place: ConfirmPlace, target: Target) => setConfirm({ place, target })
+export const openConfirm = (place: ConfirmPlace, target: Target) => {
+  requested = null
+  setConfirm({ place, target })
+}
 
-/** Closes the confirm. The selection moving on closes it too. */
+/** Closes the confirm, and forgets a request to open one. The selection moving on does it too. */
 export const closeConfirm = () => {
+  requested = null
   if (confirming) setConfirm(null)
 }
 
-/** True while a confirm is open: the reader's shortcuts wait until it closes. */
+/** ⇧U: the button at `place` opens its confirm, if one is up and can start an unsubscribe. Otherwise nothing. */
+export const claimConfirm = (place: ConfirmPlace) => claims.get(place)?.()
+
+/** Asks the button of `target`'s sender at `place` to open its confirm, once it is up and can. */
+export const requestConfirm = (place: ConfirmPlace, target: Pick<Target, 'accountId' | 'address'>) => {
+  requested = { place, key: senderKey(target) }
+  confirmWatchers.forEach((watcher) => watcher())
+}
+
+/** While the button at `place` on `target` can start an unsubscribe, it claims ⇧U and takes a request for its sender. */
+function holdClaim(place: ConfirmPlace, target: Target, eligible: boolean) {
+  const key = senderKey(target)
+  if (!eligible) {
+    if (confirming?.place === place) setConfirm(null)
+    if (requested?.place === place && requested.key === key) requested = null
+    return
+  }
+  const open = () => openConfirm(place, target)
+  claims.set(place, open)
+  if (requested?.place === place && requested.key === key) open()
+  return () => void (claims.get(place) === open && claims.delete(place))
+}
+
+/**
+ * For a mounted Unsubscribe at `place` on `target`: while it can start one (`eligible`), ⇧U and
+ * a row's request for its sender open its confirm, on its target as it is then. When it can no
+ * longer start one, goes, or moves to another sender, its confirm closes.
+ */
+export function useConfirmClaim(place: ConfirmPlace, target: Target, eligible: boolean) {
+  const key = senderKey(target)
+  useEffect(() => holdClaim(place, target, eligible), [place, target, eligible])
+  useEffect(
+    () => () => {
+      if (confirming?.place === place) setConfirm(null)
+    },
+    [place, key],
+  )
+}
+
+/** True while a confirm is open: the reader's shortcuts, and Search's, wait until it closes. */
 export const confirmOpen = () => confirming !== null
 
-/** The confirm as it stands at `place`: null when it is shut there. */
+/** The confirm open at `place`, or null. */
 export const useConfirming = (place: ConfirmPlace) =>
   useSyncExternalStore(
     (onChange) => {

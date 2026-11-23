@@ -101,7 +101,7 @@ function ToolbarUnsubscribe({ sender, inbox, mail }: Omit<MailProps, 'most'>) {
   const newest = useThreadSection({ mailboxId: inbox, sender: sender.id }, RECENT)?.entries[0]?.id
   return newest ? (
     <span className="ml-2 inline-flex">
-      <SenderUnsubscribe sender={sender} newest={newest} mail={mail} />
+      <SenderUnsubscribe newest={newest} mail={mail} />
     </span>
   ) : null
 }

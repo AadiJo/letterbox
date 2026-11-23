@@ -395,7 +395,7 @@ export async function checkAttachments(browser: Browser) {
         openAttachment: ask('open'),
         saveAttachment: ask('save'),
         onOpenConversation: () => () => {},
-        openPage: () => {},
+        openPage: async () => 'opened' as const,
       }
       window.fileStub = {
         asked: calls,

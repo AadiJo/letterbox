@@ -11,7 +11,7 @@ import type { ReactNode } from 'react'
 import { useSecondsUntil } from './clock.ts'
 import { Key } from './Key.tsx'
 import { type ArchiveAll, UnsubscribeToast } from './Unsubscribe.tsx'
-import { useTracked } from './unsubscribe.ts'
+import { useShown } from './unsubscribe.ts'
 import { type Offer, useSendOffer, useUndoingSend } from './sending.ts'
 import { type Notice, UNDO_KEY, useNotice } from './undo.ts'
 
@@ -26,7 +26,7 @@ export function Toast({ onUndo, onArchiveAll }: Props) {
   const offer = useSendOffer()
   const undoing = useUndoingSend()
   // An unsubscribe, until a newer notice takes the toast (unsubscribe.ts).
-  if (useTracked()) return <UnsubscribeToast onUndo={onUndo} onArchiveAll={onArchiveAll} />
+  if (useShown()) return <UnsubscribeToast onUndo={onUndo} onArchiveAll={onArchiveAll} />
   if (notice)
     return (
       // A new offer is a new toast, so it rises again.

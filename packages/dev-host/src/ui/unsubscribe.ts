@@ -2,6 +2,7 @@
 // mocks, on the `updates` seed's list mail (packages/sim-provider/src/seeds/people-lists.ts),
 // through the real core and the fake web. This file runs it, and checks what happens while the
 // core holds an unsubscribe, on a core that holds its undo window:
+//   - ⇧U where nothing can start one, and a person's mail with a body link (unsubscribe-views.ts).
 //   - ⇧U opens the confirm, which says what it tells the sender and how it goes out, keeps
 //     inside the reader at 640 px, keeps Tab inside it, and holds back the reader's shortcuts.
 //     Confirmed, the toast says it is held, with the seconds left and Undo. z takes it back.
@@ -23,6 +24,7 @@ import { startServer } from '../server.ts'
 import { startSim } from '../sim.ts'
 import { appErrors, ARTIFACTS, equal, openPage, type Relay, root, SIZES } from './record.ts'
 import { checkOutcomes } from './unsubscribe-outcomes.ts'
+import { checkNoClaim, checkPerson } from './unsubscribe-views.ts'
 import { senderRow } from './updates-edges.ts'
 
 const seed = devSeeds.updates
@@ -100,11 +102,13 @@ async function checkConfirmAndUndo(page: Page, posted: () => unknown[], sent: ()
     return box && reader && box.left >= reader.left && box.right <= Math.min(reader.right, innerWidth)
   })
   await page.setViewportSize(SIZES.wide)
-  // Tab goes round its two buttons, and j, which would open the next sender, waits.
+  // Tab goes round its two buttons, and j, which would open the next sender, and Ctrl+K,
+  // which would focus Search, wait.
   await page.keyboard.press('Tab')
   await page.keyboard.press('Tab')
   await page.keyboard.press('Tab')
   await page.keyboard.press('j')
+  await page.keyboard.press('Control+k')
   equal(
     [
       await confirm(page).evaluate((element) => element.contains(document.activeElement)),
@@ -112,7 +116,7 @@ async function checkConfirmAndUndo(page: Page, posted: () => unknown[], sent: ()
       await confirm(page).isVisible(),
     ],
     [true, 'Homeware Outlet', true],
-    'the confirm keeps inside the reader at 640 px, keeps Tab inside it, and holds back the reader’s shortcuts',
+    'the confirm keeps inside the reader at 640 px, keeps Tab inside it, and holds back the reader’s shortcuts and Search’s',
   )
   await page.keyboard.press('Escape')
   await page.keyboard.press('Shift+U')
@@ -214,6 +218,8 @@ export async function checkUnsubscribe(browser: Browser) {
   const posted = () => running.web.posted()
   const sent = () => running.mailbox.sent()
   try {
+    await checkNoClaim(page)
+    await checkPerson(page)
     await checkConfirmAndUndo(page, posted, sent)
     await checkOneAtATime(page, relay)
     await checkUndoAfterReload(page, posted)

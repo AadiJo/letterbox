@@ -131,21 +131,38 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
     const bytesOf = (index: number) => sim.mailbox.attachmentBytes(KEY, index)
 
     // A frame that is not our page cannot ask at all. It asks first, so no limit stops it but that.
-    await app.evaluate(({ ipcMain }) => {
-      ipcMain.emit('url:open', { sender: null, senderFrame: null }, 'https://elsewhere.example/u')
-    })
+    // Electron keeps the handler main gave `handle` in `_invokeHandlers`, and replies with what it returns.
+    const foreign = await within(
+      app.evaluate(({ ipcMain }) => {
+        const handlers: unknown = Reflect.get(ipcMain, '_invokeHandlers')
+        const handler: unknown = handlers instanceof Map ? handlers.get('url:open') : undefined
+        if (typeof handler !== 'function') return 'no handler for url:open'
+        return Promise.resolve(handler({ sender: null, senderFrame: null }, 'https://elsewhere.example/u'))
+      }),
+      'main’s answer to a frame that is not ours',
+    )
+    equal(foreign, 'refused-url', 'pages: main refuses a page asked for by a frame that is not ours')
     // A page the person chose, as an unsubscribe page: main opens https with no user name or
-    // password, at most one a second. The last two go together, inside one second.
-    await page.evaluate(() => {
-      window.letterbox?.openPage('http://plain.example/u')
-      window.letterbox?.openPage('file:///etc/hosts')
-      window.letterbox?.openPage('https://member:secret@bramblebooks.example/unsubscribe')
-      window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?u=9')
-      window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?u=10')
-    })
-    // The page's next ask to main goes after those, so main has read them once it answers.
-    // A blob id too long to be one is answered at once, with no dialog.
-    await open('x'.repeat(201) as BlobId)
+    // password, at most one a second, and says which it did. The last two go inside one second.
+    const outcomes = await within(
+      page.evaluate(() =>
+        Promise.all(
+          [
+            'http://plain.example/u',
+            'file:///etc/hosts',
+            'https://member:secret@bramblebooks.example/unsubscribe',
+            'https://bramblebooks.example/unsubscribe?u=9',
+            'https://bramblebooks.example/unsubscribe?u=10',
+          ].map((url) => window.letterbox?.openPage(url)),
+        ),
+      ),
+      'the pages',
+    )
+    equal(
+      outcomes,
+      ['refused-url', 'refused-url', 'refused-url', 'opened', 'refused-rate'],
+      'pages: main says which pages it opened, and why it refused the rest',
+    )
     equal(
       (await asked()).external,
       ['https://bramblebooks.example/unsubscribe?u=9'],

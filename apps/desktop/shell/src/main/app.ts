@@ -19,9 +19,10 @@ import {
   type IpcMainInvokeEvent,
   MessageChannelMain,
   shell,
+  type WebContents,
   type WebFrameMain,
 } from 'electron'
-import type { AttachmentOutcome } from '@letterbox/client/message-port'
+import type { AttachmentOutcome, PageOutcome } from '@letterbox/client/message-port'
 import type { BlobId, ThreadId } from '@letterbox/protocol'
 import type { Channel } from '../shared/channels.ts'
 import { openAttachment, saveAttachment } from './attachments.ts'
@@ -46,18 +47,20 @@ const openUrl = (url: string) => {
   return true
 }
 
-/** How often the page may open pages: one a second, and PAGES_A_MINUTE in any minute. */
+/** How often a window's page may open pages: one a second, and PAGES_A_MINUTE in any minute. */
 const PAGE_GAP_MS = 1000
 const PAGES_A_MINUTE = 5
 
-/** When the page last opened pages, newest last, within the past minute. */
-const pagesOpened: number[] = []
+/** When each window's page last opened pages, newest last, within the past minute. */
+const pagesOpened = new WeakMap<WebContents, number[]>()
 
-/** True when the page may open another page now, by the limits above. */
-function pageAllowed(now: number) {
-  while (pagesOpened.length > 0 && now - (pagesOpened[0] ?? now) >= 60_000) pagesOpened.shift()
-  const last = pagesOpened.at(-1)
-  return pagesOpened.length < PAGES_A_MINUTE && (last === undefined || now - last >= PAGE_GAP_MS)
+/** True when the page in `contents` may open another page now, by the limits above. */
+function pageAllowed(contents: WebContents, now: number) {
+  const opened = pagesOpened.get(contents) ?? []
+  const recent = opened.filter((at) => now - at < 60_000)
+  pagesOpened.set(contents, recent)
+  const last = recent.at(-1)
+  return recent.length < PAGES_A_MINUTE && (last === undefined || now - last >= PAGE_GAP_MS)
 }
 
 const dropped = () => log('dropped a core request from a page that has since reloaded or closed')
@@ -182,13 +185,23 @@ if (!read.ok) {
   attachments('attachment:open', openAttachment)
 
   // A page the person chose to open, as a sender's unsubscribe page. Only our own page may ask.
-  // At most one a second and a few a minute, so a page gone wrong cannot flood the browser.
-  ipcMain.on('url:open' satisfies Channel, (event, url: unknown) => {
-    if (!ownPage(event)) return log('refused url:open from a frame that is not our page')
-    if (typeof url !== 'string' || url.length > 4096) return
+  // At most one a second and a few a minute per window, so a page gone wrong cannot flood the
+  // browser. The page hears which, so its button can say so.
+  ipcMain.handle('url:open' satisfies Channel, (event, url: unknown): PageOutcome => {
+    const page = ownPage(event)
+    if (!page) {
+      log('refused url:open from a frame that is not our page')
+      return 'refused-url'
+    }
+    if (typeof url !== 'string' || url.length > 4096) return 'refused-url'
     const now = Date.now()
-    if (!pageAllowed(now)) return log('refused url:open: too many pages too fast')
-    if (openUrl(url)) pagesOpened.push(now)
+    if (!pageAllowed(event.sender, now)) {
+      log('refused url:open: too many pages too fast')
+      return 'refused-rate'
+    }
+    if (!openUrl(url)) return 'refused-url'
+    pagesOpened.get(event.sender)?.push(now)
+    return 'opened'
   })
 
   registerScheme()

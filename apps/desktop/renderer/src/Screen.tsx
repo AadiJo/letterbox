@@ -32,15 +32,7 @@ import { Toolbar } from './Toolbar.tsx'
 import { Tooltip } from './Tooltip.tsx'
 import { startReply, undoSend } from './sending.ts'
 import { hasNotice, type Names, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
-import {
-  closeConfirm,
-  confirmOpen,
-  requestConfirm,
-  targetIn,
-  undoableUnsubscribe,
-  undoUnsubscribe,
-  UNSUBSCRIBE_KEY,
-} from './unsubscribe.ts'
+import { claimConfirm, closeConfirm, confirmOpen, undoFromToast, UNSUBSCRIBE_KEY } from './unsubscribe.ts'
 
 /** What App hands every screen. */
 export type Chrome = {
@@ -183,9 +175,8 @@ export function useSelection(
    * moving on, so a row whose exit ends while the core decides opens no next one.
    */
   const undoLast = async () => {
-    // An unsubscribe on the toast takes z and Undo while the core holds it (unsubscribe.ts).
-    const held = undoableUnsubscribe()
-    if (held) return undoUnsubscribe(held)
+    // An unsubscribe on the toast takes z and Undo, and they go no further (unsubscribe.ts).
+    if (undoFromToast()) return
     generation.current += 1
     const started = generation.current
     const id = hasNotice() ? await undo(namesIn(mail)) : await undoSend()
@@ -213,8 +204,8 @@ export function useSelection(
     // The conversation is out of view while the page is up, so nothing else acts on it.
     if (page) return
     if (event.key === UNSUBSCRIBE_KEY && event.shiftKey) {
-      // ⇧U opens the toolbar's confirm, where the conversation names a way to unsubscribe.
-      if (selected && targetIn(threadDetail(selected), mail)) requestConfirm('toolbar')
+      // ⇧U opens the toolbar's confirm, if its Unsubscribe is up and can start one.
+      claimConfirm('toolbar')
       event.preventDefault()
       return
     }

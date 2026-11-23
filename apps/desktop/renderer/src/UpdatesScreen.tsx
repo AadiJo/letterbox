@@ -18,11 +18,11 @@ import { undoSend } from './sending.ts'
 import { Toast } from './Toast.tsx'
 import { hasNotice, undo, UNDO_KEY } from './undo.ts'
 import {
+  claimConfirm,
   closeConfirm,
   confirmOpen,
   requestConfirm,
-  undoableUnsubscribe,
-  undoUnsubscribe,
+  undoFromToast,
   UNSUBSCRIBE_KEY,
 } from './unsubscribe.ts'
 import { busiest } from './Volume.tsx'
@@ -58,11 +58,12 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
   const select = (id: SenderId) => openSender(senders.find((sender) => sender.id === id) ?? null)
 
   /**
-   * Marks all of a sender's mail read, or archives all of it (sender-actions.ts).
+   * Marks all of a sender's mail read, or archives all of it (sender-actions.ts), in `where`:
+   * this screen's inbox, or the one an unsubscribe toast's sender is in.
    */
-  const act = async (sender: SenderSummary, kind: 'read' | 'archive') => {
+  const act = async (sender: SenderSummary, kind: 'read' | 'archive', where = inbox) => {
     const started = generation.current
-    if (!(await actOnSender(sender, kind, inbox, chrome.mail))) return
+    if (!(await actOnSender(sender, kind, where, chrome.mail))) return
     // Archiving the open sender takes it out of the list, so the next one opens in its place.
     if (kind === 'archive' && sender.id === open?.id && generation.current === started) {
       const index = senders.findIndex((one) => one.id === sender.id)
@@ -72,9 +73,8 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
 
   /** Undoes what the toast shows: the last action's notice, or else a reply in its undo window (sending.ts). */
   const undoLast = async () => {
-    // An unsubscribe on the toast takes z and Undo while the core holds it (unsubscribe.ts).
-    const held = undoableUnsubscribe()
-    if (held) return undoUnsubscribe(held)
+    // An unsubscribe on the toast takes z and Undo, and they go no further (unsubscribe.ts).
+    if (undoFromToast()) return
     // z counts as moving on, so an action still waiting on the core opens nothing after it.
     generation.current += 1
     await (hasNotice() ? undo(namesIn(chrome.mail)) : undoSend())
@@ -89,8 +89,8 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
       return
     }
     if (event.key === UNSUBSCRIBE_KEY && event.shiftKey) {
-      // ⇧U opens the open sender's confirm. Its button decides whether it can.
-      requestConfirm('sender')
+      // ⇧U opens the open sender's confirm, if its Unsubscribe is up and can start one.
+      claimConfirm('sender')
       event.preventDefault()
       return
     }
@@ -126,7 +126,7 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
           onAct={(sender, kind) => void act(sender, kind)}
           onUnsubscribe={(sender) => {
             openSender(sender)
-            requestConfirm('sender')
+            requestConfirm('sender', sender)
           }}
         />
       </ListPane>
@@ -141,7 +141,7 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
           onMarkRead={(one) => void act(one, 'read')}
           onArchive={(one) => void act(one, 'archive')}
         />
-        <Toast onUndo={undoLast} onArchiveAll={(row) => void act(row, 'archive')} />
+        <Toast onUndo={undoLast} onArchiveAll={(row, where) => void act(row, 'archive', where)} />
       </section>
     </>
   )
