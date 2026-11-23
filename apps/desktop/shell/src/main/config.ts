@@ -12,6 +12,8 @@
 //                           --gmail and --gmail-redirects). The Electron check's oauth run
 //                           sets these. A sim core needs a socket, a fake Gmail, or both.
 //   LETTERBOX_SIM_NOW       sim: the fixed time the core runs at.
+//   LETTERBOX_SIM_WEB       sim, optional: the fake web's URL (packages/sim-provider/src/web.ts),
+//                           core-sim's --web, which `pnpm dev:desktop` sets so images can show.
 //   LETTERBOX_USER_DATA     optional. Electron's own state. Defaults to Electron's folder.
 //   LETTERBOX_DATA          optional. The core's store. Defaults to <user data>/core.
 //
@@ -27,7 +29,14 @@ export type Renderer = { kind: 'server'; url: URL } | { kind: 'folder'; folder: 
 /** Which core to start, before its store is known. */
 export type CoreChoice =
   | { kind: 'gmail'; program: string; client: string }
-  | { kind: 'sim'; program: string; socket: string | undefined; gmail: FakeGmail | undefined; now: string }
+  | {
+      kind: 'sim'
+      program: string
+      socket: string | undefined
+      gmail: FakeGmail | undefined
+      now: string
+      web: string | undefined
+    }
 
 /** The fake Gmail a sim core signs in to: its URL, and the folder its redirects arrive in. */
 export type FakeGmail = { url: string; redirects: string }
@@ -84,7 +93,7 @@ export function readConfig(env: Env): { ok: true; config: Config } | { ok: false
         ? required('LETTERBOX_SIM_SOCKET', "the sim provider's socket")
         : env.LETTERBOX_SIM_SOCKET || undefined
     const now = required('LETTERBOX_SIM_NOW', 'the time the sim core runs at')
-    core = { kind, program, socket, gmail, now }
+    core = { kind, program, socket, gmail, now, web: env.LETTERBOX_SIM_WEB || undefined }
   } else {
     problems.push(`LETTERBOX_CORE is ${kind}. Set it to gmail or sim.`)
   }
@@ -117,7 +126,8 @@ export function coreCommand(core: CoreChoice, data: string): CoreCommand {
       const sim = core.socket === undefined ? [] : ['--sim', core.socket]
       const gmail =
         core.gmail === undefined ? [] : ['--gmail', core.gmail.url, '--gmail-redirects', core.gmail.redirects]
-      return { program: core.program, args: ['--data', data, ...sim, ...gmail, '--now', core.now] }
+      const web = core.web === undefined ? [] : ['--web', core.web]
+      return { program: core.program, args: ['--data', data, ...sim, ...gmail, '--now', core.now, ...web] }
     }
   }
 }

@@ -36,7 +36,7 @@ pub fn generate() -> String {
         Account, Capabilities, AccountStatus, AccountErrorReason, Mailbox, Role, Person, Turn, TurnReason, TurnState,
         ThreadSummary, ThreadDetail, Message, Body, Unavailable, Images, ShowImages, Tracker, TrackerReason, Quote,
         Unsubscribe, UnsubscribeSource, ImageFile, ImageError, Colors, ColorScheme, HtmlLook, Swatch, ColorRole,
-        Attachment,
+        Attachment, Unsubscribed, UnsubscribeMethod,
         ThreadFilter, Query, Update, ThreadPage, SenderId, SenderSummary, SenderDay, SenderPage, Recipient, ChangeHolder,
         Command, TurnChoice, Draft, Delivery, Refusal, ChangeResult, UndoConflict, UndoField,
         SignInOption, SignInMethod, Request, PasswordInput, Response, Answer<Empty, Never>, True, False, Empty, Never,

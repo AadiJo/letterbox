@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import type { Request } from '@letterbox/protocol'
 import type { Browser, BrowserContext, Page } from 'playwright'
 
 export const root = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -102,6 +103,16 @@ async function relayCore(page: Page) {
   // Armed by `holdNextUndoAnswer`: the change id of the page's next undo, once sent, and the core's answer to it, once held.
   let undoAnswer: { change: string | null; answer: string | null; held: () => void } | undefined
   const waiters = new Set<{ text: string; settle: (error?: Error) => void }>()
+  /**
+   * Armed by `holdAnswer`: each waits for the page's next request its `test` takes, then holds
+   * every chunk and the response the core sends for it, until its release.
+   */
+  const answerHolds = new Set<{
+    test: (request: Request) => boolean
+    id: string | null
+    held: string[]
+    answered: () => void
+  }>()
   const see = (message: string) => {
     for (const waiter of waiters) if (message.includes(waiter.text)) waiter.settle()
   }
@@ -144,6 +155,11 @@ async function relayCore(page: Page) {
     socket.onMessage((message) => {
       const text = String(message)
       fromPage.push(text)
+      if (answerHolds.size > 0 && text.startsWith('{"kind":"request"')) {
+        const { id, request } = JSON.parse(text) as { id: string; request: Request }
+        const hold = [...answerHolds].find((one) => one.id === null && one.test(request))
+        if (hold) hold.id = id
+      }
       if (refuseUndo && text.includes('"kind":"undo"')) {
         const { conflict } = refuseUndo
         refuseUndo = undefined
@@ -172,6 +188,14 @@ async function relayCore(page: Page) {
     core.onMessage((frame) => {
       const message = frame.toString()
       see(message)
+      // serde writes `kind` first and `id` next, so only these lines answer a request.
+      const answer = /^\{"kind":"(chunk|response)","id":"([^"]+)"/.exec(message)
+      const hold = answer && [...answerHolds].find((one) => one.id === answer[2])
+      if (hold) {
+        hold.held.push(message)
+        if (answer[1] === 'response') hold.answered()
+        return
+      }
       if (undoAnswer?.change && undoAnswer.answer === null && /"kind":"(accepted|rejected)"/.test(message)) {
         const { change } = JSON.parse(message) as { change?: string }
         if (change === undoAnswer.change) {
@@ -218,6 +242,23 @@ async function relayCore(page: Page) {
       toPage?.(answer)
     },
     sees,
+    /**
+     * Holds the core's answer to the page's next request that `test` takes, its chunks and its
+     * response, until `release` hands them to the page in order. `answered` resolves once the
+     * relay holds the response.
+     */
+    holdAnswer: (test: (request: Request) => boolean) => {
+      const { promise: answered, resolve } = Promise.withResolvers<void>()
+      const hold = { test, id: null as string | null, held: [] as string[], answered: resolve }
+      answerHolds.add(hold)
+      return {
+        answered,
+        release: () => {
+          answerHolds.delete(hold)
+          for (const message of hold.held) toPage?.(message)
+        },
+      }
+    },
     /** Every message the page sent its cores, in order, as sent. */
     fromPage: () => [...fromPage],
     /** Ends the connection both ways. What the relay held is never delivered, as when an answer is lost. */

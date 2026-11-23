@@ -84,6 +84,10 @@ impl Inner {
                 self.deliver(account_id, linked, change, outbound).await?;
                 continue;
             }
+            // An unsubscribe reaches no provider: its own job carries it out (unsubscribe/).
+            if let Effect::Unsubscribe(_) = change.effect {
+                continue;
+            }
             let planned = plan(&self.state.borrow().world, change.effect.ops());
             let Some(steps) = planned else {
                 self.settle(change, ChangeResult::Failed(Refusal::UnknownTarget));

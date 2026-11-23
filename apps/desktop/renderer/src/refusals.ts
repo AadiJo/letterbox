@@ -12,6 +12,8 @@ export const REFUSALS = {
   'refused-by-provider': 'The mail server refused it.',
   invalid: 'An address or the subject is not one the core can send.',
   unconfirmed: 'It may not have been sent. Check Sent before sending again.',
+  // Only an unsubscribe's one-click URL fails this way, never a send.
+  'not-public': 'Its address is not on the public internet.',
 } as const satisfies Record<Refusal, string>
 
 /** Why the core refused `reply`, in words. A forward names its original where the reply would name the message it answers. */

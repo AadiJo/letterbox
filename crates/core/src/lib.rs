@@ -56,6 +56,7 @@ mod suggestions;
 mod sync;
 mod turns;
 mod undo;
+mod unsubscribe;
 mod views;
 pub mod web;
 mod work;
@@ -232,6 +233,7 @@ impl Core {
             }),
         };
         core.inner.resume_outbox();
+        core.inner.resume_unsubscribes();
         // In the store's order, so a run that resumes several accounts pulls them in the same order.
         let resumed: Vec<(AccountId, Linked)> = {
             let state = core.inner.state.borrow();

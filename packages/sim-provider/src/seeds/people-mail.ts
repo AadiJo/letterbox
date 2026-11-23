@@ -4,10 +4,19 @@
 
 import type { SeedAttachment } from '../contract.ts'
 
-const HOUR = 3_600_000
-const DAY = 24 * HOUR
+export const HOUR = 3_600_000
+export const DAY = 24 * HOUR
+
+/** The time the seed's core runs at. */
+export const NOW = '2026-03-09T16:00:00.000Z'
+
+/** The time `ms` before NOW. */
+export const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString()
 
 export const ME = { name: 'Robin Vale', address: 'robin@vale.test' }
+
+/** The logo Ines signs her HTML mail with. */
+export const HARBOUR_LANE_LOGO = 'https://brand.harbourlane.example/logo.png'
 
 export const PEOPLE = {
   maya: { name: 'Maya Lindqvist', address: 'maya@haldenstudio.test' },
@@ -39,9 +48,19 @@ export type Label = 'projects' | 'home' | 'receipts' | 'travel'
 
 /**
  * One message: from them, or from me with `me`. `ago` places one before the last; otherwise
- * they are 20 hours apart. `attachments` are the files it carries.
+ * they are 20 hours apart. `attachments` are the files it carries. `quotes` ends it with the
+ * messages before it, quoted as mail clients quote them: in plain text with `>` lines, or as
+ * HTML in Gmail's quote markup (people-first.ts writes it). An HTML one can sign off with a
+ * remote `logo` image, which the dev host's fake web serves.
  */
-type Say = { me?: true; text: string; ago?: number; attachments?: readonly SeedAttachment[] }
+type Say = {
+  me?: true
+  text: string
+  ago?: number
+  attachments?: readonly SeedAttachment[]
+  quotes?: 'text' | 'html'
+  logo?: { url: string; alt: string }
+}
 
 /**
  * One conversation with a person: who, about what, when it last moved, its label, its
@@ -190,6 +209,8 @@ const MINE: Conversation[] = [
           'I can issue a credit note for €380, or reissue the invoice without the line. Which would you prefer for your records?',
           'Ines',
         ),
+        quotes: 'html',
+        logo: { url: HARBOUR_LANE_LOGO, alt: 'Harbour Lane Accounts' },
       },
     ],
   },
@@ -230,6 +251,7 @@ const MINE: Conversation[] = [
           'Happy to. I’ll measure up on Thursday if someone’s in. Do you know if there are pipes behind that wall?',
           'Dara',
         ),
+        quotes: 'text',
       },
       {
         text: letter(
@@ -238,6 +260,7 @@ const MINE: Conversation[] = [
           'Both prices include the brackets and making good the wall. The ply can be oiled or left raw. Raw marks more easily near the cooker.',
           'Dara',
         ),
+        quotes: 'text',
       },
     ],
   },

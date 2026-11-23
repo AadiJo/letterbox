@@ -8,8 +8,8 @@
 // read or change mail go through the mailbox's own `respond`, so holding bodies and
 // applies, refusing the next apply, going offline and the call counts all work as
 // they do over the sim socket. The counts read in Gmail terms: one snapshot per
-// messages.list page, one changes per history.list, one body per format=full get, one
-// attachment per messages.attachments.get (whose ids are "attachment-<n>", by place),
+// messages.list page, one changes per history.list, one body per format=full get, one raw
+// per format=raw get, one attachment per messages.attachments.get (whose ids are "attachment-<n>", by place),
 // and one apply per modify or batchModify that changes labels. `setQuota` adds Gmail's
 // usage limits (quota.ts). The mailbox's `expirePageTokens` makes messages.list refuse
 // every page token it handed out. messages.send goes through the mailbox's `send` (send.ts),
@@ -271,6 +271,14 @@ export const startFakeGmail = (redirects: string): Promise<GmailFake> => {
     if (method === 'GET' && message !== undefined) {
       const format = query.get('format') ?? 'full'
       const ref = refOfId(message)
+      if (format === 'raw' && ref !== null) {
+        // Through the mailbox, so it is counted as the sim's `raw` call.
+        const result = await ask(entry, { method: 'raw', arg: ref })
+        if (result.method !== 'raw' || !result.outcome.ok) return fail(response, 503, 'Backend error')
+        if (result.outcome.kind === 'gone') return fail(response, 404, 'Requested entity was not found.')
+        const raw = Buffer.from(result.outcome.base64, 'base64').toString('base64url')
+        return send(response, 200, { id: message, threadId: threadOf(entry, ref), raw })
+      }
       if (format === 'full' && ref !== null) {
         // Through the mailbox, so a body call is counted and can be held, even for a message deleted since.
         const result = await ask(entry, { method: 'body', arg: ref })

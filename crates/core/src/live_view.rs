@@ -366,7 +366,7 @@ impl LiveView {
                 data: thread(world, rows, thread_id, live),
             },
             LiveView::Senders(senders) => Update::Senders {
-                data: senders.answer(rows),
+                data: senders.answer(rows, world),
             },
             LiveView::Recipients { shown, .. } => Update::Recipients {
                 data: shown.iter().map(|(_, recipient)| recipient.clone()).collect(),

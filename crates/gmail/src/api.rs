@@ -265,6 +265,32 @@ impl Api {
         Self::read(download.await?).await
     }
 
+    /// As `get_transfer`, but stops reading once the body passes `limit` bytes and answers
+    /// None: a message's raw source, which can be as large as its attachments.
+    pub async fn get_transfer_capped<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        limit: usize,
+    ) -> Result<Option<T>, CallError> {
+        let url = self.url(path);
+        let mut response = self
+            .send(&self.downloads, self.config.timeouts.transfer, |http| http.get(&url))
+            .await?;
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) if body.len() + chunk.len() > limit => return Ok(None),
+                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+                Ok(None) => break,
+                Err(error) if error.is_timeout() => return Err(CallError::Lost),
+                Err(_) => return Err(CallError::Unreadable),
+            }
+        }
+        serde_json::from_slice(&body)
+            .map(Some)
+            .map_err(|_| CallError::Unreadable)
+    }
+
     /// POST `users/me/<path>` with a JSON body, within the transfer budget, and read the
     /// answer: a send's upload.
     pub async fn post_transfer_for<T: DeserializeOwned>(

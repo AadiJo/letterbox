@@ -2,7 +2,8 @@
 //! show it restyled for the dark reader or in the sender's own colors from one stored copy (see
 //! `Colors` in crates/protocol/src/body.rs):
 //!   - in CSS, inline or in `<style>`, each color of a text, background or border property
-//!     becomes `var(--letterbox-color-N, <as written>)`, N its index in the palette (`css`). A
+//!     becomes `var(<prefix>color-N, <as written>)`, N its index in the palette (`css`) and the
+//!     prefix the body's own (`Body::Ready::css_prefix`), which the sender never sees. A
 //!     color longhand is wrapped only when its value is colors the pass reads and nothing else
 //!     (`wrappable`): a `var()` makes a browser check a value only once it computes it, so a
 //!     wrapped invalid value would hide an earlier valid one instead of being dropped.
@@ -10,8 +11,6 @@
 //!     `data-letterbox-bg`, `-text`, `-link`, `-vlink` or `-alink` naming its N. A rule in an
 //!     anonymous cascade layer, in the `<style>` that `finish` puts first, applies it, so any
 //!     rule of the sender's, in a layer or not, still wins over it as it did over the attribute.
-//!   - a custom property the sender named `--letterbox-…` is renamed (`own`), so a sender cannot
-//!     set the core's own.
 //!
 //! Text set beside a background, in the same rule or on the same element, keeps its contrast on
 //! that background's dark value (dark.rs), as a swatch of its own when that changes its value.
@@ -19,8 +18,6 @@
 //! It writes only colors and `var()`s, never a URL, so nothing it adds can load anything, and
 //! html.rs checks the output all the same. It also tells designed mail from a person's plain
 //! HTML (`Painted::branded`).
-
-use std::borrow::Cow;
 
 use letterbox_protocol::ColorRole;
 use lol_html::html_content::Element;
@@ -49,6 +46,8 @@ pub struct Painted {
 /// The colour pass's state across one body's elements and style blocks.
 #[derive(Default)]
 pub struct Painter {
+    /// The start of the custom property names it writes (see `Body::Ready::css_prefix`).
+    prefix: String,
     palette: Vec<Swatch>,
     /// Each swatch's index by role, color and, for text, the background set beside it.
     places: HashMap<(ColorRole, Rgba, Option<Rgba>), usize>,
@@ -139,6 +138,14 @@ fn background_in(name: &str, value: &str) -> Option<Option<Rgba>> {
 }
 
 impl Painter {
+    /// A pass that names its custom properties with `prefix`.
+    pub fn with_prefix(prefix: &str) -> Painter {
+        Painter {
+            prefix: prefix.to_owned(),
+            ..Painter::default()
+        }
+    }
+
     /// The palette index of a color in a role, on a background for text, added at first sight.
     /// None for a color with no alpha, which shows nothing either way (hidden text stays
     /// hidden), or past MAX_SWATCHES.
@@ -219,9 +226,10 @@ impl Painter {
                     .map(|target| format!(r#"[data-letterbox-{data}="{index}"]{target}"#))
                     .collect();
                 self.rules.push(format!(
-                    ":where({}){{{}:var(--letterbox-color-{index}, {})}}",
+                    ":where({}){{{}:var({}color-{index}, {})}}",
                     selectors.join(", "),
                     hint.property,
+                    self.prefix,
                     color.hex()
                 ));
             }
@@ -244,9 +252,10 @@ impl Painter {
             let value = &css[*start..*end];
             let Some(role) = role_of(name) else { continue };
             if role == ColorRole::Background
-                && ["url(", "var(--letterbox-image-", "image-set(", "gradient("]
+                && (["url(", "image-set(", "gradient("]
                     .iter()
                     .any(|image| value.to_ascii_lowercase().contains(image))
+                    || value.contains(&format!("var({}image-", self.prefix)))
             {
                 self.designed = true;
             }
@@ -261,7 +270,7 @@ impl Painter {
                     changes.push((
                         start + from,
                         start + to,
-                        format!("var(--letterbox-color-{index}, {written})"),
+                        format!("var({}color-{index}, {written})", self.prefix),
                     ));
                 }
             }
@@ -328,16 +337,6 @@ fn hued(color: Rgba) -> bool {
     let channels = [color.r, color.g, color.b];
     let (high, low) = (channels.iter().max(), channels.iter().min());
     high.zip(low).is_some_and(|(high, low)| high - low > 51)
-}
-
-/// CSS with every custom property the sender named `--letterbox-…`, declared or read, renamed
-/// `--sender-letterbox-…`, so only the core's own reach the frame by that name.
-pub fn own(css: &str) -> Cow<'_, str> {
-    if css.contains("--letterbox-") {
-        Cow::Owned(css.replace("--letterbox-", "--sender-letterbox-"))
-    } else {
-        Cow::Borrowed(css)
-    }
 }
 
 /// The role a property's colors play. None for a property whose colors the pass leaves.

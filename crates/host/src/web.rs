@@ -1,7 +1,9 @@
-//! The `Web` both programs give the core (crates/core/src/web.rs): one https GET per call,
-//! over reqwest with rustls. It follows no redirect, sends no referrer, keeps no cookies (the
-//! client has no cookie store), sends no credentials, uses no proxy, and stops reading a body
-//! at the limit.
+//! The `Web` both programs give the core (crates/core/src/web.rs): one https GET of an image,
+//! or one https POST of a one-click unsubscribe, per call, over reqwest with rustls. It follows
+//! no redirect, sends no referrer, keeps no cookies (the client has no cookie store), sends no
+//! credentials, uses no proxy, and stops reading a body at the limit. It looks up the TXT
+//! records of a DKIM key through the system's DNS servers (hickory), and core-sim's through the
+//! fake web's `/.txt/<name>`.
 //!
 //! It connects only to public addresses (`public`). A host that is an IP literal is checked
 //! as it is. A name is resolved by the client's own resolver (`PublicOnly`), which refuses the
@@ -20,8 +22,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use hickory_resolver::TokioResolver;
+use hickory_resolver::proto::rr::RData;
 use letterbox_core::adapter::LocalFuture;
 use letterbox_core::web::{Fetched, Web};
+use letterbox_core::web::{Posted, Txt};
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use reqwest::redirect::Policy;
@@ -128,8 +133,8 @@ impl Resolve for PublicOnly {
 }
 
 /// core-sim's stand-in for the web: the fake's base URL. The fake answers `/.dns/<name>` with
-/// the addresses the name resolves to, one per line, and every other path as a request for
-/// `https://<path>`.
+/// the addresses the name resolves to, one per line, `/.txt/<name>` with its TXT records, one
+/// per line, and every other path as a request for `https://<path>`.
 struct Route {
     base: String,
 }
@@ -173,28 +178,35 @@ impl HttpsWeb {
         text.lines().map(|line| line.trim().parse().ok()).collect()
     }
 
-    async fn fetch(&self, url: &str, limit: usize) -> Fetched {
-        let Ok(parsed) = Url::parse(url) else {
-            return Fetched::Failed;
-        };
-        let target = match (&self.route, parsed.host()) {
-            (_, None) => return Fetched::Failed,
-            (_, Some(Host::Ipv4(ip))) if !public(IpAddr::V4(ip)) => return Fetched::Refused,
-            (_, Some(Host::Ipv6(ip))) if !public(IpAddr::V6(ip)) => return Fetched::Refused,
-            (None, Some(_)) => url.to_owned(),
+    /// Where a request for `url` goes: the URL itself, or core-sim's fake for it. Refuses a host
+    /// whose address is not public before anything connects: an IP literal as written, and in
+    /// core-sim a name by the fake's lookup. A person's names are checked by `PublicOnly`.
+    async fn target(&self, url: &str) -> Result<String, Stop> {
+        let parsed = Url::parse(url).map_err(|_| Stop::Failed)?;
+        match (&self.route, parsed.host()) {
+            (_, None) => Err(Stop::Failed),
+            (_, Some(Host::Ipv4(ip))) if !public(IpAddr::V4(ip)) => Err(Stop::Refused),
+            (_, Some(Host::Ipv6(ip))) if !public(IpAddr::V6(ip)) => Err(Stop::Refused),
+            (None, Some(_)) => Ok(url.to_owned()),
             (Some(route), Some(host)) => {
                 if let Host::Domain(name) = host {
                     match self.fake_lookup(route, name).await {
                         Some(found) if !found.is_empty() && found.iter().all(|ip| public(*ip)) => {}
-                        Some(_) => return Fetched::Refused,
-                        None => return Fetched::Failed,
+                        Some(_) => return Err(Stop::Refused),
+                        None => return Err(Stop::Failed),
                     }
                 }
-                match url.strip_prefix("https://") {
-                    Some(rest) => format!("{}/{rest}", route.base),
-                    None => return Fetched::Failed,
-                }
+                let rest = url.strip_prefix("https://").ok_or(Stop::Failed)?;
+                Ok(format!("{}/{rest}", route.base))
             }
+        }
+    }
+
+    async fn fetch(&self, url: &str, limit: usize) -> Fetched {
+        let target = match self.target(url).await {
+            Ok(target) => target,
+            Err(Stop::Refused) => return Fetched::Refused,
+            Err(Stop::Failed) => return Fetched::Failed,
         };
         let mut response = match self.client.get(target).send().await {
             Ok(response) => response,
@@ -230,6 +242,87 @@ impl HttpsWeb {
     }
 }
 
+impl HttpsWeb {
+    /// One POST of `List-Unsubscribe=One-Click`, form-encoded (RFC 8058 section 3.2). Only the
+    /// status is read. A request that never connected is `NotSent`, one that may have gone out
+    /// and got no whole answer `NoAnswer`. A URL with a user name or password is not sent at
+    /// all: reqwest would send them as an Authorization header, which RFC 8058 forbids. The
+    /// core refuses one before it gets here (dkim.rs); this keeps the rule where the request goes.
+    async fn post(&self, url: &str) -> Posted {
+        let userinfo = Url::parse(url).map(|url| !url.username().is_empty() || url.password().is_some());
+        if userinfo.unwrap_or(true) {
+            return Posted::NotSent;
+        }
+        let target = match self.target(url).await {
+            Ok(target) => target,
+            Err(Stop::Refused) => return Posted::Refused,
+            Err(Stop::Failed) => return Posted::NotSent,
+        };
+        let request = self
+            .client
+            .post(target)
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body("List-Unsubscribe=One-Click");
+        match request.send().await {
+            Ok(response) if response.status().is_redirection() => Posted::Redirect,
+            Ok(response) => Posted::Answered {
+                status: response.status().as_u16(),
+            },
+            Err(error) if refused(&error) => Posted::Refused,
+            Err(error) if error.is_connect() || error.is_builder() => Posted::NotSent,
+            Err(_) => Posted::NoAnswer,
+        }
+    }
+
+    /// The TXT records of `name`, through the system's DNS servers, or core-sim's fake.
+    async fn lookup_txt(&self, name: &str) -> Txt {
+        if let Some(route) = &self.route {
+            let found = self.client.get(format!("{}/.txt/{name}", route.base)).send().await;
+            let Ok(found) = found else { return Txt::Failed };
+            let Ok(text) = found.text().await else {
+                return Txt::Failed;
+            };
+            let records: Vec<String> = text
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect();
+            return if records.is_empty() {
+                Txt::None
+            } else {
+                Txt::Records(records)
+            };
+        }
+        let Ok(resolver) = TokioResolver::builder_tokio().and_then(|builder| builder.build()) else {
+            return Txt::Failed;
+        };
+        match resolver.txt_lookup(name).await {
+            Ok(lookup) => Txt::Records(
+                lookup
+                    .answers()
+                    .iter()
+                    .filter_map(|record| match &record.data {
+                        RData::TXT(txt) => {
+                            Some(txt.txt_data.iter().map(|part| String::from_utf8_lossy(part)).collect())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            Err(error) if error.is_no_records_found() || error.is_nx_domain() => Txt::None,
+            Err(_) => Txt::Failed,
+        }
+    }
+}
+
+/// Why a request does not go out (`HttpsWeb::target`).
+enum Stop {
+    /// The host's address is not public.
+    Refused,
+    /// The URL has no host, or core-sim's fake could not be asked.
+    Failed,
+}
+
 /// True when a request failed because `PublicOnly` refused its host.
 fn refused(error: &reqwest::Error) -> bool {
     let mut source: Option<&(dyn Error + 'static)> = error.source();
@@ -246,5 +339,15 @@ impl Web for HttpsWeb {
     fn get(&self, url: &str, limit: usize) -> LocalFuture<'_, Fetched> {
         let url = url.to_owned();
         Box::pin(async move { self.fetch(&url, limit).await })
+    }
+
+    fn post_one_click(&self, url: &str) -> LocalFuture<'_, Posted> {
+        let url = url.to_owned();
+        Box::pin(async move { self.post(&url).await })
+    }
+
+    fn txt(&self, name: &str) -> LocalFuture<'_, Txt> {
+        let name = name.to_owned();
+        Box::pin(async move { self.lookup_txt(&name).await })
     }
 }

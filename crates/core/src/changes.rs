@@ -163,6 +163,7 @@ impl<'a> Edit<'a> {
             | Command::SetImages { .. }
             | Command::SetColors { .. }
             | Command::Send { .. }
+            | Command::Unsubscribe { .. }
             | Command::Undo { .. } => None,
         }
     }

@@ -26,12 +26,12 @@ import type { CoreClient, Subscription } from '../src/client.ts'
 
 /** INVALID_HTML as the core passes it on: only what a browser keeps is wrapped. */
 const INVALID_SHOWN = [
-  '<p style="color:var(--letterbox-color-0, #0563c1);color:rgb(0 0 0 .35)">Blue</p>',
+  '<p style="color:var(<prefix>color-0, #0563c1);color:rgb(0 0 0 .35)">Blue</p>',
   '<p style="color:red blue">Dropped</p>',
   '<p style="color:hsl(120, 50, 50)">Legacy hsl without percents</p>',
   '<p style="color:rgb(100%, 0, 0)">Mixed legacy rgb</p>',
-  '<p style="color:var(--letterbox-color-1, rgba(0, 0, 0, .5)) !important">Comma alpha</p>',
-  '<p style="color:var(--letterbox-color-2, hsl(120deg 50% 50% / 50%))">Space hsl</p>',
+  '<p style="color:var(<prefix>color-1, rgba(0, 0, 0, .5)) !important">Comma alpha</p>',
+  '<p style="color:var(<prefix>color-2, hsl(120deg 50% 50% / 50%))">Space hsl</p>',
 ].join('')
 
 const INVALID_PALETTE = [
@@ -42,15 +42,15 @@ const INVALID_PALETTE = [
 
 /** PAIRS_HTML as the core passes it on: the div's bgcolor, which a browser ignores, stays bare. */
 const PAIRS_SHOWN = [
-  '<style>@layer{:where([data-letterbox-bg="3"]){background-color:var(--letterbox-color-3, #ffffff)}',
-  ':where([data-letterbox-bg="5"]){background-color:var(--letterbox-color-5, #000038)}',
-  ':where([data-letterbox-bg="6"]){background-color:var(--letterbox-color-6, #ff0000)}}</style>',
-  '<style>@layer sender{td.layered{background-color:var(--letterbox-color-0, #00ff00)}}',
-  '.badge{background:var(--letterbox-color-1, #1a1a5e);color:var(--letterbox-color-2, #707070)}</style>',
+  '<style>@layer{:where([data-letterbox-bg="3"]){background-color:var(<prefix>color-3, #ffffff)}',
+  ':where([data-letterbox-bg="5"]){background-color:var(<prefix>color-5, #000038)}',
+  ':where([data-letterbox-bg="6"]){background-color:var(<prefix>color-6, #ff0000)}}</style>',
+  '<style>@layer sender{td.layered{background-color:var(<prefix>color-0, #00ff00)}}',
+  '.badge{background:var(<prefix>color-1, #1a1a5e);color:var(<prefix>color-2, #707070)}</style>',
   '<div bgcolor="#ff0000">Ignored</div>',
-  '<table bgcolor="#ffffff" data-letterbox-bg="3"><tr><td bgcolor="#000038" style="color:var(--letterbox-color-4, #888888)" data-letterbox-bg="5">On navy</td>',
+  '<table bgcolor="#ffffff" data-letterbox-bg="3"><tr><td bgcolor="#000038" style="color:var(<prefix>color-4, #888888)" data-letterbox-bg="5">On navy</td>',
   '<td class="layered" bgcolor="#ff0000" data-letterbox-bg="6">Layered</td></tr></table>',
-  '<p style="background:var(--letterbox-color-7, #fff3c4);color:var(--letterbox-color-8, #8a6d00)">A note</p>',
+  '<p style="background:var(<prefix>color-7, #fff3c4);color:var(<prefix>color-8, #8a6d00)">A note</p>',
   '<p><span class="badge">New</span></p>',
 ].join('')
 
@@ -76,12 +76,12 @@ const PAIRS_PALETTE = [
  */
 const ATTRIBUTE_RULES = [
   '<style>@layer{',
-  ':where([data-letterbox-bg="0"]){background-color:var(--letterbox-color-0, #f4efe6)}',
-  ':where([data-letterbox-text="1"]){color:var(--letterbox-color-1, #2f3a38)}',
-  ':where([data-letterbox-link="2"] :link){color:var(--letterbox-color-2, #c8552b)}',
-  ':where([data-letterbox-vlink="3"] :visited){color:var(--letterbox-color-3, #6b716f)}',
-  ':where([data-letterbox-alink="4"] :link:active, [data-letterbox-alink="4"] :visited:active){color:var(--letterbox-color-4, #a84520)}',
-  ':where([data-letterbox-text="2"]){color:var(--letterbox-color-2, #c8552b)}',
+  ':where([data-letterbox-bg="0"]){background-color:var(<prefix>color-0, #f4efe6)}',
+  ':where([data-letterbox-text="1"]){color:var(<prefix>color-1, #2f3a38)}',
+  ':where([data-letterbox-link="2"] :link){color:var(<prefix>color-2, #c8552b)}',
+  ':where([data-letterbox-vlink="3"] :visited){color:var(<prefix>color-3, #6b716f)}',
+  ':where([data-letterbox-alink="4"] :link:active, [data-letterbox-alink="4"] :visited:active){color:var(<prefix>color-4, #a84520)}',
+  ':where([data-letterbox-text="2"]){color:var(<prefix>color-2, #c8552b)}',
   '}</style>',
 ].join('')
 
@@ -89,22 +89,22 @@ const ATTRIBUTE_RULES = [
 const LUMEN_SHOWN = [
   ATTRIBUTE_RULES,
   '<body bgcolor="#F4EFE6" text="#2f3a38" link="#c8552b" vlink="#6b716f" alink="#a84520" data-letterbox-bg="0" data-letterbox-text="1" data-letterbox-link="2" data-letterbox-vlink="3" data-letterbox-alink="4">',
-  '<style>:root{--sender-letterbox-color-0:#ff0000}.essay a:hover{color:var(--letterbox-color-4, #a84520)}',
-  '.button{background:var(--letterbox-color-5, #12423d);color:var(--letterbox-color-6, #f4efe6)}@media (max-width:600px){.story{border-top:1px solid var(--letterbox-color-7, #e2dacb)}}',
-  '.hero{background:var(--letterbox-image-0, none) var(--letterbox-color-5, #12423d)}.mark::before{content:"#ffffff"}</style>',
+  '<style>:root{--letterbox-color-0:#ff0000}.essay a:hover{color:var(<prefix>color-4, #a84520)}',
+  '.button{background:var(<prefix>color-5, #12423d);color:var(<prefix>color-6, #f4efe6)}@media (max-width:600px){.story{border-top:1px solid var(<prefix>color-7, #e2dacb)}}',
+  '.hero{background:var(<prefix>image-0, none) var(<prefix>color-5, #12423d)}.mark::before{content:"#ffffff"}</style>',
   '<div style="display:none;color:rgba(0,0,0,0)">The quiet web.</div>',
   '<table role="presentation" width="100%" bgcolor="f4efe6" data-letterbox-bg="0"><tr><td>',
-  '<table width="600"><tr><td style="color:var(--letterbox-color-3, #6B716F)">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
-  '<tr><td style="background:url(cid:red) var(--letterbox-color-5, #12423d) no-repeat;color:var(--letterbox-color-8, WHITE)">LUMEN</td></tr>',
+  '<table width="600"><tr><td style="color:var(<prefix>color-3, #6B716F)">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
+  '<tr><td style="background:url(cid:red) var(<prefix>color-5, #12423d) no-repeat;color:var(<prefix>color-8, WHITE)">LUMEN</td></tr>',
   `<tr><td style="background-image:image-set('red.png' 1x)">Spring</td></tr>`,
   '<tr><td class="essay"><font color="#c8552b" data-letterbox-text="2">THIS WEEK</font>',
-  '<h1 style="color:var(--letterbox-color-9, #1d2b29)">The quiet web</h1>',
-  '<p style="color:var(--letterbox-color-1, rgb(47, 58, 56))">On slow mornings I read small sites.</p>',
-  '<p><a class="button" href="https://lumen.example/essay" style="border:1px solid var(--letterbox-color-10, hsl(173, 57%, 17%))">Read the essay</a></p></td></tr>',
-  '<tr><td class="story" style="border-top:1px solid var(--letterbox-color-7, #e2dacb);background-color:transparent">Seed swaps are back. <span style="color:var(--accent, var(--letterbox-color-2, #c8552b))">Read</span></td></tr>',
+  '<h1 style="color:var(<prefix>color-9, #1d2b29)">The quiet web</h1>',
+  '<p style="color:var(<prefix>color-1, rgb(47, 58, 56))">On slow mornings I read small sites.</p>',
+  '<p><a class="button" href="https://lumen.example/essay" style="border:1px solid var(<prefix>color-10, hsl(173, 57%, 17%))">Read the essay</a></p></td></tr>',
+  '<tr><td class="story" style="border-top:1px solid var(<prefix>color-7, #e2dacb);background-color:transparent">Seed swaps are back. <span style="color:var(--accent, var(<prefix>color-2, #c8552b))">Read</span></td></tr>',
   '</table></td></tr></table>',
-  '<p style="color:var(--letterbox-color-3, #6b716f)">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
-  ' <span style="color:var(--letterbox-color-11, rgba(0,0,0,.35))">Lumen Media, Bristol</span></p>',
+  '<p style="color:var(<prefix>color-3, #6b716f)">You get Lumen Weekly because you signed up. <a href="https://lumen.example/unsubscribe">Unsubscribe</a>',
+  ' <span style="color:var(<prefix>color-11, rgba(0,0,0,.35))">Lumen Media, Bristol</span></p>',
   '</body>',
 ].join('')
 
@@ -130,13 +130,13 @@ const LUMEN_PALETTE = [
 
 /** HANA_HTML as the core passes it on. */
 const HANA_SHOWN = [
-  '<div style="font:14.5px/21px Arial,sans-serif;color:var(--letterbox-color-0, #222)">',
+  '<div style="font:14.5px/21px Arial,sans-serif;color:var(<prefix>color-0, #222)">',
   '<p>Hi Robin,</p><p>The cover lock moved to <b>Thursday at noon</b>.</p>',
-  '<table style="border-collapse:collapse"><tr><th style="border:1px solid var(--letterbox-color-1, #c8c8c8);background:var(--letterbox-color-2, #f2f2f2)">Step</th>',
-  '<th style="border:1px solid var(--letterbox-color-1, #c8c8c8);background:var(--letterbox-color-2, #f2f2f2)">Date</th></tr>',
-  '<tr><td style="border:1px solid var(--letterbox-color-1, #c8c8c8)">Cover file locked</td><td style="border:1px solid var(--letterbox-color-1, #c8c8c8)">Thu, noon</td></tr></table>',
-  `<p>The quote is on <a href="https://printer.example/portal" style="color:var(--letterbox-color-3, #0563C1)">the printer's portal</a>.</p>`,
-  '<div style="color:var(--letterbox-color-4, #555)"><b style="color:var(--letterbox-color-0, #222)">Hana Sato</b><br><span style="color:var(--letterbox-color-5, #888)">For the named recipients only.</span></div>',
+  '<table style="border-collapse:collapse"><tr><th style="border:1px solid var(<prefix>color-1, #c8c8c8);background:var(<prefix>color-2, #f2f2f2)">Step</th>',
+  '<th style="border:1px solid var(<prefix>color-1, #c8c8c8);background:var(<prefix>color-2, #f2f2f2)">Date</th></tr>',
+  '<tr><td style="border:1px solid var(<prefix>color-1, #c8c8c8)">Cover file locked</td><td style="border:1px solid var(<prefix>color-1, #c8c8c8)">Thu, noon</td></tr></table>',
+  `<p>The quote is on <a href="https://printer.example/portal" style="color:var(<prefix>color-3, #0563C1)">the printer's portal</a>.</p>`,
+  '<div style="color:var(<prefix>color-4, #555)"><b style="color:var(<prefix>color-0, #222)">Hana Sato</b><br><span style="color:var(<prefix>color-5, #888)">For the named recipients only.</span></div>',
   '</div>',
 ].join('')
 
@@ -192,6 +192,16 @@ const seed = (): Seed => ({
 })
 
 type Ready = Extract<Body, { state: 'ready' }>
+
+/** A prefix the core drew: `--letterbox-`, 32 hex digits (128 bits), and a dash. */
+const PREFIX = /^--letterbox-[0-9a-f]{32}-$/
+
+/**
+ * A body's html with its own custom property prefix (`cssPrefix`) written `<prefix>`, as the
+ * expected html writes it. A prefix of the wrong shape is left in, so the comparison fails.
+ */
+const html = (body: Ready) =>
+  PREFIX.test(body.cssPrefix) ? body.html?.replaceAll(body.cssPrefix, '<prefix>') : body.html
 
 /** The first message of an open conversation, whose body must be ready with HTML. */
 function opened(open: Subscription<'thread'>): { message: Message; body: Ready; colors: Colors } {
@@ -257,24 +267,24 @@ scenario('html colors are named with a readable dark value, and each sender keep
   const swatches = (open: Subscription<'thread'>) =>
     opened(open).colors.palette.map(({ role, original, dark }) => [role, original, dark])
   t.equal(
-    [opened(lumen).body.html, swatches(lumen)],
+    [html(opened(lumen).body), swatches(lumen)],
     [LUMEN_SHOWN, LUMEN_PALETTE],
     "each color the newsletter sets is named, in its attributes, its style block and inline, and the sender's own names are renamed",
   )
   t.equal(
-    [opened(hana).body.html, swatches(hana)],
+    [html(opened(hana).body), swatches(hana)],
     [HANA_SHOWN, HANA_PALETTE],
     "each color of the person's mail is named",
   )
   const invalid = await openThread(core, (await thread(core, 'Invalid colors')).id)
   t.equal(
-    [opened(invalid).body.html, swatches(invalid)],
+    [html(opened(invalid).body), swatches(invalid)],
     [INVALID_SHOWN, INVALID_PALETTE],
     'a value a browser drops stays as written, so the declaration before it still holds',
   )
   const pairs = await openThread(core, (await thread(core, 'Pairs')).id)
   t.equal(
-    [opened(pairs).body.html, swatches(pairs)],
+    [html(opened(pairs).body), swatches(pairs)],
     [PAIRS_SHOWN, PAIRS_PALETTE],
     'a bgcolor is named only where a browser honours it, and text is read on the background set beside it',
   )
@@ -286,8 +296,8 @@ scenario('html colors are named with a readable dark value, and each sender keep
   invalid.close()
   pairs.close()
   t.equal(
-    [opened(earlier).body.html, swatches(earlier)],
-    ['<p style="color:var(--letterbox-color-0, #2f3a38)">Last week.</p>', [['text', '#2f3a38', '#cfddda']]],
+    [html(opened(earlier).body), swatches(earlier)],
+    ['<p style="color:var(<prefix>color-0, #2f3a38)">Last week.</p>', [['text', '#2f3a38', '#cfddda']]],
     'the same color has the same dark value in every message',
   )
   t.equal(
@@ -397,9 +407,13 @@ scenario("a sender's choice stays in its account, and goes with it at sign-out",
 })
 
 scenario("every dev seed's html still passes the check on the core's output, with readable dark values", async (t) => {
+  // Each html message alone, in the inbox and under a subject of its own: the bodies are as the
+  // dev seeds have them, without the conversations they reply into.
   const messages = new Map<string, SeedMessage>()
   for (const dev of Object.values(devSeeds))
-    for (const message of dev.seed.messages) if (message.html !== undefined) messages.set(message.key, message)
+    for (const { replyTo: _, ...message } of dev.seed.messages)
+      if (message.html !== undefined)
+        messages.set(message.key, { ...message, mailboxes: ['inbox'], subject: `${message.subject} (${message.key})` })
   const { core } = await start(t, {
     address: ME,
     password: PASSWORD,
@@ -421,8 +435,13 @@ scenario("every dev seed's html still passes the check on the core's output, wit
   t.equal(
     found,
     [
+      ['html-statement-1', false, []],
+      ['person-4-2', false, []],
+      ['html-template-quote', false, []],
+      ['html-statement-2', false, []],
       ['withheld-newsletter', true, null],
       ['html-newsletter', false, []],
+      ['html-issue', false, []],
     ],
     'only the html meant to be withheld is, and every palette keeps the floor',
   )

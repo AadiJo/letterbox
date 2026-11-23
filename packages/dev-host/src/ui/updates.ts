@@ -43,7 +43,9 @@ const yesterday = dayIn(NOW - DAY)
 const lastDays = Array.from({ length: 14 }, (_, index) => dayIn(NOW - (13 - index) * DAY))
 
 /** Mail from machines: every message the seed sends alone, each its own conversation. */
-const automated = seed.seed.messages.filter((message) => /^(auto-|volume-|html-newsletter)/.test(message.key))
+const automated = seed.seed.messages.filter((message) =>
+  /^(auto-|volume-|html-newsletter|html-issue|html-statement|html-template|deep-quote)/.test(message.key),
+)
 const byAddress = Map.groupBy(automated, (message) => addressOf(message.from))
 const unreadSenders = [...byAddress.values()].filter((mail) => mail.some((message) => message.unread === true))
 const unreadMessages = automated.filter((message) => message.unread === true).length

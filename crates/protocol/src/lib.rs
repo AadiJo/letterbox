@@ -36,6 +36,7 @@ mod recipients;
 mod send;
 mod sign_in;
 mod subscribe;
+mod unsubscribe;
 mod your_turn;
 
 pub use answer::{Answer, Empty, False, Never, True};
@@ -58,6 +59,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub use sign_in::{PasswordInput, SignInError, SignInMethod, SignInOption, SignedIn};
 pub use subscribe::{Query, ThreadPage, Update};
 use ts_rs::TS;
+pub use unsubscribe::{UnsubscribeMethod, Unsubscribed};
 pub use your_turn::YourTurn;
 
 pub const PROTOCOL: u32 = 0;

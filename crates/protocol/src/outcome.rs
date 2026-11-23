@@ -19,6 +19,9 @@ pub enum Refusal {
     /// all: a send it could not find there, or a change a sync then showed only part of, or
     /// none. The core does not try it again: that is the user's choice.
     Unconfirmed,
+    /// The URL's host is not on the public internet: loopback, private, link-local or another
+    /// reserved address. Nothing was sent to it.
+    NotPublic,
 }
 
 /// The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.

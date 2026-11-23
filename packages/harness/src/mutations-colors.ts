@@ -133,11 +133,11 @@ export const COLOR_MUTATIONS: Mutation[] = [
     scenarios: ACCOUNTS,
   },
   {
-    name: "a sender sets the core's own color names",
+    name: "a color's variable is named without the body's own prefix, so a sender could set it and the UI's value never reaches it",
     file: body('paint.rs'),
-    find: 'if css.contains("--letterbox-") {',
-    replace: 'if false && css.contains("--letterbox-") {',
-    scenarios: COLORS,
+    find: 'format!("var({}color-{index}, {written})", self.prefix),',
+    replace: 'format!("var(--letterbox-color-{index}, {written})"),',
+    scenarios: RENDERED,
   },
   {
     name: 'a selector with a colon hides the colors in its block',
@@ -199,9 +199,9 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: 'a background image or gradient does not make mail branded',
     file: body('paint.rs'),
-    find: '.any(|image| value.to_ascii_lowercase().contains(image))\n            {\n                self.designed = true;',
+    find: '|| value.contains(&format!("var({}image-", self.prefix)))\n            {\n                self.designed = true;',
     replace:
-      '.any(|image| value.to_ascii_lowercase().contains(image))\n            {\n                self.designed = false;',
+      '|| value.contains(&format!("var({}image-", self.prefix)))\n            {\n                self.designed = false;',
     scenarios: COLORS,
   },
   {
@@ -221,8 +221,8 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: "the colour pass reads the sender's css, not the rewritten one, and brings a remote image back",
     file: body('rewrite.rs'),
-    find: 'let colored = self.paint.css(images.as_deref().unwrap_or(&own), on);',
-    replace: 'let colored = self.paint.css(&own, on);',
+    find: 'let colored = self.paint.css(images.as_deref().unwrap_or(css), on);',
+    replace: 'let colored = self.paint.css(css, on);',
     scenarios: COLORS,
   },
   {
@@ -249,8 +249,8 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: 'the rules version stays, so bodies stored before the colour pass are never named',
     file: body('mod.rs'),
-    find: 'const VERSION: u32 = 5;',
-    replace: 'const VERSION: u32 = 4;',
+    find: 'const VERSION: u32 = 6;',
+    replace: 'const VERSION: u32 = 5;',
     scenarios: 'a stored reading survives a restart',
   },
   {

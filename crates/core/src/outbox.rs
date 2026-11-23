@@ -21,7 +21,7 @@
 //!     change, so the conversation never shows it twice or drops it for a moment.
 //!   - Refused, it stays in its conversation, marked failed with the reason.
 //!   - A forward's attachments are fetched from the original's provider copy each time the
-//!     send is about to go, before it is saved `Sending`, so a fetch that fails, or a core that
+//!     send is about to go (`contents` in forward.rs), before it is saved `Sending`, so a fetch that fails, or a core that
 //!     stops during it, leaves it due. Only the text is saved: the files join it in memory
 //!     (`attach` in mime.rs) under the same headers, so every try sends the same message. A file
 //!     that is gone fails the send. A forward of a send of the user's that the provider does
@@ -37,11 +37,11 @@ use letterbox_protocol::{
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_local;
 
-use crate::adapter::{AdapterFailure, AttachmentResult, BodyResult, MessageRef, Outgoing, SendResult};
+use crate::adapter::{BodyResult, MessageRef, Outgoing, SendResult};
 use crate::clock::{iso, parse};
-use crate::draft::prepare;
+use crate::draft::{Prepared, prepare};
 use crate::effect::Effect;
-use crate::forward::Forward;
+use crate::forward::{Contents, Forward};
 use crate::mime::{File, attach};
 use crate::reconcile::{remove_with_thread, thread_for};
 use crate::sync::{PassResult, Pull};
@@ -65,17 +65,10 @@ pub struct Outbound {
     /// For a forward, what it carries of the original beyond its text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forward: Option<Forward>,
-}
-
-/// What a forward's files come to when it is about to go.
-enum Contents {
-    /// The content of the files it carries, in order. Empty for a send with no files.
-    Ready(Vec<Vec<u8>>),
-    /// The original is a send of the user's that the provider does not hold yet. The forward
-    /// stays due until it does.
-    Waiting,
-    /// The original, or one of its files, is gone, or the original's own send failed.
-    Gone,
+    /// For an unsubscribe that went out as mail, the From address it unsubscribes from. The
+    /// unsubscribe's change became this send, and Updates shows it on that sender (unsubscribe/).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsubscribes: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,8 +122,39 @@ impl Inner {
             Ok(prepared) => prepared,
             Err(reason) => return self.reject(change, reason),
         };
+        let until = self.window_end(&now);
+        let held = Stage::Held { until: until.clone() };
+        let reply_to = draft.in_reply_to.clone();
+        let accepted = |rev| self.accepted(&change, rev);
+        self.store_send(&change, prepared, reply_to, held, None, None, accepted);
+        self.hold(change, &until);
+    }
+
+    /// When an undo window that starts at `now` ends. A send and an unsubscribe wait it out.
+    pub(crate) fn window_end(&self, now: &Time) -> Time {
         let window = TimeDelta::from_std(self.undo_window).unwrap_or(TimeDelta::MAX);
-        let until = iso(parse(&now).checked_add_signed(window).unwrap_or(parse(&now)));
+        iso(parse(now).checked_add_signed(window).unwrap_or(parse(now)))
+    }
+
+    /// Stores a checked send's message and its change, at `stage`, in one commit, and runs
+    /// `announce` after the write. `send_draft` stores a send the user wrote, held, accepted in
+    /// this commit. An unsubscribe that goes out as mail (unsubscribe/) stores its email due,
+    /// under its own change, which keeps the rev it was `accepted` at and gets `unsubscribes`
+    /// naming the sender: the change becomes the send. A pass carries a due one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one fact of the send, and both callers name them all"
+    )]
+    pub(crate) fn store_send(
+        self: &Rc<Self>,
+        change: &ChangeId,
+        prepared: Prepared,
+        reply_to: Option<MessageId>,
+        stage: Stage,
+        unsubscribes: Option<String>,
+        accepted: Option<Rev>,
+        announce: impl FnOnce(Rev),
+    ) -> Rev {
         // Processed before it is stored, so the reply shows whole in the same update that shows
         // it, unless it is large (see `processed_for_send` in body/mod.rs).
         let body = BodyResult::Body { body: prepared.body };
@@ -157,12 +181,13 @@ impl Inner {
                 );
                 let outbound = Outbound {
                     message_id,
-                    stage: Stage::Held { until: until.clone() },
+                    stage,
                     raw: prepared.raw,
                     bcc: prepared.bcc,
                     header_id: prepared.header_id,
-                    reply_to: draft.in_reply_to.clone(),
+                    reply_to,
                     forward: prepared.forward,
+                    unsubscribes,
                 };
                 put_change(
                     world,
@@ -171,14 +196,13 @@ impl Inner {
                         id: change.clone(),
                         account_id: prepared.account_id.clone(),
                         effect: Effect::Send(outbound),
-                        accepted_rev: at,
+                        accepted_rev: accepted.unwrap_or(at),
                         outcome: None,
                     },
                 );
             },
-            |rev| self.accepted(&change, rev),
-        );
-        self.hold(change, &until);
+            announce,
+        )
     }
 
     /// Answers an undo of a send (see undo.rs). Only a send still in its undo window can be
@@ -345,40 +369,6 @@ impl Inner {
                 Ok(())
             }
         }
-    }
-
-    /// The content of a forward's files, fetched from the provider's copy of the original.
-    /// Empty for any other send. A failure here means nothing was sent.
-    async fn contents(&self, linked: &Linked, outbound: &Outbound) -> Result<Contents, AdapterFailure> {
-        let Some(forward) = outbound
-            .forward
-            .as_ref()
-            .filter(|forward| forward.carried().next().is_some())
-        else {
-            return Ok(Contents::Ready(Vec::new()));
-        };
-        let r#ref = {
-            let state = self.state.borrow();
-            let world = &state.world;
-            let original = world.messages.get(&forward.of);
-            match original.map(|record| (&record.origin, &record.body)) {
-                None | Some((_, Some(BodyResult::Gone))) => return Ok(Contents::Gone),
-                Some((Origin::Provider { r#ref }, _)) => r#ref.clone(),
-                // Its send is on its way, so it gets a ref once the provider holds it (`waiting_on`).
-                Some((Origin::Outbox { outbox }, _)) => {
-                    let pending = world.changes.get(outbox).is_some_and(|send| send.outcome.is_none());
-                    return Ok(if pending { Contents::Waiting } else { Contents::Gone });
-                }
-            }
-        };
-        let mut contents = Vec::with_capacity(forward.files.len());
-        for (index, _) in forward.carried() {
-            match linked.adapter.attachment(r#ref.clone(), index).await? {
-                AttachmentResult::Bytes(bytes) => contents.push(bytes),
-                AttachmentResult::Gone => return Ok(Contents::Gone),
-            }
-        }
-        Ok(Contents::Ready(contents))
     }
 
     /// Sends a due message, the one call to `send` it ever gets unless the provider surely did not get it.

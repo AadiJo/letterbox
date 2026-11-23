@@ -28,6 +28,7 @@ import { SCHEDULE_MUTATIONS } from './mutations-schedule.ts'
 import { SEND_MUTATIONS } from './mutations-send.ts'
 import { TURN_MUTATIONS } from './mutations-turns.ts'
 import { UNDO_MUTATIONS } from './mutations-undo.ts'
+import { UNSUBSCRIBE_MUTATIONS } from './mutations-unsubscribe.ts'
 
 const core = (file: string) => `crates/core/src/${file}`
 
@@ -333,8 +334,8 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'a pending change does not mark its threads, so open lists show them unchanged',
     file: core('world.rs'),
-    find: '    touch_effect(&mut world.touched, &world.messages, Some(&record.effect));\n    world.changes.0.insert',
-    replace: '    world.changes.0.insert',
+    find: '    touch_effect(&mut world.touched, &world.messages, Some(&record.effect));\n    note_unsubscribe(world, &record);',
+    replace: '    note_unsubscribe(world, &record);',
     scenarios: 'each list filter agrees',
   },
   {
@@ -430,5 +431,6 @@ await runBreaks([
   ...SCHEDULE_MUTATIONS,
   ...NETWORK_MUTATIONS,
   ...BODY_MUTATIONS,
+  ...UNSUBSCRIBE_MUTATIONS,
   ...COLOR_MUTATIONS,
 ])

@@ -70,10 +70,13 @@ pub struct Changed {
 pub enum Refresh {
     /// Every row, because something every row reads changed. Every view answers again.
     Everything,
-    /// The rows of the threads a commit touched. `changed` lists the ones whose row is different now.
+    /// The rows of the threads a commit touched. `changed` lists the ones whose row is different
+    /// now. `unsubscribes` is true when an unsubscribe moved on, which changes what Updates
+    /// shows of its sender and no row (see `Touched::unsubscribes`).
     Threads {
         touched: IndexSet<ThreadId>,
         changed: Vec<Changed>,
+        unsubscribes: bool,
     },
 }
 
@@ -117,6 +120,7 @@ impl Rows {
         Refresh::Threads {
             touched: touched.threads,
             changed,
+            unsubscribes: touched.unsubscribes,
         }
     }
 

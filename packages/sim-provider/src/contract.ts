@@ -65,6 +65,12 @@ export type SeedMessage = {
     listUnsubscribe?: boolean | string
     /** List-Unsubscribe-Post's value, for example "List-Unsubscribe=One-Click". */
     listUnsubscribePost?: string
+    /**
+     * List-Unsubscribe's name as the raw source writes it, such as `List-Unsubscribe ` (a space
+     * before the colon), for a provider whose parser reads that as the field. Defaults to
+     * `List-Unsubscribe`. The facts report the value under the field either way.
+     */
+    listUnsubscribeField?: string
     listId?: boolean
     precedence?: string
     autoSubmitted?: string
@@ -73,6 +79,11 @@ export type SeedMessage = {
   bulk?: boolean
   /** Its attachments: a number of placeholder files, or files as named. Defaults to 0. */
   attachments?: number | readonly SeedAttachment[]
+  /**
+   * Signs its raw source with the sim's DKIM key (raw.ts) as `domain` and `selector`, over the
+   * headers `signs` names, lowercase, or over SIGNED_HEADERS. Unsigned when left out.
+   */
+  dkim?: { domain: string; selector: string; signs?: readonly string[] }
 }
 
 /** One attachment a seed names, as a mail client would show it. */
@@ -105,6 +116,8 @@ export type CallCounts = {
   changes: number
   body: number
   attachment: number
+  /** Whole messages fetched, as an unsubscribe's DKIM check does. */
+  raw: number
   apply: number
   send: number
   find: number

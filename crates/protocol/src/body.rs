@@ -37,8 +37,15 @@ pub enum Body {
         /// the text before its quote, or from the HTML's text before its quote when the text is
         /// blank. A folded message row shows it.
         preview: String,
+        /// The start of every CSS custom property name the core writes into `html`, such as
+        /// `--letterbox-0123456789abcdef0123456789abcdef-`. A remote CSS image is
+        /// `var(<cssPrefix>image-i, none)`, and a color `var(<cssPrefix>color-N, <its own>)`
+        /// (see `Colors`), which the UI sets on the frame's root. The core
+        /// draws it at random as it processes the body, and the sender never sees the result,
+        /// so the sender's CSS cannot declare or read these names.
+        css_prefix: String,
         /// How to color `html` in a dark reader. None when `html` is.
-        colors: Option<Colors>,
+        colors: Option<Box<Colors>>,
     },
     Loading,
     Unavailable {
@@ -69,7 +76,7 @@ pub struct Images {
     ///   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` carries
     ///     `data-letterbox-image="i"` and no longer names the URL,
     ///   - an element whose `background` attribute named one carries `data-letterbox-background="i"`,
-    ///   - a CSS `url()` is `var(--letterbox-image-i, none)`.
+    ///   - a CSS `url()` is `var(<cssPrefix>image-i, none)` (see `Body::Ready::css_prefix`).
     ///
     /// While `shown` is not `blocked`, the UI asks for each with `Request::Image` and puts the
     /// bytes in as a `data:` URL.
@@ -116,7 +123,7 @@ pub enum TrackerReason {
 /// The bytes of one remote image, after its `chunk` messages, which carry them as base64.
 ///
 /// The UI binds them through DOM APIs only: it sets the placeholder element's `src` (or
-/// `poster`, `href`) to a `data:` URL, or a `--letterbox-image-i` custom property on the
+/// `poster`, `href`) to a `data:` URL, or a `<cssPrefix>image-i` custom property on the
 /// frame's root with `style.setProperty`. It never writes them into CSS text the sender wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct ImageFile {
@@ -172,9 +179,9 @@ pub enum Unsubscribe {
     /// says `List-Unsubscribe=One-Click`.
     OneClick {
         url: String,
-        /// True once a DKIM signature that covers List-Unsubscribe and List-Unsubscribe-Post is
-        /// verified, as RFC 8058 requires before a POST. The core does not check that yet, so
-        /// it is always false.
+        /// Always false here: the core checks the DKIM signature RFC 8058 requires only when the
+        /// user unsubscribes, so reading mail fetches nothing more. An unsubscribe whose check
+        /// fails goes out as mailto or web instead (see `Command::Unsubscribe`).
         verified: bool,
     },
     /// An email to `to`, from a `mailto:` URI in List-Unsubscribe. `uri` is the whole URI, with
@@ -195,7 +202,7 @@ pub enum UnsubscribeSource {
 }
 
 /// How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
-/// with `var(--letterbox-color-N, <its own color>)`, where N is the color's index in `palette`:
+/// with `var(<cssPrefix>color-N, <its own color>)`, where N is the color's index in `palette`:
 /// in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
 /// (`background`, gradients too) and borders (`border*`, `outline`). A color longhand whose
 /// value is not just colors the core reads stays as written, so a browser still drops an
@@ -203,12 +210,12 @@ pub enum UnsubscribeSource {
 /// or `<body text>`, `link`, `vlink` or `alink` set one carries `data-letterbox-bg`, `-text`,
 /// `-link`, `-vlink` or `-alink` naming its N. A `<style>` at the start of `html` applies it
 /// from an anonymous cascade layer, so every rule of the sender's still wins where it did over
-/// the attribute. A custom property the sender named `--letterbox-…` is renamed
-/// `--sender-letterbox-…`, so only the UI sets these.
+/// the attribute. The prefix is the body's own (`Body::Ready::css_prefix`), so the sender's CSS
+/// can neither set nor read these names.
 ///
 /// With nothing set, the HTML shows the sender's own colors (`original`). For `dark`, the UI sets
-/// each `--letterbox-color-N` to its swatch's `dark` on the frame's root, with
-/// `style.setProperty`, as it does for images, and gives the frame its own dark defaults for what
+/// each `${cssPrefix}color-${N}` to its swatch's `dark` on the frame's root, the same way it sets
+/// `${cssPrefix}image-${i}`, and gives the frame its own dark defaults for what
 /// the HTML leaves unset (the page, text and links). Those go in a cascade layer declared before
 /// `html`, so they rank below every rule of the sender's and the core's.
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]

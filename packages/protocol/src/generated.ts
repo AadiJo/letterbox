@@ -146,6 +146,15 @@ quote: Quote | null,
  */
 preview: string, 
 /**
+ * The start of every CSS custom property name the core writes into `html`, such as
+ * `--letterbox-0123456789abcdef0123456789abcdef-`. A remote CSS image is
+ * `var(<cssPrefix>image-i, none)`, and a color `var(<cssPrefix>color-N, <its own>)`
+ * (see `Colors`), which the UI sets on the frame's root. The core
+ * draws it at random as it processes the body, and the sender never sees the result,
+ * so the sender's CSS cannot declare or read these names.
+ */
+cssPrefix: string, 
+/**
  * How to color `html` in a dark reader. None when `html` is.
  */
 colors: Colors | null, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
@@ -170,7 +179,7 @@ shown: ShowImages,
  *   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` carries
  *     `data-letterbox-image="i"` and no longer names the URL,
  *   - an element whose `background` attribute named one carries `data-letterbox-background="i"`,
- *   - a CSS `url()` is `var(--letterbox-image-i, none)`.
+ *   - a CSS `url()` is `var(<cssPrefix>image-i, none)` (see `Body::Ready::css_prefix`).
  *
  * While `shown` is not `blocked`, the UI asks for each with `Request::Image` and puts the
  * bytes in as a `data:` URL.
@@ -232,9 +241,9 @@ inConversation: boolean, };
  */
 export type Unsubscribe = { "method": "one-click", url: string, 
 /**
- * True once a DKIM signature that covers List-Unsubscribe and List-Unsubscribe-Post is
- * verified, as RFC 8058 requires before a POST. The core does not check that yet, so
- * it is always false.
+ * Always false here: the core checks the DKIM signature RFC 8058 requires only when the
+ * user unsubscribes, so reading mail fetches nothing more. An unsubscribe whose check
+ * fails goes out as mailto or web instead (see `Command::Unsubscribe`).
  */
 verified: boolean, } | { "method": "mailto", to: string, uri: string, } | { "method": "web", url: string, from: UnsubscribeSource, };
 
@@ -247,7 +256,7 @@ export type UnsubscribeSource = "header" | "body";
  * The bytes of one remote image, after its `chunk` messages, which carry them as base64.
  *
  * The UI binds them through DOM APIs only: it sets the placeholder element's `src` (or
- * `poster`, `href`) to a `data:` URL, or a `--letterbox-image-i` custom property on the
+ * `poster`, `href`) to a `data:` URL, or a `<cssPrefix>image-i` custom property on the
  * frame's root with `style.setProperty`. It never writes them into CSS text the sender wrote.
  */
 export type ImageFile = { 
@@ -264,7 +273,7 @@ export type ImageError = "gone" | "blocked" | "refused" | "too-large" | "unreach
 
 /**
  * How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
- * with `var(--letterbox-color-N, <its own color>)`, where N is the color's index in `palette`:
+ * with `var(<cssPrefix>color-N, <its own color>)`, where N is the color's index in `palette`:
  * in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
  * (`background`, gradients too) and borders (`border*`, `outline`). A color longhand whose
  * value is not just colors the core reads stays as written, so a browser still drops an
@@ -272,12 +281,12 @@ export type ImageError = "gone" | "blocked" | "refused" | "too-large" | "unreach
  * or `<body text>`, `link`, `vlink` or `alink` set one carries `data-letterbox-bg`, `-text`,
  * `-link`, `-vlink` or `-alink` naming its N. A `<style>` at the start of `html` applies it
  * from an anonymous cascade layer, so every rule of the sender's still wins where it did over
- * the attribute. A custom property the sender named `--letterbox-…` is renamed
- * `--sender-letterbox-…`, so only the UI sets these.
+ * the attribute. The prefix is the body's own (`Body::Ready::css_prefix`), so the sender's CSS
+ * can neither set nor read these names.
  *
  * With nothing set, the HTML shows the sender's own colors (`original`). For `dark`, the UI sets
- * each `--letterbox-color-N` to its swatch's `dark` on the frame's root, with
- * `style.setProperty`, as it does for images, and gives the frame its own dark defaults for what
+ * each `${cssPrefix}color-${N}` to its swatch's `dark` on the frame's root, the same way it sets
+ * `${cssPrefix}image-${i}`, and gives the frame its own dark defaults for what
  * the HTML leaves unset (the page, text and links). Those go in a cascade layer declared before
  * `html`, so they rank below every rule of the sender's and the core's.
  */
@@ -332,6 +341,19 @@ export type ColorRole = "text" | "background" | "border";
 
 export type Attachment = { blobId: BlobId, name: string, mime: string, size: number, inline: boolean, };
 
+/**
+ * Where the user's unsubscribe from a sender has got, on its row in Updates. The core keeps it
+ * per account and per From address, so it is a display state only: it decides nothing about
+ * which mail arrives. A row has none before the user unsubscribes, and again once that try was
+ * undone or failed, so the UI offers the button again then.
+ */
+export type Unsubscribed = { "state": "held", change: ChangeId, until: string, method: UnsubscribeMethod, } | { "state": "sending", change: ChangeId, method: UnsubscribeMethod, } | { "state": "done", change: ChangeId, method: UnsubscribeMethod, } | { "state": "page", change: ChangeId, url: string, };
+
+/**
+ * How an unsubscribe goes out, or went out.
+ */
+export type UnsubscribeMethod = "one-click" | "mailto" | "web";
+
 export type ThreadFilter = { 
 /**
  * Leave out to list every account together.
@@ -379,7 +401,8 @@ export type SenderId = Id<'Sender'>;
  * conversation is automated when its newest message from someone else is (see turns.rs in
  * the core). Its sender is that message's address, compared without case, so news@ and
  * no-reply@ of one company are two senders. To act on all of a sender's conversations, list
- * them with `sender` in a threads filter and send one command naming their ids.
+ * them with `sender` in a threads filter and send one command naming their ids: an Archive all
+ * after an unsubscribe archives `threads` conversations holding `messages` messages.
  */
 export type SenderSummary = { id: SenderId, accountId: AccountId, 
 /**
@@ -404,7 +427,12 @@ days: Array<SenderDay>,
  * How to unsubscribe, from the message the row's name and address come from: its
  * List-Unsubscribe header, or else a link in its body if that has loaded.
  */
-unsubscribe: Unsubscribe | null, };
+unsubscribe: Unsubscribe | null, 
+/**
+ * The user's unsubscribe from this address, while it is held, on its way or done. None
+ * when there is none, or the last one was undone or failed.
+ */
+unsubscribed: Unsubscribed | null, };
 
 /**
  * One day of a sender's mail in Updates: how many messages were sent that day, and how many
@@ -444,10 +472,10 @@ export type Recipient = { name: string | null, address: string, lastAt: string, 
 export type ChangeHolder = { threadId: ThreadId | null, };
 
 /**
- * A user intent. Every command but set-images and set-colors acts on whole threads.
+ * A user intent. Every command but set-images, set-colors and unsubscribe acts on whole threads.
  * Only set-turn, set-images and set-colors work with read-only access, because they never leave the device.
  */
-export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "set-colors", messageId: MessageId, scheme: ColorScheme, } | { "kind": "undo", change: ChangeId, };
+export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "set-colors", messageId: MessageId, scheme: ColorScheme, } | { "kind": "unsubscribe", messageId: MessageId, } | { "kind": "undo", change: ChangeId, };
 
 /**
  * The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.
@@ -496,7 +524,7 @@ export type Delivery = { "state": "held", change: ChangeId, until: string, } | {
 /**
  * Why the core or the provider said no.
  */
-export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed";
+export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed" | "not-public";
 
 /**
  * The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.

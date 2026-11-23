@@ -3,7 +3,6 @@
 //! any `data-letterbox-` attribute the sender wrote is dropped, a marker comment goes before
 //! the element where the quote starts, and every color is named (paint.rs).
 
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -13,7 +12,7 @@ use lol_html::{RewriteStrSettings, element, end_tag, rewrite_str, text};
 use super::color::Rgba;
 use super::fetch::MAX_IMAGES;
 use super::html::{attribute, image_attribute, set};
-use super::paint::{self, Painter};
+use super::paint::Painter;
 use super::trackers::{self, Reason};
 use crate::maps::HashMap;
 
@@ -30,6 +29,8 @@ fn delete(element: &mut Element<'_, '_>) {
 /// What pass 2 found.
 #[derive(Default)]
 pub(super) struct Found {
+    /// The start of the custom property names it writes (see `Body::Ready::css_prefix`).
+    pub(super) prefix: String,
     pub(super) remote: Vec<String>,
     /// Each URL in `remote` and its index, so a lookup does not walk the list.
     places: HashMap<String, usize>,
@@ -48,6 +49,15 @@ enum Verdict {
 }
 
 impl Found {
+    /// Nothing found yet, with `prefix` for the custom property names pass 2 writes.
+    pub(super) fn with_prefix(prefix: &str) -> Found {
+        Found {
+            prefix: prefix.to_owned(),
+            paint: Painter::with_prefix(prefix),
+            ..Found::default()
+        }
+    }
+
     /// Sorts one remote URL: a tracker when `reason` is set, else a remote image, listed once.
     fn sort(&mut self, url: &url::Url, reason: Option<Reason>) -> Verdict {
         if let Some(reason) = reason {
@@ -73,7 +83,7 @@ impl Found {
         Some(self.sort(&url, reason))
     }
 
-    /// The CSS with each tracker `none` and each remote image `var(--letterbox-image-i, none)`.
+    /// The CSS with each tracker `none` and each remote image `var(<prefix>image-i, none)`.
     /// None when it names no remote image.
     fn css(&mut self, css: &str) -> Option<String> {
         let mut changes = Vec::new();
@@ -81,23 +91,20 @@ impl Found {
             let replacement = match self.judge(&found.url) {
                 None => continue,
                 Some(Verdict::Drop) => "none".to_owned(),
-                Some(Verdict::Place(index)) => format!("var(--letterbox-image-{index}, none)"),
+                Some(Verdict::Place(index)) => format!("var({}image-{index}, none)", self.prefix),
             };
             changes.push((found.start, found.end, replacement));
         }
         (!changes.is_empty()).then(|| trackers::replace(css, &changes))
     }
 
-    /// CSS as pass 2 writes it: the sender's `--letterbox-` names renamed, each remote image
-    /// a placeholder (`css`) and each color named (paint.rs), text against `on`, the background
-    /// its element sets, for a style attribute. None when it is unchanged.
+    /// CSS as pass 2 writes it: each remote image a placeholder (`css`), then each color named
+    /// (paint.rs), text against `on`, the background its element sets, for a style attribute.
+    /// None when it is unchanged.
     fn restyle(&mut self, css: &str, on: Option<Rgba>) -> Option<String> {
-        let own = paint::own(css);
-        let images = self.css(&own);
-        let colored = self.paint.css(images.as_deref().unwrap_or(&own), on);
-        colored
-            .or(images)
-            .or_else(|| matches!(own, Cow::Owned(_)).then(|| own.into_owned()))
+        let images = self.css(css);
+        let colored = self.paint.css(images.as_deref().unwrap_or(css), on);
+        colored.or(images)
     }
 
     /// A srcset without its remote candidates, each judged, trackers with `element` too. A

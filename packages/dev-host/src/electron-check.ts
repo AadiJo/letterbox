@@ -439,7 +439,7 @@ if (failure === null) {
 }
 await part(stateRun)
 await server?.close().catch(() => undefined)
-await sim?.provider.close().catch(() => undefined)
+await sim?.close()
 await stopChildren()
 
 const host = readFileSync(join(STATE, 'host.log'), 'utf8')

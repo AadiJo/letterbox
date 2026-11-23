@@ -103,7 +103,7 @@ scenario('a stored reading survives a restart, and a rules change reprocesses on
       ),
     ),
     [
-      ['First', 5],
+      ['First', 6],
       ['Second', 3],
     ],
     'only the body that opened was processed again: the other keeps its old reading until it opens',

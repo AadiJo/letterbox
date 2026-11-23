@@ -58,6 +58,14 @@ pub struct Message {
     pub payload: Option<Part>,
 }
 
+/// users.messages.get with format=raw: the whole message, base64url. "Returns the full email
+/// message data with body content in the raw field as a base64url encoded string."
+#[derive(Debug, Deserialize)]
+pub struct RawMessage {
+    #[serde(default)]
+    pub raw: String,
+}
+
 /// One MIME part. The top-level part carries the message headers.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
