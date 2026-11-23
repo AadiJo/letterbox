@@ -1,5 +1,6 @@
 // The one origin the renderer loads from: Vite serves the renderer, `/core` is a WebSocket
-// to a core-sim of its own, and `/dev/deliver` adds new mail at the sim provider.
+// to a core-sim of its own, and `/dev/deliver` adds new mail at the sim provider. Each core
+// fetches remote images from the sim's fake web, when it has one.
 //
 // Each WebSocket gets a fresh core over the shared dev store. The store allows one core at a
 // time, so a new tab, or a reload, stops the core of the tab before it. In the desktop loop
@@ -16,6 +17,8 @@ import { listen } from './port.ts'
 export type Sim = {
   /** The seed's fixed time: core-sim's --now, and the time the renderer measures ages from. */
   now: string
+  /** The fake web's URL, core-sim's --web, which serves the seed's images. Without it every image fetch fails. */
+  web?: string
   /** Adds `count` new automated messages at the sim provider. */
   deliver(count: number): void
 }
@@ -50,7 +53,7 @@ const MAX_DELIVER = 500
 const REPLACED = 4000
 
 /** Relays each `/core` WebSocket to its own core, one at a time. */
-function coreRelay(paths: Paths, now: string, flags: () => readonly string[]) {
+function coreRelay(paths: Paths, sim: Sim, flags: () => readonly string[]) {
   let current: { socket: WebSocket; core: Promise<CoreProcess> } | undefined
 
   /** Takes over the store for `socket`: stops the previous tab's core, then starts this one's. */
@@ -65,7 +68,7 @@ function coreRelay(paths: Paths, now: string, flags: () => readonly string[]) {
         previous.socket.close(REPLACED, 'another tab opened the core')
         await (await previous.core).stop()
       }
-      const next = startCore(paths, now, flags())
+      const next = startCore(paths, sim.now, [...(sim.web === undefined ? [] : ['--web', sim.web]), ...flags()])
       next.onLine((line) => socket.send(line))
       void next.exited.then(() => socket.close(1011, 'the core exited'))
       for (const line of early.splice(0)) next.send(line)
@@ -120,7 +123,7 @@ const deliverRoute =
  */
 export async function startServer(options: ServerOptions): Promise<DevServer> {
   const http = createHttpServer()
-  const relay = options.relay ? coreRelay(options.paths, options.sim.now, options.coreFlags ?? (() => [])) : undefined
+  const relay = options.relay ? coreRelay(options.paths, options.sim, options.coreFlags ?? (() => [])) : undefined
   const sockets = new WebSocketServer({ noServer: true })
   if (relay) sockets.on('connection', relay.connect)
 

@@ -34,7 +34,12 @@ pub trait Environment {
     /// was made, such as a pull being in the account's queue, before it takes the next step.
     fn noted(&self, _what: Noted) {}
     /// A number another device is unlikely to draw. Each Message-ID the core writes holds one.
+    /// Unique, not secret: it is not drawn from a cryptographic source.
     fn random(&self) -> u64;
+    /// 128 bits no one can predict, from the operating system's cryptographic random source.
+    /// The body pipeline's CSS prefix is one (body/mod.rs), which mail must not be able to
+    /// guess. None if the source fails, and then the caller does without.
+    fn secret(&self) -> Option<[u8; 16]>;
 }
 
 /// A decision of the sync schedule's, for `Environment::noted`.
@@ -126,6 +131,12 @@ impl Environment for SystemEnvironment {
     fn random(&self) -> u64 {
         // std seeds every RandomState from the system's random source, so its hash of a constant is random.
         RandomState::new().hash_one(0u8)
+    }
+
+    fn secret(&self) -> Option<[u8; 16]> {
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes).ok()?;
+        Some(bytes)
     }
 }
 
@@ -300,6 +311,14 @@ impl Environment for FixedEnvironment {
     fn random(&self) -> u64 {
         self.draws.set(self.draws.get() + 1);
         self.draws.get()
+    }
+
+    /// Two more draws, so a run's secrets repeat run to run as its other draws do.
+    fn secret(&self) -> Option<[u8; 16]> {
+        let mut bytes = [0; 16];
+        bytes[..8].copy_from_slice(&self.random().to_be_bytes());
+        bytes[8..].copy_from_slice(&self.random().to_be_bytes());
+        Some(bytes)
     }
 }
 

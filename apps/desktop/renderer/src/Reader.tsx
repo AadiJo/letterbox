@@ -1,7 +1,8 @@
 // The open conversation, in the reading column: the subject, one line for whose turn it is
 // (in Let go?, how long it waited), its labels and how many messages, then the messages.
-// Earlier messages fold to one line each and the newest is open, as is any reply of the user's
-// still on its way or not sent. Bodies load through the core's thread view. The reply bar ends
+// Earlier messages fold to one line each, previewing their new text, and the newest is open, as
+// is any reply of the user's still on its way or not sent. An open message's address line ends
+// in its images chip, and I shows the images of the newest open one whose images are off. Bodies load through the core's thread view. The reply bar ends
 // it; while the user writes, the editor docks below and the subject stays pinned above.
 
 import type { Message, MessageId, Person, ThreadDetail, ThreadId, TurnState } from '@letterbox/protocol'
@@ -16,6 +17,8 @@ import { DeliveryMark, NotSent } from './Delivery.tsx'
 import { useNow } from './clock.ts'
 import { useLost } from './core.ts'
 import { useComposer } from './drafts.ts'
+import { imagesOff, useShowImagesKey } from './images.ts'
+import { ImagesChip } from './ImagesChip.tsx'
 import { LabelChip, useLabels } from './Label.tsx'
 import { useShownPending, useUndone } from './sending.ts'
 import { otherPerson, personName } from './Row.tsx'
@@ -42,6 +45,14 @@ function Conversation({ id, mail, waited }: { id: ThreadId; mail: Mail; waited: 
   const [scrolled, setScrolled] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   useStickToEnd(scroller, docked)
+  const isOpen = (message: Message) =>
+    message.id === thread?.messages.at(-1)?.id || message.delivery !== null || opened.has(message.id)
+  // I shows the images of the newest open message whose images are off.
+  useShowImagesKey(
+    thread?.messages.findLast(
+      (message) => isOpen(message) && message.body.state === 'ready' && imagesOff(message.body.images),
+    ),
+  )
   if (thread === undefined) return null
   if (thread === null)
     return (
@@ -51,7 +62,6 @@ function Conversation({ id, mail, waited }: { id: ThreadId; mail: Mail; waited: 
     )
 
   const count = `${thread.messageCount} ${thread.messageCount === 1 ? 'message' : 'messages'}`
-  const newest = thread.messages.at(-1)?.id
   const turn =
     thread.turn.holder === 'none' ? null : waited ? (
       <Waited thread={thread} now={now} />
@@ -99,7 +109,7 @@ function Conversation({ id, mail, waited }: { id: ThreadId; mail: Mail; waited: 
             </header>
             <div className="mt-3 border-t border-line wide:mt-6">
               {thread.messages.map((message) =>
-                message.id === newest || message.delivery || opened.has(message.id) ? (
+                isOpen(message) ? (
                   <OpenMessage key={message.id} thread={thread} message={message} now={now} />
                 ) : (
                   <FoldedMessage
@@ -248,7 +258,8 @@ const known = (thread: ThreadDetail, person: Person) =>
 type FoldedProps = { from: Person; message: Message; now: number; onOpen: () => void }
 
 function FoldedMessage({ from, message, now, onOpen }: FoldedProps) {
-  const preview = message.body.state === 'ready' ? message.body.text.replace(/\s+/g, ' ').trim() : ''
+  // The core's preview is the new text alone, never the history it quotes.
+  const preview = message.body.state === 'ready' ? message.body.preview : ''
   return (
     <button
       type="button"
@@ -261,7 +272,9 @@ function FoldedMessage({ from, message, now, onOpen }: FoldedProps) {
       </span>
       <Avatar who={from} size="folded" />
       <span className="flex-none text-row font-semibold whitespace-nowrap text-fg2">{who(from)}</span>
-      <span className="min-w-0 flex-1 truncate text-row text-muted">{preview}</span>
+      <span className="min-w-0 flex-1 truncate text-row text-muted" data-field="preview">
+        {preview}
+      </span>
       <span className="text-meta whitespace-nowrap text-muted tabular-nums" data-field="message-time">
         {messageTime(message.sentAt, now)}
       </span>
@@ -298,15 +311,18 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
               </span>
             )}
           </div>
-          <div className="truncate text-addr text-muted">
-            {[from.address, ...(to.length > 0 ? [`to ${to.join(', ')}`] : [])].join(' · ')}
+          <div className="flex min-w-0 items-center gap-1.5 text-addr text-muted">
+            <span className="truncate">
+              {[from.address, ...(to.length > 0 ? [`to ${to.join(', ')}`] : [])].join(' · ')}
+            </span>
+            <ImagesChip key={message.id} message={message} />
           </div>
         </div>
       </div>
       {delivery?.state === 'failed' && <NotSent thread={thread} message={message} delivery={delivery} />}
       {/* On its way, the reply reads a step quieter than mail the provider holds. */}
       <div className={`mt-[18px] ${going ? 'opacity-70' : ''}`}>
-        <Body body={message.body} />
+        <Body key={message.id} id={message.id} body={message.body} />
         {/* Its files can be fetched only once the provider holds the message. */}
         <Attachments attachments={message.attachments} held={delivery === null} />
       </div>

@@ -50,7 +50,7 @@ use crate::effect::Effect;
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, World, put_change, put_message, scoped};
 
 /// The version of the rules. Raise it whenever a change to them would change a `Processed`.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 /// The most characters a preview holds.
 const PREVIEW: usize = 200;
@@ -107,6 +107,9 @@ struct Processed {
     withheld: bool,
     /// An unsubscribe link in the body.
     link: Option<String>,
+    /// The start of the CSS custom property names in `html` (see `Body::Ready::css_prefix`).
+    #[serde(default)]
+    css_prefix: String,
 }
 
 /// Where a body's quote starts, in UTF-16 code units, in the text and in the HTML.
@@ -117,12 +120,18 @@ struct Folded {
     html: Option<u64>,
 }
 
-/// Runs the pipeline on one body.
-fn process(body: &RemoteBody) -> Processed {
+/// Runs the pipeline on one body, naming its CSS custom properties with `prefix`. Without a
+/// prefix, its HTML is withheld.
+fn process(body: &RemoteBody, prefix: Option<String>) -> Processed {
     let units = |text: &str, at: usize| text[..at].encode_utf16().count() as u64;
     let text_quote = quote::text(&body.text);
     let new_text = &body.text[..text_quote.unwrap_or(body.text.len())];
-    let html = body.html.as_deref().and_then(html::process);
+    let html = body
+        .html
+        .as_deref()
+        .zip(prefix.as_deref())
+        .and_then(|(html, prefix)| html::process(html, prefix));
+    let prefix = prefix.unwrap_or_default();
     let text_link = || unsubscribe::link_in_text(new_text);
     let text_at = text_quote.map(|at| units(&body.text, at));
     let Some(html) = html else {
@@ -138,6 +147,7 @@ fn process(body: &RemoteBody) -> Processed {
             preview: preview_of(new_text),
             link: text_link(),
             withheld: body.html.is_some(),
+            css_prefix: prefix,
         };
     };
     let html_at = html.quote.map(|at| units(&html.html, at));
@@ -159,6 +169,7 @@ fn process(body: &RemoteBody) -> Processed {
         remote: html.remote,
         trackers: html.trackers,
         withheld: false,
+        css_prefix: prefix,
     }
 }
 
@@ -229,6 +240,7 @@ pub fn ready(world: &World, record: &MessageRecord, body: &RemoteBody) -> Body {
         }),
         preview: processed.preview.clone(),
         html_withheld: processed.withheld,
+        css_prefix: processed.css_prefix.clone(),
     }
 }
 
@@ -245,13 +257,20 @@ pub fn unsubscribe_of(record: &MessageRecord) -> Option<Unsubscribe> {
 }
 
 impl Inner {
-    /// `reading` with `body` processed now. A gone body leaves it as it is.
+    /// `reading` with `body` processed now. A gone body leaves it as it is. Each processing
+    /// draws a new CSS prefix of 128 bits from `Environment::secret`: the operating system's
+    /// cryptographic source in the app, a counter on the test clock, so a scenario's runs stay
+    /// the same. Should the source fail, the HTML is withheld, as for HTML the core cannot make safe.
     pub(crate) fn processed_now(&self, body: &BodyResult, reading: Reading) -> Reading {
         let BodyResult::Body { body } = body else {
             return reading;
         };
         self.meter.processed();
-        reading.with(process(body))
+        let prefix = self.env.secret().map(|bytes| {
+            let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            format!("--letterbox-{hex}-")
+        });
+        reading.with(process(body, prefix))
     }
 
     /// A sent body's reading: processed now when it is at most SEND_LIMIT, else left for

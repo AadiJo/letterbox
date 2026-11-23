@@ -3,42 +3,92 @@
 //   8 conversations where it is my turn, 1 hour to 26 days old
 //   12 where I am waiting on them, 2 hours to 29 days old
 //   27 turns older than 30 days, some mine and some theirs
-// The people and their letters are in people-mail.ts. Receipts, travel mail and some
-// conversations carry labels (Projects, Home, Receipts, Travel), and one newsletter is HTML
-// that tries to run script and load remote content, which the reader must block.
+// The people and their letters are in people-mail.ts, two of which quote the history before
+// them, one in plain text and one in HTML. Receipts, travel mail and some conversations carry
+// labels (Projects, Home, Receipts, Travel). The HTML mail, hostile and branded, is in people-html.ts.
 // Every name, address and company here is made up.
 
 import type { SeedAddress, SeedMessage } from '../contract.ts'
 import type { DevSeed, PersonConversation } from '../seeds.ts'
-import { agesOf, CONVERSATIONS, type Conversation, ME, PEOPLE } from './people-mail.ts'
-
-const NOW = '2026-03-09T16:00:00.000Z'
-
-const HOUR = 3_600_000
-const DAY = 24 * HOUR
-
-/** The time `ms` before NOW. */
-const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString()
+import { HTML_MAIL, IMAGES } from './people-html.ts'
+import { agesOf, ago, CONVERSATIONS, type Conversation, DAY, ME, NOW, PEOPLE } from './people-mail.ts'
 
 /** Whose turn a conversation is: theirs when I wrote last, mine when they did. */
 const turnOf = (conversation: Conversation) => (conversation.says.at(-1)?.me ? 'theirs' : 'mine')
+
+/** A message as a later one quotes it: who wrote it, when, and what it said. */
+type Written = { from: { name: string; address: string }; sentAt: string; text: string }
+
+/** "On Mon, Feb 16, 2026 at 4:40 PM, Robin Vale <robin@vale.test> wrote:", as Gmail writes it, in UTC. */
+const attribution = ({ from, sentAt }: Written) => {
+  const at = new Date(sentAt)
+  const day = at.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+  const time = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' })
+  // Newer ICU puts a narrow no-break space before AM and PM. Mail clients write a plain one.
+  return `On ${day} at ${time.replace(/\s/g, ' ')}, ${from.name} <${from.address}> wrote:`
+}
+
+/** `earlier`, newest last, quoted in plain text: each one's attribution, then its lines behind `>`, nesting the rest. */
+const quotedText = (earlier: readonly Written[]): string => {
+  const last = earlier.at(-1)
+  if (!last) return ''
+  const rest = quotedText(earlier.slice(0, -1))
+  const body = rest === '' ? last.text : `${last.text}\n\n${rest}`
+  return `${attribution(last)}\n${body
+    .split('\n')
+    .map((line) => (line === '' ? '>' : `> ${line}`))
+    .join('\n')}`
+}
+
+const escaped = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+const paragraphs = (text: string) =>
+  text
+    .split('\n\n')
+    .map((paragraph) => `<p>${escaped(paragraph).replaceAll('\n', '<br>')}</p>`)
+    .join('')
+
+/** `earlier`, newest last, quoted as Gmail's HTML quotes it: a gmail_quote block, each one nested in the next. */
+const quotedHtml = (earlier: readonly Written[]): string => {
+  const last = earlier.at(-1)
+  if (!last) return ''
+  return (
+    `<div class="gmail_quote"><div class="gmail_attr">${escaped(attribution(last))}<br></div>` +
+    '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">' +
+    `${paragraphs(last.text)}${quotedHtml(earlier.slice(0, -1))}</blockquote></div>`
+  )
+}
 
 /** The messages of one conversation, oldest first, each answering all before it. */
 const conversation = (spec: Conversation, number: number): SeedMessage[] => {
   const them = PEOPLE[spec.with]
   const keys = spec.says.map((_, index) => `person-${number}-${index}`)
   const ages = agesOf(spec)
+  const written = spec.says.map((say, index): Written => ({
+    from: say.me ? ME : them,
+    sentAt: ago(ages[index] ?? spec.age),
+    text: say.text,
+  }))
   return spec.says.map((say, index): SeedMessage => {
     const mine = say.me === true
     const from: SeedAddress = mine ? ME : them
     const to: SeedAddress = mine ? them : ME
+    const earlier = written.slice(0, index)
     return {
       key: keys[index] ?? `person-${number}-${index}`,
       mailboxes: [mine ? 'sent' : 'inbox', ...(spec.label ? [spec.label] : [])],
       from,
       to: [to],
       subject: index === 0 ? spec.subject : `Re: ${spec.subject}`,
-      text: say.text,
+      text: say.quotes ? `${say.text}\n\n${quotedText(earlier)}` : say.text,
+      ...(say.quotes === 'html' && {
+        html: `<div dir="ltr">${paragraphs(say.text)}${say.logo ? `<p><img src="${say.logo.url}" width="160" height="32" alt="${escaped(say.logo.alt)}"></p>` : ''}</div>${quotedHtml(earlier)}`,
+      }),
       sentAt: ago(ages[index] ?? spec.age),
       unread: !mine && index === spec.says.length - 1 && spec.unread === true,
       replyTo: keys.slice(0, index),
@@ -188,68 +238,6 @@ const automated = (index: number, sentAt: string): SeedMessage => {
   }
 }
 
-/**
- * An HTML newsletter that tries what hostile mail tries: a script, an inline handler, a
- * tracking pixel, a remote stylesheet, DNS-prefetch and preconnect hints (one in a noscript, one
- * in an iframe's srcdoc), a remote font and a link to a remote page. The `probe` paragraph keeps its
- * text only if none of it ran, and the dev host's UI check reads it. A preconnect also hides in text
- * around a deleted element, which must never join into a tag. The core takes the pixel out, blocks the
- * cover image until the user shows images, and reads the one-click unsubscribe from its headers.
- */
-const htmlNewsletter: SeedMessage = {
-  key: 'html-newsletter',
-  mailboxes: ['inbox'],
-  from: { name: 'The Long Read', address: 'newsletter@longread.example' },
-  to: [ME],
-  subject: 'Five essays for the weekend',
-  text: 'Five essays for the weekend. Read them in your browser.',
-  html: [
-    '<link rel="stylesheet" href="https://styles.longread.example/mail.css">',
-    '<link rel="dns-prefetch" href="//prefetch.longread.example"><link rel="preconnect" href="https://connect.longread.example">',
-    '<noscript><link rel="preconnect" href="https://noscript.longread.example"></noscript>',
-    '<iframe srcdoc="&lt;link rel=preconnect href=https://srcdoc.longread.example&gt;"></iframe>',
-    '<<iframe></iframe>link rel=dns-prefetch href=//joined.longread.example>',
-    '<style>@font-face{font-family:Remote;src:url(https://fonts.longread.example/serif.woff2)}h1{font-family:Remote,Georgia,serif}</style>',
-    '<h1>Five essays for the weekend</h1>',
-    '<img src="https://images.longread.example/cover.jpg" width="560" height="280" alt="This week\'s cover">',
-    '<p id="probe">Nothing in this message ran.</p>',
-    '<p>On slow mornings, small gardens and the quiet web.</p>',
-    '<p><a id="out" href="https://read.longread.example/essays">Read in your browser</a></p>',
-    '<p><a href="https://longread.example/unsubscribe?u=1">Unsubscribe</a></p>',
-    '<img src="https://pixel.longread.example/open.gif" width="1" height="1" alt="">',
-    '<img src="missing.png" alt="" onerror="document.getElementById(\'probe\').textContent=\'A handler ran.\'">',
-    "<script>document.getElementById('probe').textContent='A script ran.';top.postMessage('script ran','*')</script>",
-  ].join(''),
-  sentAt: ago(40 * 60_000),
-  unread: true,
-  headers: {
-    listUnsubscribe: '<mailto:leave@longread.example>, <https://longread.example/unsubscribe?u=1>',
-    listUnsubscribePost: 'List-Unsubscribe=One-Click',
-    listId: true,
-    precedence: 'bulk',
-  },
-  bulk: true,
-}
-
-/**
- * HTML the core withholds, with no plain part: its one image is an SVG feImage, which the core's
- * rewrite does not placeholder, so the check on its output keeps the HTML from the reader. The
- * reader says so instead of showing nothing.
- */
-const withheldNewsletter: SeedMessage = {
-  key: 'withheld-newsletter',
-  mailboxes: ['inbox'],
-  from: { name: 'The Long Read', address: 'newsletter@longread.example' },
-  to: [ME],
-  subject: 'A layout we could not show',
-  text: '',
-  html: '<svg><filter><feImage href="https://images.longread.example/f.png"/></filter></svg><p>Hidden.</p>',
-  sentAt: ago(41 * 60_000),
-  unread: false,
-  headers: { listUnsubscribe: true, listId: true, precedence: 'bulk' },
-  bulk: true,
-}
-
 const people = CONVERSATIONS.flatMap(conversation)
 // Spread over the last 120 days, oldest first, the newest 30 minutes before NOW.
 const machines = Array.from({ length: AUTOMATED }, (_, index) =>
@@ -271,11 +259,10 @@ export const peopleFirst: DevSeed = {
       { key: 'receipts', name: 'Receipts', role: null },
       { key: 'travel', name: 'Travel', role: null },
     ],
-    messages: [...people, ...machines, htmlNewsletter, withheldNewsletter].toSorted((a, b) =>
-      a.sentAt.localeCompare(b.sentAt),
-    ),
+    messages: [...people, ...machines, ...HTML_MAIL].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
   },
   delivery: (n) => automated(AUTOMATED + n, NOW),
+  images: IMAGES,
   conversations: CONVERSATIONS.map((spec): PersonConversation => ({
     subject: spec.subject,
     turn: turnOf(spec),

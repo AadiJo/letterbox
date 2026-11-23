@@ -1479,6 +1479,7 @@ dependencies = [
  "chrono-tz",
  "foldhash",
  "fs4",
+ "getrandom 0.4.3",
  "html-escape",
  "indexmap",
  "letterbox-protocol",

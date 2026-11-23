@@ -144,7 +144,15 @@ quote: Quote | null,
  * the text before its quote, or from the HTML's text before its quote when the text is
  * blank. A folded message row shows it.
  */
-preview: string, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
+preview: string, 
+/**
+ * The start of every CSS custom property name the core writes into `html`, such as
+ * `--letterbox-0123456789abcdef0123456789abcdef-`. A remote CSS image is
+ * `var(<cssPrefix>image-i, none)`, which the UI sets on the frame's root. The core
+ * draws it at random as it processes the body, and the sender never sees the result,
+ * so the sender's CSS cannot declare or read these names.
+ */
+cssPrefix: string, } | { "state": "loading" } | { "state": "unavailable", reason: Unavailable, };
 
 export type Unavailable = "offline" | "too-large" | "gone";
 
@@ -166,7 +174,7 @@ shown: ShowImages,
  *   - an image `<input>`, a `<video>`'s poster or an SVG `<image>` carries
  *     `data-letterbox-image="i"` and no longer names the URL,
  *   - an element whose `background` attribute named one carries `data-letterbox-background="i"`,
- *   - a CSS `url()` is `var(--letterbox-image-i, none)`.
+ *   - a CSS `url()` is `var(<cssPrefix>image-i, none)` (see `Body::Ready::css_prefix`).
  *
  * While `shown` is not `blocked`, the UI asks for each with `Request::Image` and puts the
  * bytes in as a `data:` URL.
@@ -243,7 +251,7 @@ export type UnsubscribeSource = "header" | "body";
  * The bytes of one remote image, after its `chunk` messages, which carry them as base64.
  *
  * The UI binds them through DOM APIs only: it sets the placeholder element's `src` (or
- * `poster`, `href`) to a `data:` URL, or a `--letterbox-image-i` custom property on the
+ * `poster`, `href`) to a `data:` URL, or a `<cssPrefix>image-i` custom property on the
  * frame's root with `style.setProperty`. It never writes them into CSS text the sender wrote.
  */
 export type ImageFile = { 

@@ -20,7 +20,7 @@ import { type GmailFake, startFakeGmail } from '@letterbox/sim-provider/gmail'
 import type { Options } from '@letterbox/client'
 import { type CoreClient, startCore, type TranscriptEntry } from './client.ts'
 import { type Edge, leaks, lifecycle, SIM_KEYCHAIN, storeLeaks } from './invariants.ts'
-import { type FakeWeb, startFakeWeb } from './web.ts'
+import { type FakeWeb, startFakeWeb } from '@letterbox/sim-provider/web'
 
 /** What one run of a scenario talks to: a sim dialect, or the fake Gmail. */
 export type Run = Dialect | 'gmail'
@@ -40,7 +40,7 @@ export type Scenario = {
   keychain(): string[]
   /** Locks or unlocks core-sim's stand-in keychain. While locked, every call to it fails, and what it held is kept for the unlock. */
   lockKeychain(locked: boolean): void
-  /** The fake web the core fetches remote images from, and unsubscribes through (web.ts). */
+  /** The fake web the core fetches remote images from, and unsubscribes through (@letterbox/sim-provider/web). */
   web: Pick<FakeWeb, 'serve' | 'resolve' | 'txt' | 'hold' | 'requested' | 'posted' | 'lookups'>
   /**
    * Runs one SQL statement on the core's store and returns its rows. Only while no core runs:

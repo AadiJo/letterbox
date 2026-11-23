@@ -26,6 +26,8 @@ fn delete(element: &mut Element<'_, '_>) {
 /// What pass 2 found.
 #[derive(Default)]
 pub(super) struct Found {
+    /// The start of the custom property names it writes (see `Body::Ready::css_prefix`).
+    pub(super) prefix: String,
     pub(super) remote: Vec<String>,
     /// Each URL in `remote` and its index, so a lookup does not walk the list.
     places: HashMap<String, usize>,
@@ -42,6 +44,14 @@ enum Verdict {
 }
 
 impl Found {
+    /// Nothing found yet, with `prefix` for the custom property names pass 2 writes.
+    pub(super) fn with_prefix(prefix: &str) -> Found {
+        Found {
+            prefix: prefix.to_owned(),
+            ..Found::default()
+        }
+    }
+
     /// Sorts one remote URL: a tracker when `reason` is set, else a remote image, listed once.
     fn sort(&mut self, url: &url::Url, reason: Option<Reason>) -> Verdict {
         if let Some(reason) = reason {
@@ -67,7 +77,7 @@ impl Found {
         Some(self.sort(&url, reason))
     }
 
-    /// The CSS with each tracker `none` and each remote image `var(--letterbox-image-i, none)`.
+    /// The CSS with each tracker `none` and each remote image `var(<prefix>image-i, none)`.
     /// None when it names no remote image.
     fn css(&mut self, css: &str) -> Option<String> {
         let mut changes = Vec::new();
@@ -75,7 +85,7 @@ impl Found {
             let replacement = match self.judge(&found.url) {
                 None => continue,
                 Some(Verdict::Drop) => "none".to_owned(),
-                Some(Verdict::Place(index)) => format!("var(--letterbox-image-{index}, none)"),
+                Some(Verdict::Place(index)) => format!("var({}image-{index}, none)", self.prefix),
             };
             changes.push((found.start, found.end, replacement));
         }

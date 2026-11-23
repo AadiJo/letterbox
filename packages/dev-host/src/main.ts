@@ -4,8 +4,9 @@
 //   node packages/dev-host/src/main.ts [--seed people-first] [--port <n>] [--state <dir>]
 //                                      [--desktop [--core sim|gmail]]
 //
-// Builds core-sim, starts the sim provider with a named seed (packages/sim-provider/src/seeds.ts),
-// signs a core in to it, and serves the renderer through Vite with `/core` relayed to a core.
+// Builds core-sim, starts the sim provider with a named seed (packages/sim-provider/src/seeds.ts)
+// and the fake web with the seed's images, signs a core in to the provider, and serves the
+// renderer through Vite with `/core` relayed to a core. Every sim core fetches images from the fake web.
 // Prints one line, `[dev] http://127.0.0.1:<port>/`, once the page is ready.
 //
 // With --desktop it serves the renderer with `/core` off and opens it in the Electron shell
@@ -39,13 +40,12 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { devSeeds, isDevSeedName } from '@letterbox/sim-provider/seeds'
 import { localSocket } from '@letterbox/sim-provider/socket'
-import type { SimProvider } from '@letterbox/sim-provider/contract'
 import { type Child, exited, killChildrenNow, logChildrenTo, stopChild, stopChildren } from './children.ts'
 import { buildCore, type Paths } from './core.ts'
 import { launchDesktop, missingDisplay } from './desktop.ts'
 import { portFor } from './port.ts'
 import { type DevServer, startServer } from './server.ts'
-import { startSim } from './sim.ts'
+import { type RunningSim, startSim } from './sim.ts'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url)).replace(/\/$/, '')
 
@@ -137,17 +137,17 @@ writeFileSync(lock, String(process.pid))
 logChildrenTo(join(state, 'host.log'))
 
 let stopping: Promise<void> | undefined
-let provider: SimProvider | undefined
+let running: RunningSim | undefined
 let server: DevServer | undefined
 let desktop: Child | undefined
 
-/** Stops the app, the server, the provider and every child, then exits with `code`. Safe to call more than once. */
+/** Stops the app, the server, the provider, the fake web and every child, then exits with `code`. Safe to call more than once. */
 const shutdown = (code: number) => {
   stopping ??= (async () => {
-    // The app and the server first: they stop the cores, which are still talking to the provider.
+    // The app and the server first: they stop the cores, which are still talking to the provider and the web.
     if (desktop) await stopChild(desktop)
     await server?.close().catch(() => undefined)
-    await provider?.close().catch(() => undefined)
+    await running?.close()
     await stopChildren()
     rmSync(lock, { force: true })
     process.exit(code)
@@ -161,8 +161,7 @@ process.on('exit', killChildrenNow)
 
 try {
   if (!values.desktop) {
-    const running = await startSim(paths, devSeed)
-    provider = running.provider
+    running = await startSim(paths, devSeed)
     server = await startServer({ paths, port, relay: true, sim: running.sim })
     console.log(`[dev] ${server.url}`)
   } else {
@@ -174,10 +173,10 @@ try {
       // The renderer starts Gmail's OAuth sign-in when no account is signed in (apps/desktop/renderer/src/dev.ts).
       desktop = await launchDesktop(paths, `${server.url}?sign-in=oauth`, { kind: 'gmail', client }, shellLog)
     } else {
-      const running = await startSim(paths, devSeed)
-      provider = running.provider
+      running = await startSim(paths, devSeed)
       server = await startServer({ paths, port, relay: false, sim: running.sim })
-      desktop = await launchDesktop(paths, server.url, { kind: 'sim', now: devSeed.now }, shellLog)
+      const simCore = { kind: 'sim', now: devSeed.now, web: running.web.url } as const
+      desktop = await launchDesktop(paths, server.url, simCore, shellLog)
     }
     const app = desktop
     console.log(`[dev] desktop ${server.url}`)

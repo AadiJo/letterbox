@@ -12,6 +12,7 @@ const UNSUBSCRIBE = 'unsubscribe targets come from the headers'
 const QUOTES = 'the quote at the end of a body'
 const PROCESSING = 'a stored reading survives a restart'
 const FROM = 'on gmail, a comment in From'
+const PREFIX = 'a random prefix the sender cannot name'
 
 export const BODY_MUTATIONS: Mutation[] = [
   {
@@ -74,7 +75,7 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'a remote CSS image keeps its URL instead of becoming a placeholder',
     file: body('rewrite.rs'),
-    find: '                Some(Verdict::Place(index)) => format!("var(--letterbox-image-{index}, none)"),',
+    find: '                Some(Verdict::Place(index)) => format!("var({}image-{index}, none)", self.prefix),',
     replace: '                Some(Verdict::Place(_)) => continue,',
     scenarios: IMAGES,
   },
@@ -132,9 +133,16 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: 'a body read by the earlier rules reaches the frame with its old html',
     file: body('mod.rs'),
-    find: 'const VERSION: u32 = 4;',
+    find: 'const VERSION: u32 = 5;',
     replace: 'const VERSION: u32 = 3;',
     scenarios: PROCESSING,
+  },
+  {
+    name: 'the CSS prefix is fixed, so a sender can write the names a shown image is set on',
+    file: body('mod.rs'),
+    find: 'format!("--letterbox-{hex}-")',
+    replace: 'String::from("--letterbox-")',
+    scenarios: PREFIX,
   },
   {
     name: 'a deleted element leaves nothing, so the text around it joins into a tag',

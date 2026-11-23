@@ -31,6 +31,8 @@ mail-auth = { version = "0.16.0", default-features = false, features = ["dns-hic
 psl = "2.1.261"
 # Decodes the subject and body a mailto unsubscribe names (RFC 6068), where + is not a space.
 percent-encoding = "2.3"
+# The operating system's cryptographic random source, for the body pipeline's CSS prefix (clock.rs).
+getrandom = "0.4"
 # WHATWG URL parsing, as browsers do it, for the hosts of remote images and unsubscribe targets.
 url = "2.5.8"
 

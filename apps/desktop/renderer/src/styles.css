@@ -69,8 +69,14 @@
   --text-addr--line-height: 18px;
   --text-row: 13px;
   --text-row--line-height: 18px;
+  /* A quote's attribution, "On … wrote:", in an opened quoted history (Body.tsx). */
+  --text-cite: 13px;
+  --text-cite--line-height: 19px;
   --text-subject: 14px;
   --text-subject--line-height: 20px;
+  /* The text of an opened quoted history. */
+  --text-quote: 14px;
+  --text-quote--line-height: 22px;
   --text-body: 16px;
   --text-body--line-height: 26px;
   --text-head: 17px;

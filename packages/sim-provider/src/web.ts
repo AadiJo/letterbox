@@ -8,6 +8,8 @@
 // set, and none for any other name. A one-click unsubscribe's POST comes as a POST, which the
 // fake answers from the same table and keeps apart from the GETs (`posted`).
 // A scenario can hold a URL's answer, to act while the core waits for it.
+// The dev host (packages/dev-host) runs one too, serving a dev seed's images, so `pnpm dev`,
+// `pnpm dev:desktop` and the UI check show images through the same fetch path.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
