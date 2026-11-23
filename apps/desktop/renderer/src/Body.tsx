@@ -7,6 +7,7 @@ import type { Body as MessageBody, Images, MessageId, Quote } from '@letterbox/p
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { cx } from './cx.ts'
+import { frameDom } from './frame-dom.ts'
 import { bindImages, useImageUrls } from './images.ts'
 
 /**
@@ -54,9 +55,17 @@ const UNAVAILABLE = {
 /** Shown when the core withheld a message's HTML and the message has no plain text. */
 const WITHHELD = "This message's formatting couldn't be shown safely."
 
-/** One message's body, by its id, which shown images are fetched for. */
+/** A comment no sender can have written, which marks where the quote starts in a frame's document. */
+const quoteMarker = () =>
+  `letterbox-quote-${Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(16)).join('')}`
+
+/**
+ * One message's body, by its id, which shown images are fetched for. A reader keys it by that
+ * id, so nothing in it, the frame, its images or the open quote, carries over to another message.
+ */
 export function Body({ id, body }: { id: MessageId; body: MessageBody }) {
   const [quoteOpen, setQuoteOpen] = useState(false)
+  const [marker] = useState(quoteMarker)
   const urls = useImageUrls(id, body.state === 'ready' ? body.images : null)
   if (body.state === 'loading') return <p className="text-row text-muted">Loading the message</p>
   if (body.state === 'unavailable') return <p className="text-row text-muted">{UNAVAILABLE[body.reason]}</p>
@@ -64,14 +73,23 @@ export function Body({ id, body }: { id: MessageId; body: MessageBody }) {
   if (body.html !== null) {
     // The new part is a prefix the core cut before an element, which the browser closes by itself.
     const cut = body.quote?.html ?? null
+    const frame = { images: body.images, urls, prefix: body.cssPrefix }
     return (
       <>
-        <HtmlBody
-          html={cut === null || quoteOpen ? body.html : body.html.slice(0, cut)}
-          images={body.images}
-          urls={urls}
-        />
+        <HtmlBody {...frame} title="Message" html={cut === null ? body.html : body.html.slice(0, cut)} />
         {cut !== null && body.quote && line(body.quote)}
+        {/* Open, the quote shows under its line in a frame of its own: the whole body, with
+            everything before the quote taken out, so it keeps the sender's wrappers and styles. */}
+        {cut !== null && quoteOpen && (
+          <div className="mt-3.5">
+            <HtmlBody
+              {...frame}
+              title="Quoted history"
+              html={`${body.html.slice(0, cut)}<!--${marker}-->${body.html.slice(cut)}`}
+              prepare={(doc) => frameDom.keepFrom(doc, marker)}
+            />
+          </div>
+        )}
       </>
     )
   }
@@ -104,30 +122,40 @@ export function Body({ id, body }: { id: MessageId; body: MessageBody }) {
 
 const paragraphsOf = (text: string) => text.split(/\n\s*\n/).filter((paragraph) => paragraph.trim() !== '')
 
-type HtmlProps = { html: string; images: Images; urls: ReadonlyMap<number, string> }
+type HtmlProps = {
+  title: 'Message' | 'Quoted history'
+  html: string
+  images: Images
+  urls: ReadonlyMap<number, string>
+  /** The body's `cssPrefix`, which names its CSS images. */
+  prefix: string
+  /** Runs on each document the frame loads, before it is measured. */
+  prepare?: (doc: Document) => void
+}
 
-function HtmlBody({ html, images, urls }: HtmlProps) {
+function HtmlBody({ title, html, images, urls, prefix, prepare }: HtmlProps) {
   const [height, setHeight] = useState(0)
   const [frame, setFrame] = useState<Document | null>(null)
   // Shown images go in as they arrive, and again after the frame loads a new document. The frame
-  // is as tall as its body, measured as each document loads (a folded quote's is shorter) and
-  // as each image put in it loads.
+  // is as tall as its whole document (frame-dom.ts), measured as each document loads and as each
+  // image put in it loads.
   useEffect(() => {
-    if (frame) bindImages(frame, urls, () => setHeight(frame.body.scrollHeight))
-  }, [frame, urls])
+    if (frame) bindImages(frame, urls, prefix, () => setHeight(frameDom.height(frame)))
+  }, [frame, urls, prefix])
   return (
     <iframe
       // Blocking again needs the placeholders back, so a new choice loads a fresh document.
       key={images.shown}
-      title="Message"
-      data-field="body"
+      title={title}
+      data-field={title === 'Message' ? 'body' : 'quoted-body'}
       sandbox="allow-same-origin"
       referrerPolicy="no-referrer"
       srcDoc={htmlDocument(html)}
       onLoad={(event) => {
         const document = event.currentTarget.contentDocument
+        if (document) prepare?.(document)
         setFrame(document)
-        setHeight(document?.body.scrollHeight ?? 0)
+        setHeight(document ? frameDom.height(document) : 0)
       }}
       className="block w-full rounded-lg bg-paper"
       style={{ height }}
@@ -179,11 +207,17 @@ type Block = { kind: 'text'; text: string } | { kind: 'quote'; blocks: Block[] }
 /** The quote markers at a line's start: ">", "> >", ">>". */
 const MARKERS = /^(?:[ \t]*>)+[ \t]?/
 
-/** Plain quoted text as blocks, by how many `>` start each line. */
+/** The most levels an opened quote shows. Text quoted deeper shows at the deepest. */
+const MAX_DEPTH = 8
+
+/**
+ * Plain quoted text as blocks, by how many `>` start each line, at most MAX_DEPTH, so a quote
+ * of any depth nests no further than that.
+ */
 function blocksOf(text: string): Block[] {
   const lines = text.split('\n').map((line) => {
     const markers = MARKERS.exec(line)?.[0] ?? ''
-    return { depth: markers.split('>').length - 1, text: line.slice(markers.length) }
+    return { depth: Math.min(markers.split('>').length - 1, MAX_DEPTH), text: line.slice(markers.length) }
   })
   const at = (from: number, to: number, depth: number): Block[] => {
     const blocks: Block[] = []

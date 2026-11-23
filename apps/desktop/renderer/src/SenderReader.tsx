@@ -305,7 +305,7 @@ function OpenMessage({ id, sender, now }: { id: ThreadId; sender: SenderSummary;
         </div>
       </div>
       <div className="mt-[18px]">
-        <Body id={message.id} body={message.body} />
+        <Body key={message.id} id={message.id} body={message.body} />
         {/* Its files can be fetched only once the provider holds the message. */}
         <Attachments attachments={message.attachments} held={message.delivery === null} />
       </div>

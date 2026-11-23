@@ -9,6 +9,7 @@
 import type { Images, Message, MessageId, ShowImages } from '@letterbox/protocol'
 import { useEffect, useEffectEvent, useState } from 'react'
 import { command, requestBytes } from './core.ts'
+import { frameDom } from './frame-dom.ts'
 import { typing } from './Screen.tsx'
 
 /** The key that shows the images of the open message whose images are off. */
@@ -81,43 +82,47 @@ export function useImageUrls(messageId: MessageId, images: Images | null): Reado
 
 /**
  * Puts each image in `urls` where the core left its placeholder in the frame's document `doc`
- * (protocol `Images`). An `<img>`'s placeholder span becomes an `<img>` made in that document,
- * with the span's alt text and size, and `loaded` runs once it has loaded, as the body's height
- * may have changed. An image input, a video's poster or an SVG image gets the URL in its own
- * attribute, an old `background` attribute gets it back, and a CSS image is the custom property
- * `--letterbox-image-<i>` on the root. Safe to call again as more arrive.
+ * (protocol `Images`), through `frameDom` only, since the sender's markup can shadow the
+ * document's own methods. An `<img>`'s placeholder span becomes an `<img>` made in that
+ * document, with the span's alt text and size, and `loaded` runs once it has loaded, as the
+ * frame's height may have changed. An image input, a video's poster or an SVG image gets the
+ * URL in its own attribute, an old `background` attribute gets it back, and a CSS image is the
+ * custom property `<prefix>image-<i>` on the root, where `prefix` is the body's random
+ * `cssPrefix`, which the sender's CSS cannot name. Safe to call again as more arrive.
  */
-export function bindImages(doc: Document, urls: ReadonlyMap<number, string>, loaded: () => void) {
+export function bindImages(doc: Document, urls: ReadonlyMap<number, string>, prefix: string, loaded: () => void) {
   if (urls.size === 0) return
-  const at = (element: Element, name: string) => urls.get(Number(element.getAttribute(name)))
-  for (const element of doc.querySelectorAll('[data-letterbox-image]')) {
+  const at = (element: Element, name: string) => urls.get(Number(frameDom.get(element, name)))
+  for (const element of frameDom.all(doc, '[data-letterbox-image]')) {
     const url = at(element, 'data-letterbox-image')
     if (url === undefined) continue
-    if (element.localName === 'span') {
-      const image = doc.createElement('img')
-      image.setAttribute('src', url)
-      image.setAttribute('alt', element.textContent ?? '')
+    const name = frameDom.localName(element)
+    if (name === 'span') {
+      const image = frameDom.create(doc, 'img')
+      frameDom.set(image, 'src', url)
+      frameDom.set(image, 'alt', frameDom.text(element) ?? '')
       for (const side of ['width', 'height']) {
-        const size = element.getAttribute(`data-letterbox-${side}`)
-        if (size !== null) image.setAttribute(side, size)
+        const size = frameDom.get(element, `data-letterbox-${side}`)
+        if (size !== null) frameDom.set(image, side, size)
       }
+      // The image is the frame's own, made here, so no sender markup sits on it to shadow this.
       image.addEventListener('load', loaded, { once: true })
-      element.replaceWith(image)
+      frameDom.replace(element, image)
     } else {
       // The frame's elements come from another document, so their names, not their classes, say what they are.
-      const attribute = { video: 'poster', image: 'href' }[element.localName] ?? 'src'
-      element.setAttribute(attribute, url)
-      element.removeAttribute('data-letterbox-image')
+      const attribute = { video: 'poster', image: 'href' }[name] ?? 'src'
+      frameDom.set(element, attribute, url)
+      frameDom.unset(element, 'data-letterbox-image')
     }
   }
-  for (const element of doc.querySelectorAll('[data-letterbox-background]')) {
+  for (const element of frameDom.all(doc, '[data-letterbox-background]')) {
     const url = at(element, 'data-letterbox-background')
     if (url === undefined) continue
-    element.setAttribute('background', url)
-    element.removeAttribute('data-letterbox-background')
+    frameDom.set(element, 'background', url)
+    frameDom.unset(element, 'data-letterbox-background')
   }
   // A data: URL of base64 holds no quote, so it cannot end the url() early.
-  for (const [index, url] of urls) doc.documentElement.style.setProperty(`--letterbox-image-${index}`, `url("${url}")`)
+  for (const [index, url] of urls) frameDom.setProperty(doc, `${prefix}image-${index}`, `url("${url}")`)
 }
 
 /** While the reader shows `message`, I shows its images if they are off. */

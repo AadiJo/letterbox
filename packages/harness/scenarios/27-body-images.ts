@@ -87,33 +87,40 @@ const REMOTE = [
   'https://cdn.shop.example/promo.jpg',
 ]
 
-/** The html a UI shows, in every state: each remote image a placeholder that names its place in REMOTE. */
 /** What each deleted element leaves, so the text on its two sides never meets (rewrite.rs). */
 const GONE = '<!---->'
 
-const HTML = [
-  // The three links, the meta, the noscript's preconnect and refresh, and the five embedded documents.
-  GONE.repeat(11),
-  `<svg><foreignObject>${GONE}</foreignObject></svg><template>${GONE}</template>`,
-  // The base.
-  GONE,
-  '<table><tr><td data-letterbox-background="0">',
-  '<span data-letterbox-image="1" data-letterbox-width="600">Winter sale</span>',
-  '<img src="cid:logo" alt="Shop">',
-  '<p style="background-image:var(--letterbox-image-2, none)">Everything is on sale.</p>',
-  '<video data-letterbox-image="3"></video>',
-  '<input type="image" alt="Shop now">',
-  '<svg><image width="20" height="20" data-letterbox-image="4" /></svg>',
-  '<span data-letterbox-image="5">Promo</span>',
-  '</td></tr></table>',
-  // The tiny tracker that was in the noscript.
-  GONE,
-  '<img src="rel/photo.png" alt="Relative">',
-  `<div style="background-image:image-set('https://cdn.shop.example/set.png' 1x)">Set</div>`,
-  // The seven trackers.
-  GONE.repeat(7),
-  '<div style="background:none">Thanks for reading.</div>',
-].join('')
+/**
+ * The html a UI shows, in every state: each remote image a placeholder that names its place in
+ * REMOTE, a CSS one by a name that starts with the body's own `prefix` (`Body.ready.cssPrefix`).
+ */
+const htmlWith = (prefix: string) =>
+  [
+    // The three links, the meta, the noscript's preconnect and refresh, and the five embedded documents.
+    GONE.repeat(11),
+    `<svg><foreignObject>${GONE}</foreignObject></svg><template>${GONE}</template>`,
+    // The base.
+    GONE,
+    '<table><tr><td data-letterbox-background="0">',
+    '<span data-letterbox-image="1" data-letterbox-width="600">Winter sale</span>',
+    '<img src="cid:logo" alt="Shop">',
+    `<p style="background-image:var(${prefix}image-2, none)">Everything is on sale.</p>`,
+    '<video data-letterbox-image="3"></video>',
+    '<input type="image" alt="Shop now">',
+    '<svg><image width="20" height="20" data-letterbox-image="4" /></svg>',
+    '<span data-letterbox-image="5">Promo</span>',
+    '</td></tr></table>',
+    // The tiny tracker that was in the noscript.
+    GONE,
+    '<img src="rel/photo.png" alt="Relative">',
+    `<div style="background-image:image-set('https://cdn.shop.example/set.png' 1x)">Set</div>`,
+    // The seven trackers.
+    GONE.repeat(7),
+    '<div style="background:none">Thanks for reading.</div>',
+  ].join('')
+
+/** A prefix the core drew: `--letterbox-`, 32 hex digits (128 bits), and a dash. */
+const PREFIX = /^--letterbox-[0-9a-f]{32}-$/
 
 const newsletter = (
   key: string,
@@ -259,8 +266,8 @@ scenario('trackers leave an html body for good, and its remote images wait until
     'it lists the remote images and the trackers taken out, the one in a noscript and the one in a src beside a srcset too',
   )
   t.equal(
-    first.body.html,
-    HTML,
+    [first.body.html, PREFIX.test(first.body.cssPrefix)],
+    [htmlWith(first.body.cssPrefix), true],
     'each remote image is a placeholder, and the base, every embedded document, every hint and every tracker are gone',
   )
   const framed = bodyOf(await openThread(core, (await thread(core, 'Framed')).id))
@@ -284,7 +291,7 @@ scenario('trackers leave an html body for good, and its remote images wait until
   await done(t, core, show(first.message, 'message'), 'show this message')
   t.equal(
     [bodyOf(winter).body.images.shown, bodyOf(winter).body.html],
-    ['message', HTML],
+    ['message', htmlWith(first.body.cssPrefix)],
     'shown, it is the same html: the images come from the core',
   )
   await done(t, core, show(first.message, 'blocked'), 'block it again')

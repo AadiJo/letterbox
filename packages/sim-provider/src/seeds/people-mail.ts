@@ -4,8 +4,14 @@
 
 import type { SeedAttachment } from '../contract.ts'
 
-const HOUR = 3_600_000
-const DAY = 24 * HOUR
+export const HOUR = 3_600_000
+export const DAY = 24 * HOUR
+
+/** The time the seed's core runs at. */
+export const NOW = '2026-03-09T16:00:00.000Z'
+
+/** The time `ms` before NOW. */
+export const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString()
 
 export const ME = { name: 'Robin Vale', address: 'robin@vale.test' }
 

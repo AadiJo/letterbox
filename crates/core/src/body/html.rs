@@ -53,15 +53,15 @@ pub struct Html {
     pub link: Option<String>,
 }
 
-/// Runs the passes. None when lol_html refuses the markup, as it does when the markup is
+/// Runs the passes, writing CSS custom property names that start with `prefix`. None when lol_html refuses the markup, as it does when the markup is
 /// ambiguous enough that it cannot be sure how a browser would read it, or when the check on
 /// the result (`safe`) finds what the passes should have taken out: then the caller shows the
 /// plain text instead, and says the HTML was withheld.
-pub fn process(input: &str) -> Option<Html> {
+pub fn process(input: &str, prefix: &str) -> Option<Html> {
     let input = unwrap(input)?;
     let Scanned { boundary, words, link } = scan(&input)?;
     let marker = boundary.map(|_| marker_for(&input));
-    let mut found = Found::default();
+    let mut found = Found::with_prefix(prefix);
     let rewritten = rewrite(
         &input,
         boundary.map(|place| place.ordinal),

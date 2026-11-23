@@ -3,32 +3,70 @@
 // "Images on" quietly and opens a menu with Block images again. Either menu notes the trackers
 // the core took out, which showing images never brings back. A message whose images are all
 // trackers, or that has none, has no chip. The choice is the message's own (protocol `ShowImages`).
+// I inside an open menu acts on that menu's message. The menu keeps inside the reader, and
+// closing it from the keyboard gives focus back to the chip.
 
 import type { Message, ShowImages } from '@letterbox/protocol'
 import { ChevronDown, Image as ImageIcon, ImageOff } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { cx } from './cx.ts'
 import { setImages, SHOW_IMAGES_KEY, trackerNote } from './images.ts'
 import { Key } from './Key.tsx'
+
+/** How far the menu stays from the edges of the reader it opens in. */
+const INSET = 8
+
+/** The box of the nearest element around `element` that scrolls: the reader's visible part. */
+function visibleBounds(element: Element) {
+  for (let at = element.parentElement; at; at = at.parentElement) {
+    if (/auto|scroll/.test(getComputedStyle(at).overflowY)) return at.getBoundingClientRect()
+  }
+  return document.documentElement.getBoundingClientRect()
+}
 
 export function ImagesChip({ message }: { message: Message }) {
   const { body } = message
   // The menu is open for the choice it was opened at, so it closes once the core takes a new one.
   const [openAt, setOpenAt] = useState<ShowImages | null>(null)
+  // Where the menu sits once fitted into the reader, when it would run past the reader's edge.
+  const [fit, setFit] = useState<CSSProperties | null>(null)
   const box = useRef<HTMLSpanElement>(null)
+  const chip = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
   const shown = body.state === 'ready' ? body.images.shown : null
   const open = openAt !== null && openAt === shown
+
+  /** Puts the menu away. From the keyboard, focus goes back to the chip. */
+  const close = (refocus: boolean) => {
+    setOpenAt(null)
+    setFit(null)
+    if (refocus) chip.current?.focus()
+  }
+
+  // Opened, the menu keeps inside the reader's visible part: narrower, so its note wraps, and
+  // moved left as far as it must.
+  useLayoutEffect(() => {
+    const element = menu.current
+    if (!open || !element || !box.current) return
+    const bounds = visibleBounds(box.current)
+    const room = Math.min(bounds.right, window.innerWidth) - Math.max(bounds.left, 0) - 2 * INSET
+    const from = box.current.getBoundingClientRect().left
+    const width = Math.min(element.getBoundingClientRect().width, room)
+    const right = Math.min(bounds.right, window.innerWidth) - INSET
+    if (from + width <= right && element.getBoundingClientRect().width <= room) return
+    setFit({ left: Math.min(0, right - (from + width)), maxWidth: room, minWidth: 0 })
+  }, [open])
 
   // A click outside the menu, or Esc, puts it away.
   useEffect(() => {
     if (!open) return
     const away = (event: PointerEvent) => {
-      if (event.target instanceof Node && !box.current?.contains(event.target)) setOpenAt(null)
+      if (event.target instanceof Node && !box.current?.contains(event.target)) close(false)
     }
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.stopPropagation()
-      setOpenAt(null)
+      close(true)
     }
     document.addEventListener('pointerdown', away)
     window.addEventListener('keydown', escape, true)
@@ -42,7 +80,7 @@ export function ImagesChip({ message }: { message: Message }) {
   const blocked = body.images.shown === 'blocked'
   const note = trackerNote(body.images)
   const choose = (show: ShowImages) => {
-    setOpenAt(null)
+    close(true)
     setImages(message.id, show)
   }
   const icon = { className: 'size-[13px] flex-none', strokeWidth: 1.75, 'aria-hidden': true } as const
@@ -54,12 +92,13 @@ export function ImagesChip({ message }: { message: Message }) {
         </span>
       )}
       <button
+        ref={chip}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         data-field="images-chip"
         data-images={body.images.shown}
-        onClick={() => setOpenAt(open ? null : body.images.shown)}
+        onClick={() => (open ? close(false) : setOpenAt(body.images.shown))}
         className={
           blocked
             ? cx(
@@ -75,9 +114,18 @@ export function ImagesChip({ message }: { message: Message }) {
       </button>
       {open && (
         <div
+          ref={menu}
           role="menu"
           aria-label="Images"
           data-field="images-menu"
+          // I in this menu shows this message's images, whichever message the reader's I would pick.
+          onKeyDown={(event) => {
+            if (event.key !== SHOW_IMAGES_KEY || event.metaKey || event.ctrlKey || event.altKey) return
+            event.preventDefault()
+            event.stopPropagation()
+            if (blocked) choose('message')
+          }}
+          style={fit ?? undefined}
           className="absolute top-7 left-0 z-30 w-max min-w-[300px] rounded-xl bg-float p-1.5 shadow-float wide:min-w-[316px]"
         >
           <button
@@ -107,7 +155,7 @@ export function ImagesChip({ message }: { message: Message }) {
           {note && (
             <p
               data-field="tracker-note"
-              className="-mx-1.5 mt-1.5 -mb-1.5 border-t border-line px-4 pt-[9px] pb-2.5 text-meta whitespace-nowrap text-muted"
+              className="-mx-1.5 mt-1.5 -mb-1.5 border-t border-line px-4 pt-[9px] pb-2.5 text-meta text-muted"
             >
               {note}
             </p>

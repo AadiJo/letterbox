@@ -322,7 +322,7 @@ function OpenMessage({ thread, message, now }: { thread: ThreadDetail; message: 
       {delivery?.state === 'failed' && <NotSent thread={thread} message={message} delivery={delivery} />}
       {/* On its way, the reply reads a step quieter than mail the provider holds. */}
       <div className={`mt-[18px] ${going ? 'opacity-70' : ''}`}>
-        <Body id={message.id} body={message.body} />
+        <Body key={message.id} id={message.id} body={message.body} />
         {/* Its files can be fetched only once the provider holds the message. */}
         <Attachments attachments={message.attachments} held={delivery === null} />
       </div>

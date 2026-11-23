@@ -118,6 +118,7 @@ const body = type({
   images,
   quote: type({ text: 'number | null', html: 'number | null', inConversation: 'boolean' }).or('null'),
   preview: 'string',
+  cssPrefix: 'string',
 })
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })
