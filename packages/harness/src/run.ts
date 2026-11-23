@@ -8,8 +8,9 @@
 // Builds the Rust core first, so the scenarios always run the source as it is.
 // Writes one transcript per run and a summary to artifacts/scenarios/. When the second copy's
 // transcript differs, it goes next to the first as `<scenario>.<dialect>.again.jsonl`.
-// Exits 1 if any scenario fails or drifts outside drift-allowed.txt, 2 if the core does not compile, and 3
-// if its build broke for another reason, such as the compiler being killed (see `buildCore`).
+// Exits 1 if any scenario fails or drifts outside drift-allowed.txt, 2 if the core does not compile, 3
+// if its build broke for another reason, such as the compiler being killed (see `buildCore`), and 4
+// if every failed run failed on a tool outside the system, such as a browser that would not launch.
 //
 // The second copy runs the same list starting halfway down, so each run shares the machine
 // with a different scenario. The load moves timing about, as a busy CI machine does, which
@@ -23,7 +24,7 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { BUILD_BROKE, buildCore, CORE_DID_NOT_BUILD } from './client.ts'
+import { BUILD_BROKE, buildCore, CORE_DID_NOT_BUILD, TOOL_FAILED } from './client.ts'
 import { allowedDrift, drift, DRIFT_ALLOWED } from './drift.ts'
 import { lifecycleChart } from './invariants.ts'
 import { ARTIFACTS, definitions, type Result, runOne } from './scenario.ts'
@@ -136,4 +137,10 @@ const skipped = runs.length * copies - results.length
 console.log(
   `\n${results.length - failed.length} of ${results.length} runs passed${copies === 2 ? ` (each of ${runs.length} runs twice)` : ''}${skipped > 0 ? `, and ${skipped} more were skipped after the first failure` : ''}.${copies === 2 ? ` ${drifted.length} drifted, ${known.length} of them known.` : ''} Transcripts and the change lifecycle chart are in ${relative(process.cwd(), artifacts)}/.`,
 )
+const tools = failed.filter((result) => result.tool)
+if (tools.length > 0)
+  console.log(
+    `${tools.length} of the failed runs failed on a tool, not on a check: ${(tools[0]?.failure ?? '').split('\n')[0]}`,
+  )
+if (failed.length > 0 && tools.length === failed.length) process.exit(TOOL_FAILED)
 process.exit(failed.length === 0 && unknown.length === 0 && results.length > 0 ? 0 : 1)

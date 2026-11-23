@@ -29,6 +29,7 @@
 //! stay the last line.
 
 mod color;
+mod css;
 mod dark;
 mod fetch;
 mod html;

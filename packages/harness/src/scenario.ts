@@ -9,6 +9,7 @@
 // server, whose accounts are labels mailboxes. The same scenario then checks the Gmail
 // adapter's mapping from end to end.
 
+import { type Browser, chromium } from 'playwright'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -47,6 +48,12 @@ export type Scenario = {
    * a scenario uses it to make the store look like one an older core wrote.
    */
   sql(statement: string): Record<string, unknown>[]
+  /**
+   * Playwright's Chromium, launched once for the run and closed at its end. A launch that fails
+   * fails the run as a tool's failure (`ToolFailure`), not the system's: the break test then
+   * reports the machine, not a caught break.
+   */
+  browser(): Promise<Browser>
   /** Fails the scenario unless `ok` is true. `what` says what should hold. */
   check(ok: boolean, what: string): void
   /** Fails the scenario unless the two values are deeply equal. */
@@ -112,10 +119,18 @@ export function scenario(name: string, run: (t: Scenario) => Promise<void>, only
   definitions.push({ name, dialects: gmail ? [...dialects, 'gmail'] : dialects, run })
 }
 
+/**
+ * A failure of a tool the scenario uses, outside the system it checks, such as a browser that
+ * would not launch. It says nothing about the code, so a run that ends in one is no catch.
+ */
+export class ToolFailure extends Error {}
+
 export type Result = {
   name: string
   dialect: Run
   passed: boolean
+  /** True when it failed because a tool did (`ToolFailure`), not on a check. */
+  tool: boolean
   failure: string | null
   edges: Edge[]
   /** One JSON line per entry. run.ts writes it to ARTIFACTS. */
@@ -215,6 +230,9 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
   const cores: CoreClient[] = []
   const passwords: string[] = []
   let failure: string | null = null
+  let tool = false
+  // The run's browser, once a scenario asks for one.
+  const launched: { browser?: Promise<Browser> } = {}
 
   // One count for the whole run, across core restarts: the core keeps every change id it
   // has seen, so a restarted core must never be sent an id from before. Counting keeps
@@ -294,14 +312,22 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
       if (!ok) throw new Error(`${what}\n  expected ${JSON.stringify(expected)}\n  actual   ${JSON.stringify(actual)}`)
     },
     note: (text) => record({ from: 'scenario', note: text }),
+    browser: () => {
+      launched.browser ??= chromium.launch().catch((error: unknown) => {
+        throw new ToolFailure(`the browser did not launch: ${error instanceof Error ? error.message : String(error)}`)
+      })
+      return launched.browser
+    },
   }
 
   try {
     await definition.run(t)
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error)
+    tool = error instanceof ToolFailure
     record({ from: 'scenario', note: `scenario failed: ${failure}` })
   } finally {
+    await launched.browser?.then((browser) => browser.close()).catch(() => undefined)
     await Promise.all(cores.map((core) => core.stop().catch(() => undefined)))
     await backend.close()
     await web.close()
@@ -328,6 +354,7 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
     name: definition.name,
     dialect,
     passed: failure === null,
+    tool: tool && failure !== null,
     failure,
     edges: cycle.edges,
     transcript: `${lines}\n`,

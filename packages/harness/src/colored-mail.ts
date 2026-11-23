@@ -65,12 +65,18 @@ export const DESIGNED = [
  * keeps, so a dropped declaration still leaves the one before it in effect, in either scheme.
  */
 export const INVALID_HTML = [
-  '<p style="color:#0563c1;color:rgb(0 0 0 .35)">Blue</p>',
+  '<p class="kept" style="color:#0563c1;color:rgb(0 0 0 .35)">Blue</p>',
   '<p style="color:red blue">Dropped</p>',
   '<p style="color:hsl(120, 50, 50)">Legacy hsl without percents</p>',
   '<p style="color:rgb(100%, 0, 0)">Mixed legacy rgb</p>',
   '<p style="color:rgba(0, 0, 0, .5) !important">Comma alpha</p>',
   '<p style="color:hsl(120deg 50% 50% / 50%)">Space hsl</p>',
+  // A no-break space is not CSS whitespace, and a var() in a comment calls nothing.
+  '<p class="kept" style="color:#0563c1;color:rgb(255\u00a0,0,0)">Blue past a no-break space</p>',
+  '<p class="kept" style="color:#0563c1;color:red blue /* var(--accent) */">Blue past a commented var</p>',
+  // A later shorthand a browser drops: two repeats, or two border styles.
+  '<p class="shorthand" style="background:#000038;background:red no-repeat repeat-x">Navy past a bad shorthand</p>',
+  '<p style="border:1px solid #cc0000;border:2px solid solid #0000cc">Red border past two styles</p>',
 ].join('')
 
 /**
@@ -84,6 +90,10 @@ export const PAIRS_HTML = [
   '<td class="layered" bgcolor="#ff0000">Layered</td></tr></table>',
   '<p style="background:#fff3c4;color:#8a6d00">A note</p>',
   '<p><span class="badge">New</span></p>',
+  // The background a browser paints: the important navy over a later white, and the navy past a
+  // later background-color it drops.
+  '<table><tr><td style="background-color:#000038!important;background:#fff;color:#888888">Important navy</td>',
+  '<td style="background:#000038;background-color:red blue;color:#808080">Navy past a dropped one</td></tr></table>',
 ].join('')
 
 /** One message from `from`, its text its subject. */

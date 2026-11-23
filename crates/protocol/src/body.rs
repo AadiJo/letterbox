@@ -204,9 +204,10 @@ pub enum UnsubscribeSource {
 /// How to color a message's HTML in a dark reader. The core replaced each color the HTML sets
 /// with `var(<cssPrefix>color-N, <its own color>)`, where N is the color's index in `palette`:
 /// in inline styles and `<style>` blocks, for text (`color`, `text-decoration`), backgrounds
-/// (`background`, gradients too) and borders (`border*`, `outline`). A color longhand whose
-/// value is not just colors the core reads stays as written, so a browser still drops an
-/// invalid one. An element whose `bgcolor` (on body, table parts and cells), `<font color>`,
+/// (`background`) and borders (`border*`, `outline`), in the forms a browser keeps: a color
+/// alone, a border or outline with at most one width and one style, a `text-decoration` with
+/// line keywords. Any other form stays as written, unless it already calls `var()`, so a browser
+/// still drops an invalid one and the declaration before it holds. An element whose `bgcolor` (on body, table parts and cells), `<font color>`,
 /// or `<body text>`, `link`, `vlink` or `alink` set one carries `data-letterbox-bg`, `-text`,
 /// `-link`, `-vlink` or `-alink` naming its N. A `<style>` at the start of `html` applies it
 /// from an anonymous cascade layer, so every rule of the sender's still wins where it did over

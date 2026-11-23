@@ -28,11 +28,18 @@ impl Rgba {
     }
 }
 
+/// `text` without the CSS whitespace at its ends: space, tab, line feed, form feed and carriage
+/// return, which is what Rust calls ASCII whitespace. A no-break space is not CSS whitespace, so a
+/// browser drops `rgb(255\u{a0},0,0)`, and so must the pass.
+pub fn css_trim(text: &str) -> &str {
+    text.trim_matches(|c: char| c.is_ascii_whitespace())
+}
+
 /// One CSS color value: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `hsl()`,
 /// `hsla()` or a named color, in any case. None for anything else, which the colour pass leaves
 /// as it is: `transparent`, `currentcolor`, a `var()`, and the newer spaces (`oklch()`, `lab()`).
 pub fn color_of(token: &str) -> Option<Rgba> {
-    let token = token.trim();
+    let token = css_trim(token);
     if let Some(hex) = token.strip_prefix('#') {
         return hex_of(hex);
     }
@@ -85,7 +92,7 @@ struct Arguments<'a> {
 fn arguments(inner: &str) -> Option<Arguments<'_>> {
     let single = |part: &str| !part.is_empty() && !part.contains(|c: char| c.is_ascii_whitespace() || c == '/');
     if inner.contains(',') {
-        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let parts: Vec<&str> = inner.split(',').map(css_trim).collect();
         if !parts.iter().all(|part| single(part)) {
             return None;
         }
@@ -104,7 +111,7 @@ fn arguments(inner: &str) -> Option<Arguments<'_>> {
         };
     }
     let (values, alpha) = match inner.split_once('/') {
-        Some((values, alpha)) => (values, Some(alpha.trim())),
+        Some((values, alpha)) => (values, Some(css_trim(alpha))),
         None => (inner, None),
     };
     if alpha.is_some_and(|alpha| !single(alpha)) {
@@ -136,7 +143,7 @@ fn value(text: &str) -> Option<Value> {
 
 /// A CSS number, as its syntax writes one: an optional sign, digits with at most one point and
 /// a digit after it, and an optional exponent. Rust's own parse takes more (`inf`, `1.`).
-fn css_number(text: &str) -> Option<f64> {
+pub fn css_number(text: &str) -> Option<f64> {
     let bytes = text.as_bytes();
     let mut at = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
     let digits = |at: &mut usize| {

@@ -3,17 +3,18 @@
 //! `Colors` in crates/protocol/src/body.rs):
 //!   - in CSS, inline or in `<style>`, each color of a text, background or border property
 //!     becomes `var(<prefix>color-N, <as written>)`, N its index in the palette (`css`) and the
-//!     prefix the body's own (`Body::Ready::css_prefix`), which the sender never sees. A
-//!     color longhand is wrapped only when its value is colors the pass reads and nothing else
-//!     (`wrappable`): a `var()` makes a browser check a value only once it computes it, so a
-//!     wrapped invalid value would hide an earlier valid one instead of being dropped.
+//!     prefix the body's own (`Body::Ready::css_prefix`), which the sender never sees. Only a
+//!     declaration in a form a browser keeps is wrapped (`css::wrappable`): a `var()` makes a
+//!     browser check a value only once it computes it, so a wrapped invalid value would hide an
+//!     earlier valid one instead of being dropped.
 //!   - a color attribute where a browser honours it (`HINTS`) stays, and the element gets
 //!     `data-letterbox-bg`, `-text`, `-link`, `-vlink` or `-alink` naming its N. A rule in an
 //!     anonymous cascade layer, in the `<style>` that `finish` puts first, applies it, so any
 //!     rule of the sender's, in a layer or not, still wins over it as it did over the attribute.
 //!
 //! Text set beside a background, in the same rule or on the same element, keeps its contrast on
-//! that background's dark value (dark.rs), as a swatch of its own when that changes its value.
+//! the dark value of the background the browser paints there (`css::background`, which follows
+//! `!important` and the order within the rule), as a swatch of its own when that changes its value.
 //!
 //! It writes only colors and `var()`s, never a URL, so nothing it adds can load anything, and
 //! html.rs checks the output all the same. It also tells designed mail from a person's plain
@@ -23,6 +24,7 @@ use letterbox_protocol::ColorRole;
 use lol_html::html_content::Element;
 
 use super::color::{self, Rgba};
+use super::css::{self, declarations, role_of, wrappable};
 use super::dark::dark;
 use super::html::{attribute, set};
 use crate::maps::{HashMap, HashSet};
@@ -125,18 +127,6 @@ const HINTS: [Hint; 6] = [
     },
 ];
 
-/// The background color a background declaration sets: Some(None) when it sets none or more
-/// than one (an image or a gradient), None when the property sets no background.
-fn background_in(name: &str, value: &str) -> Option<Option<Rgba>> {
-    if !matches!(name, "background" | "background-color") {
-        return None;
-    }
-    match colors_in(value).as_slice() {
-        [(_, _, color)] if color.a > 0 => Some(Some(*color)),
-        _ => Some(None),
-    }
-}
-
 impl Painter {
     /// A pass that names its custom properties with `prefix`.
     pub fn with_prefix(prefix: &str) -> Painter {
@@ -189,12 +179,13 @@ impl Painter {
     /// style's, else its `bgcolor` where a browser honours one. Pass 2 asks before it rewrites
     /// the element's style (`css`) and attributes (`attributes`).
     pub fn background(element: &Element<'_, '_>, name: &str, style: Option<&str>) -> Option<Rgba> {
-        let declared = style.and_then(|css| {
-            let found = declarations(css);
-            found
-                .iter()
-                .rev()
-                .find_map(|(property, start, end, _)| background_in(property, &css[*start..*end]))
+        let declared = style.and_then(|style| {
+            let found = declarations(style);
+            css::background(
+                found
+                    .iter()
+                    .map(|(property, start, end, _)| (property.as_str(), &style[*start..*end])),
+            )
         });
         declared.unwrap_or_else(|| {
             let honoured = HINTS[0].on.contains(&name);
@@ -236,17 +227,23 @@ impl Painter {
         }
     }
 
-    /// The CSS with each color of a text, background or border property named (see the module
-    /// docs). Takes CSS that `own` has read. Text is read against the background set in its
-    /// rule, else against `on`, the element's own for a style attribute. None when it names none.
+    /// The CSS with each color of a text, background or border property named, where its
+    /// declaration is in a form the pass wraps (css.rs). Text is read against the background its
+    /// rule paints (`css::background`), else against `on`, the element's own for a style
+    /// attribute. None when it names none.
     pub fn css(&mut self, css: &str, on: Option<Rgba>) -> Option<String> {
         let found = declarations(css);
-        let mut backgrounds: HashMap<usize, Option<Rgba>> = HashMap::default();
+        let mut blocks: HashMap<usize, Vec<(&str, &str)>> = HashMap::default();
         for (name, start, end, block) in &found {
-            if let Some(background) = background_in(name, &css[*start..*end]) {
-                backgrounds.insert(*block, background);
-            }
+            blocks
+                .entry(*block)
+                .or_default()
+                .push((name.as_str(), &css[*start..*end]));
         }
+        let backgrounds: HashMap<usize, Option<Option<Rgba>>> = blocks
+            .into_iter()
+            .map(|(block, declared)| (block, css::background(declared.into_iter())))
+            .collect();
         let mut changes = Vec::new();
         for (name, start, end, block) in &found {
             let value = &css[*start..*end];
@@ -259,12 +256,12 @@ impl Painter {
             {
                 self.designed = true;
             }
-            let colors = colors_in(value);
-            if !wrappable(name, value, &colors) {
+            let read = css::read(value);
+            if !wrappable(name, &read) {
                 continue;
             }
-            let beside = backgrounds.get(block).copied().unwrap_or(on);
-            for (from, to, color) in colors {
+            let beside = backgrounds.get(block).copied().flatten().unwrap_or(on);
+            for (from, to, color) in read.colors {
                 if let Some(index) = self.place(role, color, beside) {
                     let written = &value[from..to];
                     changes.push((
@@ -307,187 +304,9 @@ impl Painter {
     }
 }
 
-/// True when the pass may wrap the colors of a declaration. A shorthand's other parts it does
-/// not read, so it wraps them as they come. A color longhand (`color`, `*-color`) only when its
-/// value is colors the pass reads, one or up to four for `border-color`, and at most
-/// `!important`: anything else a browser may drop as invalid, which it must still do once
-/// wrapped. A value that already reads a `var()` a browser checks only as it computes it anyway.
-fn wrappable(name: &str, value: &str, colors: &[(usize, usize, Rgba)]) -> bool {
-    if !(name == "color" || name.ends_with("-color")) || value.to_ascii_lowercase().contains("var(") {
-        return true;
-    }
-    let most = if name == "border-color" { 4 } else { 1 };
-    let mut rest = String::new();
-    let mut from = 0;
-    for (start, end, _) in colors {
-        rest.push_str(&value[from..*start]);
-        rest.push(' ');
-        from = *end;
-    }
-    rest.push_str(&value[from..]);
-    let rest = rest.trim();
-    let flag = rest
-        .strip_prefix('!')
-        .is_some_and(|flag| flag.trim().eq_ignore_ascii_case("important"));
-    (1..=most).contains(&colors.len()) && (rest.is_empty() || flag)
-}
-
 /// True when a color has a clear hue: its channels spread by more than a fifth.
 fn hued(color: Rgba) -> bool {
     let channels = [color.r, color.g, color.b];
     let (high, low) = (channels.iter().max(), channels.iter().min());
     high.zip(low).is_some_and(|(high, low)| high - low > 51)
-}
-
-/// The role a property's colors play. None for a property whose colors the pass leaves.
-fn role_of(name: &str) -> Option<ColorRole> {
-    match name {
-        "color" | "text-decoration" | "text-decoration-color" | "-webkit-text-fill-color" => Some(ColorRole::Text),
-        "background" | "background-color" | "background-image" => Some(ColorRole::Background),
-        _ if name.starts_with("border") || name.starts_with("outline") => Some(ColorRole::Border),
-        _ => None,
-    }
-}
-
-/// Where a run of CSS ends: the index of the first `stops` byte outside strings, comments and
-/// brackets, from `at`, or the end.
-fn until(css: &[u8], mut at: usize, stops: &[u8]) -> usize {
-    let mut depth = 0_u32;
-    while at < css.len() {
-        match css[at] {
-            quote @ (b'"' | b'\'') => at = string_end(css, at, quote),
-            b'/' if css.get(at + 1) == Some(&b'*') => at = comment_end(css, at),
-            byte if depth == 0 && stops.contains(&byte) => return at,
-            b'(' | b'[' => {
-                depth += 1;
-                at += 1;
-            }
-            b')' | b']' => {
-                depth = depth.saturating_sub(1);
-                at += 1;
-            }
-            _ => at += 1,
-        }
-    }
-    css.len()
-}
-
-/// Just past the string that opens at `at`.
-fn string_end(css: &[u8], at: usize, quote: u8) -> usize {
-    let mut index = at + 1;
-    while index < css.len() && css[index] != quote {
-        index += if css[index] == b'\\' { 2 } else { 1 };
-    }
-    (index + 1).min(css.len())
-}
-
-/// Just past the comment that opens at `at`.
-fn comment_end(css: &[u8], at: usize) -> usize {
-    let rest = &css[at + 2..];
-    rest.windows(2)
-        .position(|pair| pair == b"*/")
-        .map_or(css.len(), |offset| at + 2 + offset + 2)
-}
-
-/// True for a byte that can be part of a CSS name. Bytes past ASCII belong to names too.
-fn name_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_') || byte >= 0x80
-}
-
-/// Every declaration in a style attribute or a `<style>` block: its property in lowercase, where
-/// its value starts and ends, and which block it is in (one per pair of braces, so declarations
-/// with the same number share a rule). A selector with a colon (`a:hover {`) reads at first like a
-/// declaration; its `{` shows it is not, and the reading goes on inside the block. At-rules and
-/// other selectors are passed over up to their `{` or `;`.
-fn declarations(css: &str) -> Vec<(String, usize, usize, usize)> {
-    let bytes = css.as_bytes();
-    let mut found = Vec::new();
-    let mut at = 0;
-    // Which block a declaration is in: a count of the braces passed.
-    let mut block = 0;
-    while at < bytes.len() {
-        while at < bytes.len() && (bytes[at].is_ascii_whitespace() || bytes[at] == b';') {
-            at += 1;
-        }
-        if bytes[at..].starts_with(b"/*") {
-            at = comment_end(bytes, at);
-            continue;
-        }
-        let name_start = at;
-        while at < bytes.len() && name_byte(bytes[at]) {
-            at += 1;
-        }
-        let name = &css[name_start..at];
-        while at < bytes.len() && bytes[at].is_ascii_whitespace() {
-            at += 1;
-        }
-        if !name.is_empty() && bytes.get(at) == Some(&b':') {
-            let start = at + 1;
-            let end = until(bytes, start, b";{}");
-            if bytes.get(end) != Some(&b'{') {
-                found.push((name.to_ascii_lowercase(), start, end, block));
-            }
-            at = end;
-        } else {
-            at = until(bytes, at, b";{}");
-        }
-        block += usize::from(matches!(bytes.get(at), Some(b'{' | b'}')));
-        at += 1;
-    }
-    found
-}
-
-/// Every color in a declaration's value: where it starts and ends, and what it is. Strings,
-/// comments and `url()`s are passed over, and so is any name that starts with `--`.
-fn colors_in(value: &str) -> Vec<(usize, usize, Rgba)> {
-    let bytes = value.as_bytes();
-    let mut found = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        match bytes[at] {
-            quote @ (b'"' | b'\'') => at = string_end(bytes, at, quote),
-            b'/' if bytes.get(at + 1) == Some(&b'*') => at = comment_end(bytes, at),
-            b'#' => {
-                let end = at + 1 + bytes[at + 1..].iter().take_while(|byte| name_byte(**byte)).count();
-                if let Some(color) = color::color_of(&value[at..end]) {
-                    found.push((at, end, color));
-                }
-                at = end;
-            }
-            byte if name_byte(byte) && !byte.is_ascii_digit() => {
-                let start = at;
-                while at < bytes.len() && name_byte(bytes[at]) {
-                    at += 1;
-                }
-                let name = &value[start..at];
-                if bytes.get(at) != Some(&b'(') {
-                    if !name.starts_with("--")
-                        && let Some(color) = color::named(name)
-                    {
-                        found.push((start, at, color));
-                    }
-                    continue;
-                }
-                let function = name.to_ascii_lowercase();
-                if matches!(function.as_str(), "url" | "rgb" | "rgba" | "hsl" | "hsla") {
-                    let end = (until(bytes, at + 1, b")") + 1).min(bytes.len());
-                    if function != "url"
-                        && let Some(color) = color::color_of(&value[start..end])
-                    {
-                        found.push((start, end, color));
-                    }
-                    at = end;
-                } else {
-                    at += 1;
-                }
-            }
-            byte if byte.is_ascii_digit() => {
-                while at < bytes.len() && name_byte(bytes[at]) {
-                    at += 1;
-                }
-            }
-            _ => at += 1,
-        }
-    }
-    found
 }

@@ -140,6 +140,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Some breaks run a scenario that renders in Playwright's headless Chromium (the colour
+      # pass's rendered check), installed as the checks job installs it. Without it the browser
+      # would not launch, and the break test reports that as an error, never as a caught break.
+      - run: pnpm --filter @letterbox/dev-host exec playwright install --with-deps --only-shell chromium
+
       - run: pnpm scenarios:selftest --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # The desktop app on Windows and macOS, where the owner runs it. Linux runs the full check

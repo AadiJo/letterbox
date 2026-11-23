@@ -26,18 +26,24 @@ import type { CoreClient, Subscription } from '../src/client.ts'
 
 /** INVALID_HTML as the core passes it on: only what a browser keeps is wrapped. */
 const INVALID_SHOWN = [
-  '<p style="color:var(<prefix>color-0, #0563c1);color:rgb(0 0 0 .35)">Blue</p>',
+  '<p class="kept" style="color:var(<prefix>color-0, #0563c1);color:rgb(0 0 0 .35)">Blue</p>',
   '<p style="color:red blue">Dropped</p>',
   '<p style="color:hsl(120, 50, 50)">Legacy hsl without percents</p>',
   '<p style="color:rgb(100%, 0, 0)">Mixed legacy rgb</p>',
   '<p style="color:var(<prefix>color-1, rgba(0, 0, 0, .5)) !important">Comma alpha</p>',
   '<p style="color:var(<prefix>color-2, hsl(120deg 50% 50% / 50%))">Space hsl</p>',
+  '<p class="kept" style="color:var(<prefix>color-0, #0563c1);color:rgb(255\u00a0,0,0)">Blue past a no-break space</p>',
+  '<p class="kept" style="color:var(<prefix>color-0, #0563c1);color:red blue /* var(--accent) */">Blue past a commented var</p>',
+  '<p class="shorthand" style="background:var(<prefix>color-3, #000038);background:red no-repeat repeat-x">Navy past a bad shorthand</p>',
+  '<p style="border:1px solid var(<prefix>color-4, #cc0000);border:2px solid solid #0000cc">Red border past two styles</p>',
 ].join('')
 
 const INVALID_PALETTE = [
   ['text', '#0563c1', '#84baff'],
   ['text', '#00000080', '#f5f5f580'],
   ['text', '#40bf4080', '#b0ffab80'],
+  ['background', '#000038', '#2e4a87'],
+  ['border', '#cc0000', '#dc2319'],
 ]
 
 /** PAIRS_HTML as the core passes it on: the div's bgcolor, which a browser ignores, stays bare. */
@@ -52,11 +58,14 @@ const PAIRS_SHOWN = [
   '<td class="layered" bgcolor="#ff0000" data-letterbox-bg="6">Layered</td></tr></table>',
   '<p style="background:var(<prefix>color-7, #fff3c4);color:var(<prefix>color-8, #8a6d00)">A note</p>',
   '<p><span class="badge">New</span></p>',
+  '<table><tr><td style="background-color:var(<prefix>color-5, #000038)!important;background:var(<prefix>color-3, #fff);color:var(<prefix>color-4, #888888)">Important navy</td>',
+  '<td style="background:var(<prefix>color-5, #000038);background-color:red blue;color:var(<prefix>color-9, #808080)">Navy past a dropped one</td></tr></table>',
 ].join('')
 
 /**
  * PAIRS_HTML's palette. Text set beside a background, in a rule or on its element, is read on
- * that background's dark value: grey on navy is lighter than the same grey alone (#979797).
+ * the dark value of the background a browser paints there, the important one or the last it
+ * keeps: grey on navy is lighter than the same grey alone (#979797).
  */
 const PAIRS_PALETTE = [
   ['background', '#00ff00', '#002700'],
@@ -68,6 +77,7 @@ const PAIRS_PALETTE = [
   ['background', '#ff0000', '#690000'],
   ['background', '#fff3c4', '#221b00'],
   ['text', '#8a6d00', '#c8aa53'],
+  ['text', '#808080', '#bdbdbc'],
 ]
 
 /**
@@ -95,7 +105,8 @@ const LUMEN_SHOWN = [
   '<div style="display:none;color:rgba(0,0,0,0)">The quiet web.</div>',
   '<table role="presentation" width="100%" bgcolor="f4efe6" data-letterbox-bg="0"><tr><td>',
   '<table width="600"><tr><td style="color:var(<prefix>color-3, #6B716F)">Issue 212 <a href="https://lumen.example/web" style="color:inherit">View in browser</a></td></tr>',
-  '<tr><td style="background:url(cid:red) var(<prefix>color-5, #12423d) no-repeat;color:var(<prefix>color-8, WHITE)">LUMEN</td></tr>',
+  // A shorthand with an image and a repeat is a form the pass does not read, so it stays as written.
+  '<tr><td style="background:url(cid:red) #12423d no-repeat;color:var(<prefix>color-8, WHITE)">LUMEN</td></tr>',
   `<tr><td style="background-image:image-set('red.png' 1x)">Spring</td></tr>`,
   '<tr><td class="essay"><font color="#c8552b" data-letterbox-text="2">THIS WEEK</font>',
   '<h1 style="color:var(<prefix>color-9, #1d2b29)">The quiet web</h1>',
@@ -269,7 +280,7 @@ scenario('html colors are named with a readable dark value, and each sender keep
   t.equal(
     [html(opened(lumen).body), swatches(lumen)],
     [LUMEN_SHOWN, LUMEN_PALETTE],
-    "each color the newsletter sets is named, in its attributes, its style block and inline, and the sender's own names are renamed",
+    "each color the newsletter sets is named, in its attributes, its style block and inline, and the sender's own custom properties stay as written",
   )
   t.equal(
     [html(opened(hana).body), swatches(hana)],

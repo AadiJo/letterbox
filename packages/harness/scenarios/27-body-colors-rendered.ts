@@ -6,7 +6,7 @@
 // browser honours it and loses to every rule of the sender's, and dark text reads on the
 // background it is painted on, the sender's own backgrounds too.
 
-import { chromium, type Page } from 'playwright'
+import type { Page } from 'playwright'
 import type { Seed } from '@letterbox/sim-provider/contract'
 import type { Swatch } from '@letterbox/protocol'
 import { ME, openThread, PASSWORD, start, thread } from '../src/fixtures.ts'
@@ -138,40 +138,41 @@ scenario(
       return found
     }
 
-    const browser = await chromium.launch()
-    try {
-      const page = await browser.newPage()
-      const invalid = body('Invalid colors')
-      await paint(page, invalid, 'original')
-      const originalBlue = await computed(page, 'p:first-child', 'color')
-      await paint(page, invalid, 'dark')
-      t.equal(
-        [originalBlue, await computed(page, 'p:first-child', 'color')],
-        [['rgb(5, 99, 193)'], ['rgb(132, 186, 255)']],
-        "a value a browser drops leaves the blue before it in effect, in the sender's colors and in dark",
-      )
+    const page = await (await t.browser()).newPage()
+    const invalid = body('Invalid colors')
+    await paint(page, invalid, 'original')
+    const originalBlue = await computed(page, 'p.kept', 'color')
+    const originalNavy = await computed(page, 'p.shorthand', 'backgroundColor')
+    await paint(page, invalid, 'dark')
+    t.equal(
+      [originalBlue, await computed(page, 'p.kept', 'color')],
+      [Array(3).fill('rgb(5, 99, 193)'), Array(3).fill('rgb(132, 186, 255)')],
+      "a value a browser drops, past a no-break space or a commented var() too, leaves the blue before it in effect, in the sender's colors and in dark",
+    )
+    t.equal(
+      [originalNavy, await computed(page, 'p.shorthand', 'backgroundColor')],
+      [['rgb(0, 0, 56)'], ['rgb(46, 74, 135)']],
+      'a shorthand a browser drops leaves the navy before it in effect, in both schemes',
+    )
 
-      const pairs = body('Pairs')
-      await paint(page, pairs, 'original')
-      t.equal(
-        [await computed(page, 'div', 'backgroundColor'), await computed(page, 'td', 'backgroundColor')],
-        [['rgba(0, 0, 0, 0)'], ['rgb(0, 0, 56)', 'rgb(0, 255, 0)']],
-        "in the sender's colors a div's bgcolor stays ignored, a cell's applies, and a rule in the sender's own layer beats it",
-      )
+    const pairs = body('Pairs')
+    await paint(page, pairs, 'original')
+    t.equal(
+      [await computed(page, 'div', 'backgroundColor'), await computed(page, 'td', 'backgroundColor')],
+      [['rgba(0, 0, 0, 0)'], ['rgb(0, 0, 56)', 'rgb(0, 255, 0)', 'rgb(0, 0, 56)', 'rgb(0, 0, 56)']],
+      "in the sender's colors a div's bgcolor stays ignored, a cell's applies, and a rule in the sender's own layer beats it",
+    )
 
-      const unread: Record<string, string[]> = {}
-      for (const subject of ['Issue 212', 'Print schedule', 'Invalid colors', 'Pairs']) {
-        await paint(page, body(subject), 'dark')
-        unread[subject] = await unreadable(page)
-      }
-      t.equal(
-        unread,
-        { 'Issue 212': [], 'Print schedule': [], 'Invalid colors': [], Pairs: [] },
-        "in dark, every shown text reads at 4.5:1 or more on what it is painted on, the sender's backgrounds too",
-      )
-    } finally {
-      await browser.close()
+    const unread: Record<string, string[]> = {}
+    for (const subject of ['Issue 212', 'Print schedule', 'Invalid colors', 'Pairs']) {
+      await paint(page, body(subject), 'dark')
+      unread[subject] = await unreadable(page)
     }
+    t.equal(
+      unread,
+      { 'Issue 212': [], 'Print schedule': [], 'Invalid colors': [], Pairs: [] },
+      "in dark, every shown text reads at 4.5:1 or more on what it is painted on, the sender's backgrounds too",
+    )
   },
   ['folders'],
 )

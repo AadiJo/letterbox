@@ -79,14 +79,14 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: 'a color longhand is wrapped whatever else its value holds, so an invalid one hides the one before it',
     file: body('paint.rs'),
-    find: 'if !wrappable(name, value, &colors) {',
+    find: 'if !wrappable(name, &read) {',
     replace: 'if false {',
     scenarios: COLORS,
   },
   {
     name: 'text set beside a background in one rule is read on the reader, not on that background',
     file: body('paint.rs'),
-    find: 'let beside = backgrounds.get(block).copied().unwrap_or(on);',
+    find: 'let beside = backgrounds.get(block).copied().flatten().unwrap_or(on);',
     replace: 'let beside = on;',
     scenarios: COLORS,
   },
@@ -95,6 +95,49 @@ export const COLOR_MUTATIONS: Mutation[] = [
     file: body('rewrite.rs'),
     find: 'let on = Painter::background(el, &name, style.as_deref());',
     replace: 'let on: Option<Rgba> = None;',
+    scenarios: COLORS,
+  },
+  {
+    name: 'a no-break space passes for CSS whitespace, so a color a browser drops hides the one before it',
+    file: body('color.rs'),
+    find: 'pub fn css_trim(text: &str) -> &str {\n    text.trim_matches(|c: char| c.is_ascii_whitespace())',
+    replace: 'pub fn css_trim(text: &str) -> &str {\n    text.trim()',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a var() in a comment counts as a call, so a value a browser drops is wrapped and hides the color before it',
+    file: body('css.rs'),
+    find: 'fn reads_var(value: &str) -> bool {\n    let bytes = value.as_bytes();',
+    replace:
+      'fn reads_var(value: &str) -> bool {\n    if value.to_ascii_lowercase().contains("var(") {\n        return true;\n    }\n    let bytes = value.as_bytes();',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'an important background loses to a later plain one, so text is read on a background the browser does not paint',
+    file: body('css.rs'),
+    find: 'if read.important {',
+    replace: 'if false && read.important {',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a background-color a browser drops still counts, so text is read on the reader instead of the navy painted',
+    file: body('css.rs'),
+    find: '_ if name == "background-color" && !read.colors.is_empty() => None,',
+    replace: '_ if name == "background-color" && !read.colors.is_empty() => Some(Paints::Unknown),',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a background shorthand is wrapped whatever else it holds, so one a browser drops hides the navy before it',
+    file: body('css.rs'),
+    find: '"background" | "color" => count == 1 && words.is_empty(),',
+    replace: '"background" | "color" => count == 1,',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a border with two styles is wrapped, so one a browser drops hides the border before it',
+    file: body('css.rs'),
+    find: '            if style {\n                return false;',
+    replace: '            if false && style {\n                return false;',
     scenarios: COLORS,
   },
   {
@@ -141,7 +184,7 @@ export const COLOR_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a selector with a colon hides the colors in its block',
-    file: body('paint.rs'),
+    file: body('css.rs'),
     find: '            at = end;\n        } else {\n            at = until(bytes, at, b";{}");',
     replace:
       '            at = until(bytes, end + 1, b"}");\n        } else {\n            at = until(bytes, at, b";{}");',
@@ -149,14 +192,15 @@ export const COLOR_MUTATIONS: Mutation[] = [
   },
   {
     name: 'a color name inside a string is restyled, which garbles the string',
-    file: body('paint.rs'),
-    find: "quote @ (b'\"' | b'\\'') => at = string_end(bytes, at, quote),",
-    replace: "b'\"' | b'\\'' => at += 1,",
+    file: body('css.rs'),
+    find: "quote @ (b'\"' | b'\\'') => at = string_end(bytes, at, quote),\n            b'/' if bytes.get(at + 1) == Some(&b'*') => at = comment_end(bytes, at),\n            b'#' => {",
+    replace:
+      "b'\"' | b'\\'' => at += 1,\n            b'/' if bytes.get(at + 1) == Some(&b'*') => at = comment_end(bytes, at),\n            b'#' => {",
     scenarios: COLORS,
   },
   {
     name: 'a color name inside a url() is restyled, which breaks the url',
-    file: body('paint.rs'),
+    file: body('css.rs'),
     find: 'if matches!(function.as_str(), "url" | "rgb" | "rgba" | "hsl" | "hsla") {',
     replace: 'if matches!(function.as_str(), "rgb" | "rgba" | "hsl" | "hsla") {',
     scenarios: COLORS,
