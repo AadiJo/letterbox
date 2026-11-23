@@ -5,8 +5,8 @@
 use indexmap::IndexMap;
 use letterbox_core::adapter::{
     Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, AttachmentResult, BodyResult, ChangeSet, ChangesResult,
-    Cursor, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RemoteMailbox,
-    RemoteMessage, SendResult, SnapshotPage,
+    Cursor, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RawResult,
+    RemoteMailbox, RemoteMessage, SendResult, SnapshotPage,
 };
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{Api, CallError};
 use crate::labels;
 use crate::message::{METADATA_HEADERS, attachment_part, decode_bytes, remote_body, remote_message};
-use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, PartBody, Profile};
+use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, PartBody, Profile, RawMessage};
 
 /// messages.list allows up to 500. 100 is its default.
 const PAGE_SIZE: &str = "100";
@@ -242,6 +242,27 @@ impl GmailAdapter {
         }
     }
 
+    /// The whole message, from a format=raw get on the transfer budget, read no further than
+    /// `limit` bytes of message: its base64url in a JSON answer takes a third more, and a little
+    /// besides. Only an unsubscribe asks for it (crates/core/src/unsubscribe).
+    async fn raw_of(&self, r#ref: MessageRef, limit: usize) -> Outcome<RawResult> {
+        let path = format!("messages/{}?format=raw", r#ref.as_str());
+        let encoded = limit.saturating_mul(4) / 3 + 4096;
+        match self.api.get_transfer_capped::<RawMessage>(&path, encoded).await {
+            Ok(Some(message)) => {
+                let raw = decode_bytes(&message.raw);
+                Ok(if raw.len() > limit {
+                    RawResult::TooLarge
+                } else {
+                    RawResult::Raw(raw)
+                })
+            }
+            Ok(None) => Ok(RawResult::TooLarge),
+            Err(error) if error.is_not_found() => Ok(RawResult::Gone),
+            Err(error) => Err(error.failure()),
+        }
+    }
+
     /// Changes one message's labels. Gmail answers 404 when it no longer has the message.
     async fn modify_one(&self, id: &str, add: &[String], remove: &[String]) -> Result<(), CallError> {
         let body = Modify {
@@ -391,6 +412,10 @@ impl Adapter for GmailAdapter {
 
     fn attachment(&self, r#ref: MessageRef, index: usize) -> LocalFuture<'_, Outcome<AttachmentResult>> {
         Box::pin(self.attachment_of(r#ref, index))
+    }
+
+    fn raw(&self, r#ref: MessageRef, limit: usize) -> LocalFuture<'_, Outcome<RawResult>> {
+        Box::pin(self.raw_of(r#ref, limit))
     }
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {

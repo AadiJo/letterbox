@@ -22,6 +22,7 @@ use crate::maps::HashMap;
 use crate::rows::{Listed, Refresh, Rows};
 use crate::views::{Live, matches};
 use crate::work::Meter;
+use crate::world::World;
 
 /// How many days of volume a sender's row shows, today the last.
 const DAYS: u64 = 14;
@@ -109,19 +110,22 @@ impl Senders {
         senders
     }
 
-    /// Moves the threads a refresh changed between groups. True when a group changed, or the
-    /// clock moved on to another day.
+    /// Moves the threads a refresh changed between groups. True when a group changed, the
+    /// clock moved on to another day, or an unsubscribe moved on: a row shows where the one
+    /// from its sender has got, which the answer reads from the world.
     pub fn catch_up(&mut self, refresh: &Refresh, rows: &Rows, live: &dyn Live, meter: &Meter) -> bool {
-        let changed = match refresh {
+        let (changed, unsubscribes) = match refresh {
             Refresh::Everything => {
                 let filter = std::mem::take(&mut self.filter);
                 *self = Senders::open(filter, self.zone, (self.offset, self.limit), rows, live, meter);
                 return true;
             }
-            Refresh::Threads { changed, .. } => changed,
+            Refresh::Threads {
+                changed, unsubscribes, ..
+            } => (changed, *unsubscribes),
         };
         let today = day_of(self.zone, &live.now());
-        let mut moved = today != self.today;
+        let mut moved = today != self.today || unsubscribes;
         self.today = today;
         for one in changed {
             if let Some(before) = &one.before {
@@ -151,8 +155,9 @@ impl Senders {
         Some(iso(chrono::DateTime::from_timestamp(start, 0)?))
     }
 
-    /// One window of the groups, newest first, each told by its newest conversation.
-    pub fn answer(&self, rows: &Rows) -> SenderPage {
+    /// One window of the groups, newest first, each told by its newest conversation, with
+    /// where an unsubscribe from its address has got in `world`.
+    pub fn answer(&self, rows: &Rows, world: &World) -> SenderPage {
         // Where each of the last DAYS days starts, then where tomorrow does.
         let first = self.today.checked_sub_days(Days::new(DAYS - 1)).unwrap_or(self.today);
         let starts: Vec<i64> = first
@@ -191,6 +196,7 @@ impl Senders {
                     })
                     .collect(),
                 unsubscribe: sender.unsubscribe.clone(),
+                unsubscribed: crate::unsubscribe::state(world, &listed.summary.account_id, &sender.address),
             })
         });
         SenderPage {

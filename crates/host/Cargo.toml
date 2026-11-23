@@ -15,6 +15,8 @@ letterbox-gmail.workspace = true
 letterbox-keychain.workspace = true
 # The https client the core's remote images go through (src/web.rs). The Gmail adapter's version.
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
+# DNS TXT lookups of the DKIM keys an unsubscribe checks (src/web.rs). The version mail-auth uses in the core.
+hickory-resolver = "0.26"
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "net"] }

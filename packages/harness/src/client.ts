@@ -53,6 +53,8 @@ export type CoreClient = KeepingClient & {
   noted(what: 'pull-queued' | 'hint-ignored', count: number): Promise<void>
   /** The process's exit code once it has exited on its own, else null. */
   exitCode(): number | null
+  /** Everything the process wrote to stderr so far. */
+  log(): string
   /** Sends anything at all, for scenarios about bad input. */
   sendRaw(value: unknown): void
   /** Closes the core's input and waits for the process to end. Rejects if it has not ended within the usual wait. */
@@ -297,6 +299,7 @@ export function startCore(
       return untilStderr(() => stderr.split(line).length - 1 >= count, `the schedule to note ${what} ${count} times`)
     },
     exitCode: () => child.exitCode,
+    log: () => stderr,
     kill: async () => {
       record({ from: 'scenario', note: 'the core is killed' })
       child.kill('SIGKILL')

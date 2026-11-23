@@ -130,8 +130,8 @@ export const PEOPLE_MUTATIONS: Mutation[] = [
   {
     name: 'Updates answers again only on a commit, so a wake at midnight leaves the days where they were',
     file: core('senders.rs'),
-    find: '        let mut moved = today != self.today;',
-    replace: '        let mut moved = false;',
+    find: '        let mut moved = today != self.today || unsubscribes;',
+    replace: '        let mut moved = unsubscribes;',
     scenarios: 'per day',
   },
   {

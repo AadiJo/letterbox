@@ -1,10 +1,12 @@
-//! Where to unsubscribe from the list a message came from. The core reads it and never acts
-//! on it: a mailto send or a POST to the sender's URL tells the sender the address is read.
+//! Where to unsubscribe from the list a message came from. Reading mail only reads it: a mailto
+//! send or a POST to the sender's URL tells the sender the address is read, so the core acts on
+//! it only once the user unsubscribes (crates/core/src/unsubscribe).
 //!
 //! The core picks one way:
 //!   1. one-click: the first https URL in List-Unsubscribe, when List-Unsubscribe-Post is
 //!      `List-Unsubscribe=One-Click` (RFC 8058). It is marked unverified: RFC 8058 asks for a
-//!      DKIM signature over both headers before a POST, which the core does not check yet.
+//!      DKIM signature over both headers before a POST, which the core checks only when the
+//!      user unsubscribes. Without one, the unsubscribe takes `without_one_click` instead.
 //!   2. else the first mailto or https URI in List-Unsubscribe, in the header's own order
 //!      (RFC 2369 lists them in the sender's order of preference),
 //!   3. else a link in the body before its quote (see `Link`): in HTML an `<a>` with an https
@@ -22,13 +24,7 @@ use crate::adapter::RemoteHeaders;
 
 /// The way the header names, or None when it names neither a mailto nor an https URI.
 pub fn from_headers(headers: &RemoteHeaders) -> Option<Unsubscribe> {
-    // RFC 2369 section 2: whitespace inside the brackets, as when a long URL is folded, is not
-    // part of the URL.
-    let urls: Vec<Url> = entries(&headers.list_unsubscribe_value)
-        .into_iter()
-        .filter_map(|entry| Url::parse(&entry.split_whitespace().collect::<String>()).ok())
-        .filter(|url| matches!(url.scheme(), "https" | "mailto"))
-        .collect();
+    let urls = urls(headers);
     let one_click = headers
         .list_unsubscribe_post
         .trim()
@@ -39,17 +35,40 @@ pub fn from_headers(headers: &RemoteHeaders) -> Option<Unsubscribe> {
             verified: false,
         });
     }
-    let first = urls.first()?;
-    Some(match first.scheme() {
+    urls.first().map(target)
+}
+
+/// The way to unsubscribe when one-click cannot be used, as when its DKIM check fails: the first
+/// mailto URI in List-Unsubscribe, which the core sends itself, else its first https URI.
+pub fn without_one_click(headers: &RemoteHeaders) -> Option<Unsubscribe> {
+    let urls = urls(headers);
+    let mailto = urls.iter().find(|url| url.scheme() == "mailto");
+    mailto.or(urls.first()).map(target)
+}
+
+/// The mailto and https URIs in List-Unsubscribe, in the header's order.
+fn urls(headers: &RemoteHeaders) -> Vec<Url> {
+    // RFC 2369 section 2: whitespace inside the brackets, as when a long URL is folded, is not
+    // part of the URL.
+    entries(&headers.list_unsubscribe_value)
+        .into_iter()
+        .filter_map(|entry| Url::parse(&entry.split_whitespace().collect::<String>()).ok())
+        .filter(|url| matches!(url.scheme(), "https" | "mailto"))
+        .collect()
+}
+
+/// The target a mailto or https URI from the header names.
+fn target(url: &Url) -> Unsubscribe {
+    match url.scheme() {
         "mailto" => Unsubscribe::Mailto {
-            to: first.path().to_owned(),
-            uri: first.to_string(),
+            to: url.path().to_owned(),
+            uri: url.to_string(),
         },
         _ => Unsubscribe::Web {
-            url: first.to_string(),
+            url: url.to_string(),
             from: UnsubscribeSource::Header,
         },
-    })
+    }
 }
 
 /// The URIs in a List-Unsubscribe value, in order, read as RFC 2369 section 2 writes them.

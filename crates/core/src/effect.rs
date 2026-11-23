@@ -24,6 +24,7 @@ use crate::clock::parse;
 use crate::maps::IndexSet;
 use crate::outbox::Outbound;
 use crate::turns::{held_override, newest_held};
+use crate::unsubscribe::Unsubscription;
 use crate::world::{MailboxMode, MessageState, Op, World};
 
 /// What one change does. Its kind decides how an undo answers (see undo.rs).
@@ -40,6 +41,9 @@ pub enum Effect {
     Cancel { of: ChangeId },
     /// A choice to show or block a message's images, which never leaves the device (body/mod.rs).
     Images { message_id: MessageId },
+    /// An unsubscribe from a sender (unsubscribe/). It names no message: it changes none, and
+    /// the sender's row in Updates shows it. One that goes out as mail becomes a `Send`.
+    Unsubscribe(Unsubscription),
     /// Accepted by a core from before changes recorded what they altered. It still reaches
     /// the provider, but cannot be undone. Only stores written back then hold one.
     Unrecorded { op: Option<Op> },
@@ -51,7 +55,11 @@ impl Effect {
         match self {
             Effect::Messages(effect) => &effect.ops,
             Effect::Unrecorded { op } => op.as_slice(),
-            Effect::Turns(_) | Effect::Send(_) | Effect::Cancel { .. } | Effect::Images { .. } => &[],
+            Effect::Turns(_)
+            | Effect::Send(_)
+            | Effect::Cancel { .. }
+            | Effect::Images { .. }
+            | Effect::Unsubscribe(_) => &[],
         }
     }
 
@@ -70,7 +78,17 @@ impl Effect {
             Effect::Messages(effect) => effect.undoes.as_ref(),
             Effect::Turns(effect) => effect.undoes.as_ref(),
             Effect::Cancel { of } => Some(of),
-            Effect::Send(_) | Effect::Unrecorded { .. } | Effect::Images { .. } => None,
+            Effect::Send(_) | Effect::Unrecorded { .. } | Effect::Images { .. } | Effect::Unsubscribe(_) => None,
+        }
+    }
+
+    /// The From address an unsubscribe is from, for one that is: held or on its way as itself,
+    /// or gone out as mail. Updates shows it on that sender (see `state` in unsubscribe/).
+    pub fn unsubscribes(&self) -> Option<&str> {
+        match self {
+            Effect::Unsubscribe(unsubscription) => Some(&unsubscription.address),
+            Effect::Send(outbound) => outbound.unsubscribes.as_deref(),
+            _ => None,
         }
     }
 
@@ -105,7 +123,11 @@ impl Effect {
                 .map(|altered| UndoField::Turn {
                     thread_id: altered.thread_id.clone(),
                 }),
-            Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } | Effect::Images { .. } => None,
+            Effect::Send(_)
+            | Effect::Cancel { .. }
+            | Effect::Unrecorded { .. }
+            | Effect::Images { .. }
+            | Effect::Unsubscribe(_) => None,
         }
     }
 }

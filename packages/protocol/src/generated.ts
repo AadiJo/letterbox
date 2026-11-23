@@ -228,9 +228,9 @@ inConversation: boolean, };
  */
 export type Unsubscribe = { "method": "one-click", url: string, 
 /**
- * True once a DKIM signature that covers List-Unsubscribe and List-Unsubscribe-Post is
- * verified, as RFC 8058 requires before a POST. The core does not check that yet, so
- * it is always false.
+ * Always false here: the core checks the DKIM signature RFC 8058 requires only when the
+ * user unsubscribes, so reading mail fetches nothing more. An unsubscribe whose check
+ * fails goes out as mailto or web instead (see `Command::Unsubscribe`).
  */
 verified: boolean, } | { "method": "mailto", to: string, uri: string, } | { "method": "web", url: string, from: UnsubscribeSource, };
 
@@ -259,6 +259,19 @@ mime: string, size: number, };
 export type ImageError = "gone" | "blocked" | "refused" | "too-large" | "unreachable";
 
 export type Attachment = { blobId: BlobId, name: string, mime: string, size: number, inline: boolean, };
+
+/**
+ * Where the user's unsubscribe from a sender has got, on its row in Updates. The core keeps it
+ * per account and per From address, so it is a display state only: it decides nothing about
+ * which mail arrives. A row has none before the user unsubscribes, and again once that try was
+ * undone or failed, so the UI offers the button again then.
+ */
+export type Unsubscribed = { "state": "held", change: ChangeId, until: string, method: UnsubscribeMethod, } | { "state": "sending", change: ChangeId, method: UnsubscribeMethod, } | { "state": "done", change: ChangeId, method: UnsubscribeMethod, } | { "state": "page", change: ChangeId, url: string, };
+
+/**
+ * How an unsubscribe goes out, or went out.
+ */
+export type UnsubscribeMethod = "one-click" | "mailto" | "web";
 
 export type ThreadFilter = { 
 /**
@@ -307,7 +320,8 @@ export type SenderId = Id<'Sender'>;
  * conversation is automated when its newest message from someone else is (see turns.rs in
  * the core). Its sender is that message's address, compared without case, so news@ and
  * no-reply@ of one company are two senders. To act on all of a sender's conversations, list
- * them with `sender` in a threads filter and send one command naming their ids.
+ * them with `sender` in a threads filter and send one command naming their ids: an Archive all
+ * after an unsubscribe archives `threads` conversations holding `messages` messages.
  */
 export type SenderSummary = { id: SenderId, accountId: AccountId, 
 /**
@@ -332,7 +346,12 @@ days: Array<SenderDay>,
  * How to unsubscribe, from the message the row's name and address come from: its
  * List-Unsubscribe header, or else a link in its body if that has loaded.
  */
-unsubscribe: Unsubscribe | null, };
+unsubscribe: Unsubscribe | null, 
+/**
+ * The user's unsubscribe from this address, while it is held, on its way or done. None
+ * when there is none, or the last one was undone or failed.
+ */
+unsubscribed: Unsubscribed | null, };
 
 /**
  * One day of a sender's mail in Updates: how many messages were sent that day, and how many
@@ -372,10 +391,10 @@ export type Recipient = { name: string | null, address: string, lastAt: string, 
 export type ChangeHolder = { threadId: ThreadId | null, };
 
 /**
- * A user intent. Every command but set-images acts on whole threads.
+ * A user intent. Every command but set-images and unsubscribe acts on whole threads.
  * Only set-turn and set-images work with read-only access, because they never leave the device.
  */
-export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "undo", change: ChangeId, };
+export type Command = { "kind": "set-turn", threadIds: Array<ThreadId>, turn: TurnChoice, } | { "kind": "set-flags", threadIds: Array<ThreadId>, unread?: boolean, flagged?: boolean, } | { "kind": "set-mailboxes", threadIds: Array<ThreadId>, add: Array<MailboxId>, remove: Array<MailboxId>, } | { "kind": "trash", threadIds: Array<ThreadId>, } | { "kind": "send", draft: Draft, } | { "kind": "set-images", messageId: MessageId, show: ShowImages, } | { "kind": "unsubscribe", messageId: MessageId, } | { "kind": "undo", change: ChangeId, };
 
 /**
  * The turn a set-turn command asks for: a fixed holder, or `auto` to hand it back to the rule.
@@ -424,7 +443,7 @@ export type Delivery = { "state": "held", change: ChangeId, until: string, } | {
 /**
  * Why the core or the provider said no.
  */
-export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed";
+export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed" | "not-public";
 
 /**
  * The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.

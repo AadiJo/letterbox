@@ -159,7 +159,11 @@ impl<'a> Edit<'a> {
                 remove,
             } => Some((thread_ids, Edit::Mailboxes { add, remove })),
             Command::Trash { thread_ids } => Some((thread_ids, Edit::Trash)),
-            Command::SetTurn { .. } | Command::SetImages { .. } | Command::Send { .. } | Command::Undo { .. } => None,
+            Command::SetTurn { .. }
+            | Command::SetImages { .. }
+            | Command::Send { .. }
+            | Command::Unsubscribe { .. }
+            | Command::Undo { .. } => None,
         }
     }
 }

@@ -48,6 +48,8 @@ export type Stored = {
    * their bytes. A sent copy's files are the bytes the core sent, kept as they came.
    */
   contents: readonly (() => Buffer)[]
+  /** The whole message as `raw` answers it: built from its seed (raw.ts), or as the core sent it. */
+  raw: string
   unread: boolean
   flagged: boolean
   /** Mailbox keys. */
