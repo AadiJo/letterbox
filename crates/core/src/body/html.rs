@@ -2,14 +2,15 @@
 //! and edits it in place, so everything the passes do not touch stays byte for byte.
 //!   0. `unwrap` makes the markup read as the renderer's frame reads it: it takes the tags off
 //!      every `<noscript>`, whose content lol_html reads as text but a frame with scripts off
-//!      reads as markup, and drops every `<base>`, so no relative URL resolves against a
-//!      sender's address. It drops every `<link>` too, since a browser acts on DNS-prefetch,
-//!      preconnect and prefetch hints outside the frame's image policy, so a hint would tell a
-//!      sender's resolver the mail was opened, and every `<meta http-equiv>`, which could turn
-//!      prefetching back on or set a refresh.
+//!      reads as markup.
 //!   1. `scan` reads the body: where its quote starts (quote.rs), its text before the quote,
 //!      and its unsubscribe links.
-//!   2. `rewrite` (rewrite.rs) writes the body a UI shows: trackers taken out (trackers.rs), each remote
+//!   2. `rewrite` (rewrite.rs) writes the body a UI shows. It drops every `<base>`, so no
+//!      relative URL resolves against a sender's address, every `<link>`, since a browser acts
+//!      on DNS-prefetch, preconnect and prefetch hints outside the frame's image policy and a
+//!      hint would tell a sender's resolver the mail was opened, and every `<meta http-equiv>`,
+//!      which could turn prefetching back on or set a refresh. It runs on pass 0's result, so a
+//!      hint that was inside a `<noscript>` goes too. Then: trackers taken out (trackers.rs), each remote
 //!      image a placeholder that names its index in `Html::remote`, any `data-letterbox-`
 //!      attribute the sender wrote dropped, and a marker comment before the element where the
 //!      quote starts, which `take_marker` turns into an offset.
@@ -73,18 +74,27 @@ pub fn process(input: &str) -> Option<Html> {
     })
 }
 
-/// Pass 0: every `<noscript>` without its tags, and no `<base>`, `<link>` or `<meta http-equiv>`.
+/// How many times pass 0 takes the tags off `<noscript>`s nested in each other. A noscript left
+/// after that goes whole in pass 2.
+const NOSCRIPT_DEPTH: usize = 4;
+
+/// Pass 0: every `<noscript>` without its tags. lol_html reads a noscript's content as text, so
+/// one nested in another only becomes markup once the outer one is unwrapped: the pass runs
+/// again while a noscript is left, up to NOSCRIPT_DEPTH times. The hints in what this uncovers
+/// (`<base>`, `<link>`, `<meta http-equiv>`) go in pass 2, which reads the result as markup.
 fn unwrap(input: &str) -> Option<String> {
-    let settings = RewriteStrSettings::new()
-        .append_element_content_handler(element!("noscript", |el| {
+    let mut html = input.to_owned();
+    for _ in 0..NOSCRIPT_DEPTH {
+        if !html.to_ascii_lowercase().contains("<noscript") {
+            break;
+        }
+        let settings = RewriteStrSettings::new().append_element_content_handler(element!("noscript", |el| {
             el.remove_and_keep_content();
             Ok(())
-        }))
-        .append_element_content_handler(element!("base, link, meta[http-equiv]", |el| {
-            el.remove();
-            Ok(())
         }));
-    rewrite_str(input, settings).ok()
+        html = rewrite_str(&html, settings).ok()?;
+    }
+    Some(html)
 }
 
 /// A comment the body does not already hold, so the one pass 2 writes is the only one.

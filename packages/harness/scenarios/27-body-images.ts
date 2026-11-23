@@ -27,12 +27,14 @@ const VERIFIED = ['mx.google.com; dkim=pass header.i=@shop.example; dmarc=pass (
  *   data-letterbox-image="7"                      an attribute that pretends to be the core's own
  *   <link> dns-prefetch, preconnect, stylesheet    hints a browser acts on outside the image policy
  *   <meta http-equiv>                              which would turn prefetching back on
+ *   a preconnect and a refresh in a <noscript>     which become markup once the noscript is unwrapped
  *   US1.LIST-MANAGE.COM., ｍａｉｌｔｒａｃｋ.io       known hosts in capitals with a trailing dot, and in full-width letters
  */
 const NEWSLETTER = [
   '<link rel="dns-prefetch" href="//cdn.shop.example"><link rel="preconnect" href="https://cdn.shop.example">',
   '<link rel="stylesheet" href="https://cdn.shop.example/mail.css">',
   '<meta http-equiv="x-dns-prefetch-control" content="on">',
+  '<noscript><link rel="preconnect" href="https://cdn.shop.example"><meta http-equiv="refresh" content="0;url=https://evil.example"></noscript>',
   '<base href="https://evil.example/">',
   '<table><tr><td background="https://cdn.shop.example/bg.png">',
   '<img src="https://cdn.shop.example/hero.jpg" width="600" alt="Winter sale">',
@@ -182,6 +184,24 @@ const seed = (): Seed => ({
         '<img src="https://cdn.shop.example/hop.png" alt="E">',
       ].join(''),
       '2025-12-02T12:00:00.000Z',
+    ),
+    // IPv6 hosts from the special-purpose registry's ranges that are not global, a name at a
+    // unique-local address, and one global address that does go through.
+    newsletter(
+      'six',
+      'IPv6 images',
+      SHOP,
+      [
+        '<img src="https://[64:ff9b:1::a00:5]/a.png" alt="local NAT64">',
+        '<img src="https://[2001:db8::1]/b.png" alt="documentation">',
+        '<img src="https://[2002:7f00:1::]/c.png" alt="6to4 of loopback">',
+        '<img src="https://[100::1]/d.png" alt="discard">',
+        '<img src="https://[3fff::1]/e.png" alt="documentation">',
+        '<img src="https://[2001:2::1]/f.png" alt="benchmarking">',
+        '<img src="https://six.shop.example/g.png" alt="unique-local">',
+        '<img src="https://[2606:4700::1111]/h.png" alt="global">',
+      ].join(''),
+      '2025-12-02T12:30:00.000Z',
     ),
   ],
 })
@@ -341,6 +361,8 @@ scenario('the core fetches a shown image a UI asks for, checks every redirect, a
   t.web.resolve('mixed.shop.example', ['93.184.215.14', '10.0.0.5'])
   t.web.resolve('hidden.shop.example', ['169.254.169.254'])
   t.web.serve('https://cdn.shop.example/hop.png', { kind: 'redirect', location: 'https://hidden.shop.example/e.png' })
+  t.web.resolve('six.shop.example', ['fd12:3456::1'])
+  t.web.serve('https://[2606:4700::1111]/h.png', { kind: 'body', mime: 'image/png', bytes: PNG })
   const { core } = await start(t, seed())
   const winter = await openThread(core, (await thread(core, 'Winter sale')).id)
   const message = bodyOf(winter).message
@@ -381,6 +403,18 @@ scenario('the core fetches a shown image a UI asks for, checks every redirect, a
     ['refused', 'refused', 'refused', 'refused', 'refused'],
     'a loopback literal, its IPv6 form, a name that resolves to loopback, one with a private address among public ones, and a redirect to cloud metadata are all refused',
   )
+  const six = bodyOf(await openThread(core, (await thread(core, 'IPv6 images')).id)).message
+  await done(t, core, show(six, 'message'), 'show the IPv6 images')
+  const answers = []
+  for (const index of [0, 1, 2, 3, 4, 5, 6, 7]) {
+    const { answer } = await image(core, six, index)
+    answers.push(typeof answer === 'string' ? answer : answer.mime)
+  }
+  t.equal(
+    answers,
+    ['refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'image/png'],
+    'local-use NAT64, documentation, 6to4 of loopback, discard, the new documentation range, benchmarking and a unique-local name are refused, and a global address is not',
+  )
   t.equal(
     t.web.requested(),
     [
@@ -392,6 +426,7 @@ scenario('the core fetches a shown image a UI asks for, checks every redirect, a
       'https://cdn.shop.example/badge.svg',
       'https://cdn.shop.example/promo.jpg',
       'https://cdn.shop.example/hop.png',
+      'https://[2606:4700::1111]/h.png',
     ],
     'the web saw only the listed public images and the redirects allowed: no tracker, no address inside the network, no noscript image, base, image-set or srcset beside a local image',
   )

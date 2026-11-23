@@ -220,17 +220,19 @@ impl Scan {
             let kept = tail(&self.block_text, BLOCK_TEXT).len();
             self.block_text.drain(..self.block_text.len() - kept);
         }
+        // A candidate's text starts at its first character that is not space, so a chunk is
+        // trimmed once, and one of only space adds nothing to a candidate with no text yet.
+        let trimmed = text.trim_start();
         for &index in &self.reading {
             let candidate = &mut self.candidates[index];
             let open = candidate.end == u32::MAX && pos >= candidate.start.pos;
             if !open || candidate.text.len() >= BORDER_TEXT {
                 continue;
             }
-            let piece = if candidate.text.is_empty() {
-                text.trim_start()
-            } else {
-                text
-            };
+            let piece = if candidate.text.is_empty() { trimmed } else { text };
+            if piece.is_empty() {
+                continue;
+            }
             candidate.text.push_str(head(piece, BORDER_TEXT - candidate.text.len()));
         }
         self.drop_finished();

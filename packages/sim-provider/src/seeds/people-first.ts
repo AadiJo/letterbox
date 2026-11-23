@@ -205,6 +205,7 @@ const htmlNewsletter: SeedMessage = {
   html: [
     '<link rel="stylesheet" href="https://styles.longread.example/mail.css">',
     '<link rel="dns-prefetch" href="//prefetch.longread.example"><link rel="preconnect" href="https://connect.longread.example">',
+    '<noscript><link rel="preconnect" href="https://noscript.longread.example"></noscript>',
     '<style>@font-face{font-family:Remote;src:url(https://fonts.longread.example/serif.woff2)}h1{font-family:Remote,Georgia,serif}</style>',
     '<h1>Five essays for the weekend</h1>',
     '<img src="https://images.longread.example/cover.jpg" width="560" height="280" alt="This week\'s cover">',

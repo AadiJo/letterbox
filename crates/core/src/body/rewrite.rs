@@ -135,6 +135,14 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         {
             el.before(marker, ContentType::Html);
         }
+        // Hints a browser acts on outside the image policy, and a noscript pass 0 left (see html.rs).
+        let name = el.tag_name();
+        let hint =
+            matches!(name.as_str(), "base" | "link" | "noscript") || name == "meta" && el.has_attribute("http-equiv");
+        if hint {
+            el.remove();
+            return Ok(());
+        }
         let ours: Vec<String> = el
             .attributes()
             .iter()

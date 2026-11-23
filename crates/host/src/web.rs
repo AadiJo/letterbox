@@ -60,29 +60,41 @@ fn public_v4(ip: Ipv4Addr) -> bool {
     !reserved
 }
 
+/// IPv6, by the IANA IPv6 Special-Purpose Address Registry. Only global unicast (2000::/3) can
+/// be public, less the registry's ranges that are not globally reachable. Outside it, every
+/// range is special or unassigned: loopback, unspecified, IPv4-compatible (::/96), the
+/// local-use NAT64 prefix 64:ff9b:1::/48 (RFC 8215), discard-only 100::/64, the dummy prefix
+/// 100:0:0:1::/64, segment routing 5f00::/16, unique-local, link-local, site-local, multicast.
+/// The forms that carry an IPv4 address are as public as it: mapped (::ffff:0:0/96), the
+/// well-known NAT64 prefix (64:ff9b::/96) and 6to4 (2002::/16).
 fn public_v6(ip: Ipv6Addr) -> bool {
     let segments = ip.segments();
     let embedded = |high: u16, low: u16| Ipv4Addr::new((high >> 8) as u8, high as u8, (low >> 8) as u8, low as u8);
-    if ip.is_unspecified() || ip.is_loopback() {
-        return false;
-    }
-    // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible) carry an IPv4 address in their last 32 bits.
-    if segments[..5] == [0; 5] && (segments[5] == 0xffff || segments[5] == 0) {
+    if segments[..6] == [0, 0, 0, 0, 0, 0xffff] {
         return public_v4(embedded(segments[6], segments[7]));
     }
-    match segments[0] {
-        // NAT64 (64:ff9b::/96) carries an IPv4 address in its last 32 bits.
-        0x0064 if segments[1] == 0xff9b && segments[2..6] == [0; 4] => public_v4(embedded(segments[6], segments[7])),
-        // 6to4 (2002::/16) carries one in its second and third segments.
-        0x2002 => public_v4(embedded(segments[1], segments[2])),
-        // Discard-only 100::/64.
-        0x0100 if segments[1..4] == [0; 3] => false,
-        // IETF protocol assignments (2001::/23, Teredo among them) and documentation (2001:db8::/32).
-        0x2001 if segments[1] < 0x0200 || segments[1] == 0x0db8 => false,
-        // Unique-local fc00::/7, link-local fe80::/10, site-local fec0::/10, multicast ff00::/8.
-        first => {
-            first & 0xfe00 != 0xfc00 && first & 0xffc0 != 0xfe80 && first & 0xffc0 != 0xfec0 && first & 0xff00 != 0xff00
-        }
+    if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
+        return public_v4(embedded(segments[6], segments[7]));
+    }
+    if segments[0] == 0x2002 {
+        return public_v4(embedded(segments[1], segments[2]));
+    }
+    if segments[0] & 0xe000 != 0x2000 {
+        return false;
+    }
+    match (segments[0], segments[1]) {
+        // 2001::/23, IETF protocol assignments, is not global but for the parts the registry
+        // marks so: the anycast 2001:1::1 to 2001:1::3, AMT 2001:3::/32, AS112 2001:4:112::/48,
+        // ORCHIDv2 2001:20::/28 and drone remote ID 2001:30::/28. Teredo (2001::/32),
+        // benchmarking (2001:2::/48) and the old ORCHID (2001:10::/28) are not.
+        (0x2001, 0x0001) => segments[2..7] == [0; 5] && (1..=3).contains(&segments[7]),
+        (0x2001, 0x0003) | (0x2001, 0x0020..=0x003f) => true,
+        (0x2001, 0x0004) => segments[2] == 0x0112,
+        (0x2001, second) if second < 0x0200 => false,
+        // Documentation: 2001:db8::/32 and 3fff::/20 (RFC 9637).
+        (0x2001, 0x0db8) => false,
+        (0x3fff, second) if second < 0x1000 => false,
+        _ => true,
     }
 }
 
