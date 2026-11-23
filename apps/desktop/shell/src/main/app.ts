@@ -32,9 +32,12 @@ import { watchNetwork } from './network.ts'
 import { applyBadge, notifyYourTurn, openFromNotifications, showBadge } from './notify.ts'
 import { createWindow, lockNavigation, pageOrigin, registerScheme, serveRenderer } from './window.ts'
 
-/** Opens a sign-in page from the core in the browser. Only https: anything else stays shut. */
+/**
+ * Opens a page in the browser: a sign-in page from the core, or a page the person chose, such
+ * as a sender's unsubscribe page. Only https: anything else stays shut.
+ */
 const openUrl = (url: string) => {
-  if (URL.parse(url)?.protocol !== 'https:') return log('refused to open a url from the core that is not https')
+  if (URL.parse(url)?.protocol !== 'https:') return log('refused to open a url that is not https')
   void shell.openExternal(url)
 }
 
@@ -158,6 +161,12 @@ if (!read.ok) {
     })
   attachments('attachment:save', saveAttachment)
   attachments('attachment:open', openAttachment)
+
+  // A page the person chose to open, as a sender's unsubscribe page. Only our own page may ask.
+  ipcMain.on('url:open' satisfies Channel, (event, url: unknown) => {
+    if (!ownPage(event)) return log('refused url:open from a frame that is not our page')
+    if (typeof url === 'string' && url.length <= 4096) openUrl(url)
+  })
 
   registerScheme()
   lockNavigation(origin)

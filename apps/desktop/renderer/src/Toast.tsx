@@ -3,19 +3,25 @@
 // sits 12 px above the dock (CSS anchor positioning, the dock is `--dock`), so it never covers
 // Send or Undo. undo.ts decides what it says and for how long. With no notice up, it says
 // "Undoing…" while the core has not answered an undo of a reply, and otherwise offers Undo for a
-// reply in its undo window, for exactly as long as the core holds it (sending.ts).
+// reply in its undo window, for exactly as long as the core holds it (sending.ts). An unsubscribe
+// takes it from its confirm until a newer notice comes (Unsubscribe.tsx).
 
 import { CircleCheck, Clock, Info, Wind } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useSecondsUntil } from './clock.ts'
+import type { Mail } from './actions.ts'
 import { Key } from './Key.tsx'
+import { UnsubscribeToast } from './Unsubscribe.tsx'
+import { useTracked } from './unsubscribe.ts'
 import { type Offer, useSendOffer, useUndoingSend } from './sending.ts'
 import { type Notice, UNDO_KEY, useNotice } from './undo.ts'
 
-export function Toast({ onUndo }: { onUndo: () => Promise<void> }) {
+export function Toast({ mail, onUndo }: { mail: Mail; onUndo: () => Promise<void> }) {
   const notice = useNotice()
   const offer = useSendOffer()
   const undoing = useUndoingSend()
+  // An unsubscribe, until a newer notice takes the toast (unsubscribe.ts).
+  if (useTracked()) return <UnsubscribeToast mail={mail} onUndo={onUndo} />
   if (notice)
     return (
       // A new offer is a new toast, so it rises again.
@@ -69,7 +75,7 @@ function NoticeIcon({ icon }: { icon: Notice['icon'] }) {
 }
 
 /** The toast's box. `undo` says whether it offers Undo, and whether Undo can run yet. */
-function Frame({
+export function Frame({
   undo,
   onUndo,
   children,

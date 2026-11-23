@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import type { Request } from '@letterbox/protocol'
+import type { Refusal, Request } from '@letterbox/protocol'
 import type { Browser, BrowserContext, Page } from 'playwright'
 
 export const root = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -98,6 +98,8 @@ async function relayCore(page: Page) {
   let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
+  // The reason the relay refuses the page's next unsubscribe with itself, instead of passing it to the core.
+  let refuseUnsubscribe: Refusal | undefined
   // True once `failNextUndo` is called: the page's next undo ends the connection, and the core never sees it.
   let failUndo = false
   // Armed by `holdNextUndoAnswer`: the change id of the page's next undo, once sent, and the core's answer to it, once held.
@@ -160,6 +162,12 @@ async function relayCore(page: Page) {
         const hold = [...answerHolds].find((one) => one.id === null && one.test(request))
         if (hold) hold.id = id
       }
+      if (refuseUnsubscribe && text.includes('"kind":"unsubscribe"')) {
+        const reason = refuseUnsubscribe
+        refuseUnsubscribe = undefined
+        const { change } = JSON.parse(text) as { change: string }
+        return void socket.send(JSON.stringify({ kind: 'rejected', change, reason }))
+      }
       if (refuseUndo && text.includes('"kind":"undo"')) {
         const { conflict } = refuseUndo
         refuseUndo = undefined
@@ -218,6 +226,10 @@ async function relayCore(page: Page) {
     /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
     pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),
     /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. It never reaches the core. */
+    /** Refuses the page's next unsubscribe with `reason`, as the core would. It never reaches the core. */
+    refuseNextUnsubscribe: (reason: Refusal) => {
+      refuseUnsubscribe = reason
+    },
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }
     },

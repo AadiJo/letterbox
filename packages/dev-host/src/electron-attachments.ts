@@ -28,6 +28,8 @@ type Stubs = {
   warned: string[]
   /** Each path handed to the OS to open. */
   opened: string[]
+  /** Each url main handed the OS to open in the browser. */
+  external: string[]
 }
 
 declare global {
@@ -71,7 +73,7 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       attachments: FILES,
     })
     await app.evaluate(({ dialog, shell }) => {
-      const stubs: Stubs = { saveTo: null, warningAnswer: 0, offered: [], warned: [], opened: [] }
+      const stubs: Stubs = { saveTo: null, warningAnswer: 0, offered: [], warned: [], opened: [], external: [] }
       globalThis.letterboxStubs = stubs
       dialog.showSaveDialog = async (...args: unknown[]) => {
         const options = args.at(-1)
@@ -88,6 +90,9 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
       shell.openPath = async (path: string) => {
         stubs.opened.push(path)
         return ''
+      }
+      shell.openExternal = async (url: string) => {
+        stubs.external.push(url)
       }
     })
     /** Sets what the stubs answer next. */
@@ -124,6 +129,21 @@ export const attachmentsRun = (sim: RunningSim, server: DevServer) =>
         'an open',
       )
     const bytesOf = (index: number) => sim.mailbox.attachmentBytes(KEY, index)
+
+    // A page the person chose, as an unsubscribe page: main opens https, and nothing else.
+    await page.evaluate(() => {
+      window.letterbox?.openPage('http://plain.example/u')
+      window.letterbox?.openPage('file:///etc/hosts')
+      window.letterbox?.openPage('https://bramblebooks.example/unsubscribe?u=9')
+    })
+    // The page's next ask to main goes after those three, so main has read them once it answers.
+    // A blob id too long to be one is answered at once, with no dialog.
+    await open('x'.repeat(201) as BlobId)
+    equal(
+      (await asked()).external,
+      ['https://bramblebooks.example/unsubscribe?u=9'],
+      'pages: main opens a page the person chose only when it is https',
+    )
 
     const target = join(saved, 'chosen.pdf')
     await answer(target, 0)

@@ -41,6 +41,11 @@ export type ShellBridge = {
    * Returns a function that stops listening.
    */
   onOpenConversation(listener: (threadId: ThreadId) => void): () => void
+  /**
+   * Opens `url` in the person's browser, as when they choose to open a sender's unsubscribe
+   * page. Main opens https only, through the OS, and nothing comes back.
+   */
+  openPage(url: string): void
 }
 
 /**

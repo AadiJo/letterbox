@@ -11,6 +11,7 @@
 import type { SeedAddress, SeedMessage } from '../contract.ts'
 import type { DevSeed, PersonConversation } from '../seeds.ts'
 import { HTML_MAIL, IMAGES } from './people-html.ts'
+import { LIST_MAIL, LIST_WEB } from './people-lists.ts'
 import { agesOf, ago, CONVERSATIONS, type Conversation, DAY, ME, NOW, PEOPLE } from './people-mail.ts'
 
 /** Whose turn a conversation is: theirs when I wrote last, mine when they did. */
@@ -259,10 +260,11 @@ export const peopleFirst: DevSeed = {
       { key: 'receipts', name: 'Receipts', role: null },
       { key: 'travel', name: 'Travel', role: null },
     ],
-    messages: [...people, ...machines, ...HTML_MAIL].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
+    messages: [...people, ...machines, ...HTML_MAIL, ...LIST_MAIL].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
   },
   delivery: (n) => automated(AUTOMATED + n, NOW),
   images: IMAGES,
+  web: LIST_WEB,
   conversations: CONVERSATIONS.map((spec): PersonConversation => ({
     subject: spec.subject,
     turn: turnOf(spec),

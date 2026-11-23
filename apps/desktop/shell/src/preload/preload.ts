@@ -1,8 +1,9 @@
 // The preload: a thin bridge between the sandboxed page and main. It puts these on
 // `window.letterbox` (ShellBridge): the platform, for styling; `connect`, which asks main
 // for a core; `saveAttachment` and `openAttachment`, which pass a blob id to main and hand
-// back what happened, never a path; and `onOpenConversation`, which tells the page which
-// conversation a chosen notification names, holding one that came before the page listened.
+// back what happened, never a path; `onOpenConversation`, which tells the page which
+// conversation a chosen notification names, holding one that came before the page listened;
+// and `openPage`, which passes a url the person chose to main, to open in the browser.
 // Main answers `connect` with a MessagePort, which this passes to the page as a window
 // message, because contextBridge cannot carry a port. Core messages never pass through here.
 
@@ -54,4 +55,5 @@ contextBridge.exposeInMainWorld('letterbox', {
     }
     return () => void listeners.delete(each)
   },
+  openPage: (url) => ipcRenderer.send('url:open' satisfies Channel, url),
 } satisfies ShellBridge)

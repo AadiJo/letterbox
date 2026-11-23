@@ -3,6 +3,7 @@
 // do its action here (actions.ts decides), and it shows faint. With the core lost, the lead
 // button and the actions are all off at 40%, colors kept, as the strip at the reader's foot
 // explains (LostCore.tsx). Search stays on. Each one's tooltip names its key from SHORTCUTS.
+// Before Search, Unsubscribe, when the conversation's sender names a way (Unsubscribe.tsx).
 
 import type { ThreadSummary } from '@letterbox/protocol'
 import { Archive, Check, Flag, MailOpen, Trash2, Wind } from 'lucide-react'
@@ -12,6 +13,7 @@ import { useLost } from './core.ts'
 import { cx } from './cx.ts'
 import { MailDot } from './MailDot.tsx'
 import { Tooltip } from './Tooltip.tsx'
+import { ConversationUnsubscribe } from './Unsubscribe.tsx'
 
 type Props = {
   thread: ThreadSummary | undefined
@@ -83,6 +85,7 @@ export function Toolbar({ thread, mail, onAct, search, lead }: Props) {
         {icon('flag', thread?.flagged ? 'Unflag' : 'Flag', Flag)}
         {thread?.unread ? icon('unread', 'Mark as read', MailOpen) : icon('unread', 'Mark as unread', MailDot)}
         <span className="flex-1" />
+        {thread && <ConversationUnsubscribe id={thread.id} mail={mail} />}
         {search}
       </div>
     </div>
