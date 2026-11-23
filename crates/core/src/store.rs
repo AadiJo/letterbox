@@ -6,8 +6,12 @@
 //! One core at a time: opening takes an exclusive OS lock on `core.lock` in the folder, before
 //! anything is read, and holds it while the store is open. Every core decides from its own
 //! memory, so two over one store could both act on one change, such as an unsubscribe's POST,
-//! or miss each other's undo. A second core fails to open with `StoreError::Locked`. The OS
-//! drops the lock when the process ends, even when it is killed.
+//! or miss each other's undo. A second core fails to open with `StoreError::Locked`. The store
+//! unlocks the folder when it closes, after its database, and the OS drops the lock when the
+//! process ends, even when it is killed. Windows may let a lock outlive the handle or process
+//! that held it for a moment, so a core that starts as the last one ends tries again for about
+//! LOCK_WAIT before it gives up. `store_id` reads the id without the lock, so a host that reads
+//! it before starting the core does not take the lock, drop it, and take it again.
 //!
 //! Each store also has an id of its own, 32 random hex digits that SQLite makes the first
 //! time the store opens. It lives in the database, so a copy or a restore of the store keeps
@@ -18,6 +22,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::fs::File;
 use std::path::Path;
+use std::time::Duration;
 
 use letterbox_protocol::{AccountId, MailboxId, MessageId, Rev, ThreadId};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -88,16 +93,59 @@ impl From<rusqlite::Error> for StoreError {
 }
 
 /// The id of the store in `data_path`, opening it first, so a new store gets its id here. The
-/// host reads it before `Core::new`, since the core reads the keychain while it opens.
+/// host reads it before `Core::new`, since the core reads the keychain while it opens. It takes
+/// no lock: making the id is safe beside another open, and it changes nothing else.
 pub fn store_id(data_path: &Path) -> Result<String, StoreError> {
-    let store = Store::open(data_path)?;
+    let store = Store::open_with(data_path, None)?;
     Ok(store.db.query_row("select id from identity", [], |row| row.get(0))?)
+}
+
+/// How long opening waits for another core's lock on the folder before it fails `Locked`, in
+/// tries LOCK_TRY apart.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+const LOCK_TRY: Duration = Duration::from_millis(100);
+
+/// The folder's lock while the store is open. Dropped after the database, it unlocks then.
+struct FolderLock(File);
+
+impl FolderLock {
+    /// Takes the lock on `core.lock` in `data_path`, trying again for LOCK_WAIT while another
+    /// process holds it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "opening waits a moment for a lock Windows may release late. No run's transcript waits on it"
+    )]
+    fn take(data_path: &Path) -> Result<FolderLock, StoreError> {
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(data_path.join("core.lock"))
+            .map_err(StoreError::Folder)?;
+        let tries = LOCK_WAIT.as_millis() / LOCK_TRY.as_millis();
+        for _ in 0..tries {
+            // Called by its path: std's File has a try_lock of its own, newer than this crate's MSRV.
+            match fs4::FileExt::try_lock(&file) {
+                Ok(()) => return Ok(FolderLock(file)),
+                Err(fs4::TryLockError::WouldBlock) => std::thread::sleep(LOCK_TRY),
+                Err(fs4::TryLockError::Error(error)) => return Err(StoreError::Folder(error)),
+            }
+        }
+        Err(StoreError::Locked)
+    }
+}
+
+impl Drop for FolderLock {
+    fn drop(&mut self) {
+        // Closing the handle unlocks too, but Windows may do that late. Failing here leaves that.
+        let _ = fs4::FileExt::unlock(&self.0);
+    }
 }
 
 pub struct Store {
     db: Connection,
-    /// Holds the folder's lock while the store is open. Never read.
-    _lock: File,
+    /// Declared after `db`, so the folder unlocks once the database has closed. None for `store_id`.
+    _lock: Option<FolderLock>,
     rev: Cell<Rev>,
     counter: Cell<u64>,
 }
@@ -109,20 +157,16 @@ pub struct Transaction<'a> {
 
 impl Store {
     /// Opens the store in `data_path`, creating the folder and the tables when they are missing.
+    /// It holds the folder's lock until it is dropped (see the module docs).
     pub fn open(data_path: &Path) -> Result<Store, StoreError> {
         std::fs::create_dir_all(data_path).map_err(StoreError::Folder)?;
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(data_path.join("core.lock"))
-            .map_err(StoreError::Folder)?;
-        // Called by its path: std's File has a try_lock of its own, newer than this crate's MSRV.
-        match fs4::FileExt::try_lock(&lock) {
-            Ok(()) => {}
-            Err(fs4::TryLockError::WouldBlock) => return Err(StoreError::Locked),
-            Err(fs4::TryLockError::Error(error)) => return Err(StoreError::Folder(error)),
-        }
+        let lock = FolderLock::take(data_path)?;
+        Store::open_with(data_path, Some(lock))
+    }
+
+    /// Opens the store in `data_path` holding `lock`, or no lock for `store_id`.
+    fn open_with(data_path: &Path, lock: Option<FolderLock>) -> Result<Store, StoreError> {
+        std::fs::create_dir_all(data_path).map_err(StoreError::Folder)?;
         let db = Connection::open(data_path.join("letterbox.sqlite"))?;
         db.execute_batch(
             "pragma journal_mode = wal;

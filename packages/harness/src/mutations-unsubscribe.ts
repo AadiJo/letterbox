@@ -15,6 +15,7 @@ const RESTART = 'an unsubscribe held across a restart'
 const CUT_OFF = "an unsubscribe's POST cut off by a stopped core"
 const NOT_VOUCHED = 'a one-click unsubscribe without an aligned signature'
 const SECOND_CORE = 'a second core on the same store is refused'
+const REGISTRABLE = "an unsubscribe's one-click signature aligns only within"
 
 export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
   {
@@ -187,5 +188,12 @@ export const UNSUBSCRIBE_MUTATIONS: Mutation[] = [
     find: '            if bytes.len() > limit {',
     replace: '            if bytes.len() > usize::MAX {',
     scenarios: NOT_VOUCHED,
+  },
+  {
+    name: 'a public suffix such as co.uk or github.io signs for every domain below it',
+    file: unsubscribe('dkim.rs'),
+    find: '    under(&signer, from_domain) && (signer == registrable || under(registrable, &signer))',
+    replace: "    drop(registrable);\n    under(&signer, from_domain) && signer.contains('.')",
+    scenarios: REGISTRABLE,
   },
 ]

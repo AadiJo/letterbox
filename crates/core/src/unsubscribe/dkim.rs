@@ -1,8 +1,8 @@
 //! The check RFC 8058 section 4 asks for before a one-click POST: the message carries a DKIM
 //! signature (RFC 6376) that verifies, and whose `h=` covers From, List-Unsubscribe and
 //! List-Unsubscribe-Post. The core asks one thing more: the signature's `d=` aligns with the
-//! From domain the user sees, so a list run by one domain cannot vouch for a URL in mail that
-//! shows another's From. It runs once per unsubscribe, on the raw source the provider holds,
+//! From domain the user sees, within its registrable domain (`aligned`), so a list run by one
+//! domain cannot vouch for a URL in mail that shows another's From. It runs once per unsubscribe, on the raw source the provider holds,
 //! never when mail is read.
 //!
 //! Every field is read as the verifier reads it, from mail-auth's own list of the message's
@@ -117,11 +117,21 @@ fn covers(signature: &Signature) -> bool {
     names("From") && names("List-Unsubscribe") && names("List-Unsubscribe-Post")
 }
 
-/// True when the signing domain `d=` is the From domain, or one it sits under: relaxed
-/// alignment, without a public suffix list. A `d=` of one label, such as `com`, never aligns.
+/// True when the signing domain `d=` is the From domain, or a parent of it at or below the From
+/// domain's registrable domain: relaxed alignment, as DMARC reads it. The Public Suffix List,
+/// built into the `psl` crate with its private entries, finds the registrable domain, so a
+/// suffix such as `co.uk`, or a host of others' sites such as `github.io`, cannot sign for every
+/// domain below it.
 fn aligned(signature: &Signature, from_domain: &str) -> bool {
     let signer = signature.d.trim_end_matches('.').to_ascii_lowercase();
-    signer.contains('.') && (from_domain == signer || from_domain.ends_with(&format!(".{signer}")))
+    if signer == from_domain {
+        return true;
+    }
+    let Some(registrable) = psl::domain_str(from_domain) else {
+        return false;
+    };
+    let under = |parent: &str, child: &str| child.ends_with(&format!(".{parent}"));
+    under(&signer, from_domain) && (signer == registrable || under(registrable, &signer))
 }
 
 /// Where a signature's key record lives: `<selector>._domainkey.<domain>.`, lowercase, as
