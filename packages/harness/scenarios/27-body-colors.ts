@@ -467,6 +467,7 @@ scenario("every dev seed's html still passes the check on the core's output, wit
       ['person-4-2', false, []],
       ['html-template-quote', false, []],
       ['html-statement-2', false, []],
+      ['list-homeware-4', false, []],
       ['withheld-newsletter', true, null],
       ['html-newsletter', false, []],
       ['html-issue', false, []],

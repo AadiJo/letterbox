@@ -385,7 +385,13 @@ export type Query = { "view": "accounts" } | { "view": "sign-in-options" } | { "
  * The user's IANA time zone, such as "America/Chicago": `days` are their days in it,
  * and move on at its midnight. Leave out, or name a zone the core does not know, for UTC.
  */
-zone?: string, offset: number, limit: number, } | { "view": "recipients", accountId: AccountId, prefix: string, limit: number, } | { "view": "change", change: ChangeId, };
+zone?: string, 
+/**
+ * Only the sender at this address, compared without case: its one row, or none. A UI
+ * reads one sender's row by it, such as where an unsubscribe from it has got, wherever
+ * the sender sits in Updates. Leave out for every sender.
+ */
+address?: string, offset: number, limit: number, } | { "view": "recipients", accountId: AccountId, prefix: string, limit: number, } | { "view": "change", change: ChangeId, };
 
 /**
  * The answer to a query. A threads update replaces the whole window.
@@ -527,7 +533,7 @@ export type Delivery = { "state": "held", change: ChangeId, until: string, } | {
 /**
  * Why the core or the provider said no.
  */
-export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed" | "not-public";
+export type Refusal = "not-permitted" | "not-supported" | "unknown-target" | "conflict" | "refused-by-provider" | "invalid" | "unconfirmed" | "not-public" | "already-unsubscribed";
 
 /**
  * The last word on a change: `"done"`, `"undone"` or `{"failed": refusal}` on the wire.

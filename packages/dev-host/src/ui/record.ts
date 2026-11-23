@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import type { Request } from '@letterbox/protocol'
+import type { Refusal, Request } from '@letterbox/protocol'
 import type { Browser, BrowserContext, Page } from 'playwright'
 
 export const root = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -98,6 +98,12 @@ async function relayCore(page: Page) {
   let watched: { text: string; seen: () => void } | undefined
   // The answer the relay gives the page's next undo itself, instead of passing it to the core.
   let refuseUndo: { conflict?: unknown } | undefined
+  // The reason the relay refuses the page's next unsubscribe with itself, instead of passing it to the core.
+  let refuseUnsubscribe: Refusal | undefined
+  // True once `swallowNextUnsubscribe` is called: the page's next unsubscribe never reaches the core, and nothing answers it.
+  let swallowUnsubscribe = false
+  // Armed by `holdFromCore`: each holds every message from the core its `test` takes, until its release.
+  const coreHolds = new Set<{ test: (message: string) => boolean; held: string[]; first: () => void }>()
   // Set by `rewriteToPage`: what every message from the core becomes on its way to the page.
   let rewrite: ((message: string) => string) | undefined
   // True once `failNextUndo` is called: the page's next undo ends the connection, and the core never sees it.
@@ -162,6 +168,16 @@ async function relayCore(page: Page) {
         const hold = [...answerHolds].find((one) => one.id === null && one.test(request))
         if (hold) hold.id = id
       }
+      if (swallowUnsubscribe && text.includes('"kind":"unsubscribe"')) {
+        swallowUnsubscribe = false
+        return
+      }
+      if (refuseUnsubscribe && text.includes('"kind":"unsubscribe"')) {
+        const reason = refuseUnsubscribe
+        refuseUnsubscribe = undefined
+        const { change } = JSON.parse(text) as { change: string }
+        return void socket.send(JSON.stringify({ kind: 'rejected', change, reason }))
+      }
       if (refuseUndo && text.includes('"kind":"undo"')) {
         const { conflict } = refuseUndo
         refuseUndo = undefined
@@ -198,6 +214,11 @@ async function relayCore(page: Page) {
         if (answer[1] === 'response') hold.answered()
         return
       }
+      const coreHold = [...coreHolds].find((one) => one.test(message))
+      if (coreHold) {
+        coreHold.held.push(message)
+        return coreHold.first()
+      }
       if (undoAnswer?.change && undoAnswer.answer === null && /"kind":"(accepted|rejected)"/.test(message)) {
         const { change } = JSON.parse(message) as { change?: string }
         if (change === undoAnswer.change) {
@@ -224,6 +245,38 @@ async function relayCore(page: Page) {
     /** Resolves once the page sends a message containing `text`. Everything the core sends after it waits until `resume`. */
     pauseAfterPageSends: (text: string) => new Promise<void>((resolve) => (watched = { text, seen: resolve })),
     /** Refuses the page's next undo `conflict`, with `conflict` as its reason, as the core would. It never reaches the core. */
+    /** Refuses the page's next unsubscribe with `reason`, as the core would. It never reaches the core. */
+    refuseNextUnsubscribe: (reason: Refusal) => {
+      refuseUnsubscribe = reason
+    },
+    /** The page's next unsubscribe never reaches the core, and nothing answers it, though the connection stays open. */
+    swallowNextUnsubscribe: () => {
+      swallowUnsubscribe = true
+    },
+    /**
+     * Holds every message the core sends that `test` takes, while everything else passes, until
+     * `release` hands them to the page in order, or `releaseLast` hands over only the newest, as
+     * a core that sent one update for several changes would. `first` resolves once it holds one.
+     */
+    holdFromCore: (test: (message: string) => boolean) => {
+      const { promise: first, resolve } = Promise.withResolvers<void>()
+      const hold = { test, held: [] as string[], first: resolve }
+      coreHolds.add(hold)
+      return {
+        first,
+        /** How many messages it holds now. */
+        count: () => hold.held.length,
+        release: () => {
+          coreHolds.delete(hold)
+          for (const message of hold.held) toPage?.(message)
+        },
+        releaseLast: () => {
+          coreHolds.delete(hold)
+          const last = hold.held.at(-1)
+          if (last !== undefined) toPage?.(last)
+        },
+      }
+    },
     refuseNextUndo: (conflict?: unknown) => {
       refuseUndo = { conflict }
     },

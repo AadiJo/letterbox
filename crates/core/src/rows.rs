@@ -8,6 +8,7 @@
 //! core answers, and a full rebuild per commit slows it enough to change them.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
 use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, ThreadSummary, Unsubscribe};
 
@@ -85,6 +86,9 @@ pub struct Rows {
     rows: HashMap<ThreadId, Row>,
     /// The sum of every row's counts. A mailbox no message is in has no entry.
     counts: HashMap<MailboxId, Counts>,
+    /// The threads Updates groups under each sender address, lowercase, in every account, so a
+    /// view of one sender (senders.rs) opens without reading every row.
+    by_address: HashMap<String, BTreeSet<ThreadId>>,
 }
 
 impl Rows {
@@ -103,6 +107,7 @@ impl Rows {
                 let before = self.rows.remove(id).unwrap_or_default();
                 self.add(&before.counts, Counts::minus);
                 self.add(&row.counts, Counts::plus);
+                self.index(id, before.listed.as_ref(), row.listed.as_ref());
                 if row.listed != before.listed {
                     changed.push(Changed {
                         id: id.clone(),
@@ -137,6 +142,31 @@ impl Rows {
         self.rows.values().filter_map(|row| row.listed.as_ref())
     }
 
+    /// The threads Updates groups under `address`, lowercase, in every account, in no particular order.
+    pub fn of_address<'a>(&'a self, address: &str) -> impl Iterator<Item = &'a Listed> + use<'a> {
+        self.by_address
+            .get(address)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.listed(id))
+    }
+
+    /// Moves `id` in `by_address` from the sender it had to the one it has now.
+    fn index(&mut self, id: &ThreadId, before: Option<&Listed>, after: Option<&Listed>) {
+        let address = |listed: Option<&Listed>| Some(listed?.sender.as_ref()?.address.to_lowercase());
+        if let Some(old) = address(before)
+            && let Some(ids) = self.by_address.get_mut(&old)
+        {
+            ids.remove(id);
+            if ids.is_empty() {
+                self.by_address.remove(&old);
+            }
+        }
+        if let Some(new) = address(after) {
+            self.by_address.entry(new).or_default().insert(id.clone());
+        }
+    }
+
     pub fn counts(&self, mailbox: &MailboxId) -> Counts {
         self.counts.get(mailbox).copied().unwrap_or_default()
     }
@@ -149,6 +179,7 @@ impl Rows {
         for id in ids {
             let row = row(world, id, &pending, meter);
             rows.add(&row.counts, Counts::plus);
+            rows.index(id, None, row.listed.as_ref());
             rows.rows.insert(id.clone(), row);
         }
         rows.rows
@@ -171,7 +202,7 @@ impl Rows {
     fn check(&self, world: &World) {
         let fresh = Rows::build(world, &Meter::default());
         assert!(
-            self.rows == fresh.rows && self.counts == fresh.counts,
+            self.rows == fresh.rows && self.counts == fresh.counts && self.by_address == fresh.by_address,
             "the rows kept between commits differ from rows built afresh, so a change to the world \
              did not mark every thread it affects. Mark them in `Touched` from the put_ or remove_ \
              function in world.rs that made the change."

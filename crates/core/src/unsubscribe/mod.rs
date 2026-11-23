@@ -164,9 +164,12 @@ fn plan(world: &World, message_id: &MessageId) -> Result<(AccountId, Unsubscript
         Unsubscribe::Web { url, .. } => Way::Web { url },
     };
     let address = record.facts.from.address.clone();
-    let current = state(world, &account.id, &address);
-    if matches!(current, Some(Unsubscribed::Held { .. } | Unsubscribed::Sending { .. })) {
-        return Err(Refusal::Conflict);
+    // One unsubscribe per sender: a new one only when there is none, or the newest was undone
+    // or failed (`state` is None for both).
+    match state(world, &account.id, &address) {
+        Some(Unsubscribed::Held { .. } | Unsubscribed::Sending { .. }) => return Err(Refusal::Conflict),
+        Some(Unsubscribed::Done { .. } | Unsubscribed::Page { .. }) => return Err(Refusal::AlreadyUnsubscribed),
+        None => {}
     }
     let unsubscription = Unsubscription {
         message_id: message_id.clone(),

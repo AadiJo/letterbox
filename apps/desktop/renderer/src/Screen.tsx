@@ -27,10 +27,12 @@ import { leave, release, shake } from './motion.ts'
 import { Reader } from './Reader.tsx'
 import { threadDetail, threadRecord, useThread } from './threads.ts'
 import { Toast } from './Toast.tsx'
+import { actOnSender } from './sender-actions.ts'
 import { Toolbar } from './Toolbar.tsx'
 import { Tooltip } from './Tooltip.tsx'
 import { startReply, undoSend } from './sending.ts'
 import { hasNotice, type Names, notify, undo, UNDO_KEY, withdraw } from './undo.ts'
+import { claimConfirm, closeConfirm, confirmOpen, undoFromToast, UNSUBSCRIBE_KEY } from './unsubscribe.ts'
 
 /** What App hands every screen. */
 export type Chrome = {
@@ -94,8 +96,10 @@ export function useSelection(
 
   /** Opens a conversation, or none. Every way of opening one comes here, so each is marked read. */
   const select = (id: ThreadId | null) => {
-    // Opening a conversation puts the compose page away. Its draft stays.
+    // Opening a conversation puts the compose page away. Its draft stays. An open unsubscribe
+    // confirm was about the conversation before, so it closes.
     showPage(false)
+    if (id !== selected) closeConfirm()
     generation.current += 1
     setSelected(id)
     const thread = id === null ? undefined : threadRecord(id)
@@ -171,6 +175,8 @@ export function useSelection(
    * moving on, so a row whose exit ends while the core decides opens no next one.
    */
   const undoLast = async () => {
+    // An unsubscribe on the toast takes z and Undo, and they go no further (unsubscribe.ts).
+    if (undoFromToast()) return
     generation.current += 1
     const started = generation.current
     const id = hasNotice() ? await undo(namesIn(mail)) : await undoSend()
@@ -180,7 +186,8 @@ export function useSelection(
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return
+    // An open unsubscribe confirm takes the keyboard until it closes.
+    if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target) || confirmOpen()) return
     const index = selected ? order.indexOf(selected) : -1
     const step = { ArrowDown: 1, j: 1, ArrowUp: -1, k: -1 }[event.key]
     if (step !== undefined) {
@@ -196,6 +203,12 @@ export function useSelection(
     }
     // The conversation is out of view while the page is up, so nothing else acts on it.
     if (page) return
+    if (event.key === UNSUBSCRIBE_KEY && event.shiftKey) {
+      // ⇧U opens the toolbar's confirm, if its Unsubscribe is up and can start one.
+      claimConfirm('toolbar')
+      event.preventDefault()
+      return
+    }
     if (event.key === COMPOSE_KEY || event.key === FORWARD_KEY) {
       if (event.key === COMPOSE_KEY) compose()
       else forward()
@@ -306,7 +319,10 @@ export function Screen({ selection, letGo = false, ...list }: ScreenProps) {
             <Reader id={selection.selected} mail={chrome.mail} waited={letGo} />
           </>
         )}
-        <Toast onUndo={selection.undo} />
+        <Toast
+          onUndo={selection.undo}
+          onArchiveAll={(row, inbox) => void actOnSender(row, 'archive', inbox, chrome.mail)}
+        />
       </section>
     </>
   )

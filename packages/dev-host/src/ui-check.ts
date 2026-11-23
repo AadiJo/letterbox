@@ -1,6 +1,6 @@
 // The end-to-end UI check, run by `pnpm check:ui` and `pnpm check`.
 //
-// Eleven runs, each against real cores over the sim provider, in Playwright's Chromium:
+// Twelve runs, each against real cores over the sim provider, in Playwright's Chromium:
 //   people-first  `pnpm dev` (main.ts) with the people-first seed: People, All mail, the
 //                 reader, the C2 design's rules (ui/c2.ts), HTML bodies, the narrow window,
 //                 keyboard actions, new mail, a reload (ui/people-first.ts)
@@ -18,6 +18,7 @@
 //   lost core     the same parts: the strip at the reader's foot once the connection drops, and Reload (ui/lost-core.ts)
 //   attachments   the same parts: a message's files as rows, and each state of a save or an open (ui/attachments.ts)
 //   body          the same parts with the fake web: remote images shown and blocked, and quoted history folded (ui/body.ts)
+//   unsubscribe   the same parts with the fake web: unsubscribing, held, posted, emailed, a page, and refused (ui/unsubscribe.ts)
 //   colors        the same parts: HTML mail dark and in its sender's colors, the switch, its reach and the prefix (ui/body-colors.ts)
 // Every process a run started must be gone at its end.
 //
@@ -32,6 +33,7 @@ import { type Browser, chromium } from 'playwright'
 import { checkAttachments } from './ui/attachments.ts'
 import { checkColors } from './ui/body-colors.ts'
 import { checkBody } from './ui/body.ts'
+import { checkUnsubscribe } from './ui/unsubscribe.ts'
 import { checkCompose } from './ui/compose.ts'
 import { checkDone } from './ui/done.ts'
 import { checkFirstSync } from './ui/first-sync.ts'
@@ -86,6 +88,7 @@ try {
   await runCheck(() => checkLostCore(browser))
   await runCheck(() => checkAttachments(browser))
   await runCheck(() => checkBody(browser))
+  await runCheck(() => checkUnsubscribe(browser))
   await runCheck(() => checkColors(browser))
 } finally {
   await browser.close()

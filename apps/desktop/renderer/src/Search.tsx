@@ -1,10 +1,11 @@
 // The search field: full-text search over the core's local index. Enter searches, Escape
-// clears. ⌘K or Ctrl+K focuses it. In a narrow window it is an icon until opened.
+// clears. ⌘K or Ctrl+K focuses it, unless an unsubscribe confirm is open. In a narrow window it is an icon until opened.
 
 import { Search as SearchIcon } from 'lucide-react'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { chord, Key } from './Key.tsx'
+import { confirmOpen } from './unsubscribe.ts'
 
 type Props = {
   /** The search that is showing, or '' for none. */
@@ -26,7 +27,8 @@ export function Search({ query, onSearch }: Props) {
   const onKey = useEffectEvent((event: KeyboardEvent) => {
     if (event.key !== 'k' || !(event.metaKey || event.ctrlKey)) return
     event.preventDefault()
-    focus()
+    // An open unsubscribe confirm keeps the keyboard, Search's shortcut too.
+    if (!confirmOpen()) focus()
   })
   useEffect(() => {
     const listener = (event: KeyboardEvent) => onKey(event)

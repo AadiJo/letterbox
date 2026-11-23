@@ -68,6 +68,8 @@ struct Group {
 pub struct Senders {
     /// The account and mailbox Updates covers. A thread in a group passes it and has a sender.
     filter: ThreadFilter,
+    /// The one sender's address, lowercase, for a view of that sender alone.
+    address: Option<String>,
     offset: u64,
     limit: u64,
     groups: HashMap<SenderId, Group>,
@@ -83,9 +85,11 @@ pub struct Senders {
 }
 
 impl Senders {
-    /// Groups every thread in the rows. Reads every row, so only a new view or a full refresh calls it.
+    /// Groups every thread in the rows: every row, or for a view of one address only that
+    /// sender's threads (`Rows::of_address`). Only a new view or a full refresh calls it.
     pub fn open(
         filter: ThreadFilter,
+        address: Option<String>,
         zone: Tz,
         (offset, limit): (u64, u64),
         rows: &Rows,
@@ -94,6 +98,7 @@ impl Senders {
     ) -> Senders {
         let mut senders = Senders {
             filter,
+            address,
             offset,
             limit,
             groups: HashMap::default(),
@@ -103,9 +108,13 @@ impl Senders {
             zone,
             today: day_of(zone, &live.now()),
         };
-        for listed in rows.all() {
+        let listed: Box<dyn Iterator<Item = &Listed>> = match &senders.address {
+            Some(address) => Box::new(rows.of_address(address)),
+            None => Box::new(rows.all()),
+        };
+        for one in listed {
             meter.matched();
-            senders.add(listed);
+            senders.add(one);
         }
         senders
     }
@@ -116,8 +125,8 @@ impl Senders {
     pub fn catch_up(&mut self, refresh: &Refresh, rows: &Rows, live: &dyn Live, meter: &Meter) -> bool {
         let (changed, unsubscribes) = match refresh {
             Refresh::Everything => {
-                let filter = std::mem::take(&mut self.filter);
-                *self = Senders::open(filter, self.zone, (self.offset, self.limit), rows, live, meter);
+                let (filter, address) = (std::mem::take(&mut self.filter), self.address.take());
+                *self = Senders::open(filter, address, self.zone, (self.offset, self.limit), rows, live, meter);
                 return true;
             }
             Refresh::Threads {
@@ -138,7 +147,15 @@ impl Senders {
         }
         if cfg!(test) {
             let window = (self.offset, self.limit);
-            let fresh = Senders::open(self.filter.clone(), self.zone, window, rows, live, &Meter::default());
+            let fresh = Senders::open(
+                self.filter.clone(),
+                self.address.clone(),
+                self.zone,
+                window,
+                rows,
+                live,
+                &Meter::default(),
+            );
             assert!(
                 self.groups == fresh.groups
                     && self.order == fresh.order
@@ -207,9 +224,16 @@ impl Senders {
         }
     }
 
-    /// Puts a thread in its sender's group, if it belongs in Updates. True when it does.
+    /// Puts a thread in its sender's group, if it belongs in Updates, and in this view's one
+    /// sender's when it has one. True when it does.
     fn add(&mut self, listed: &Listed) -> bool {
-        let Some(sender) = listed.sender.as_ref().filter(|_| matches(listed, &self.filter)) else {
+        let Some(sender) = listed.sender.as_ref().filter(|sender| {
+            matches(listed, &self.filter)
+                && self
+                    .address
+                    .as_ref()
+                    .is_none_or(|address| sender.address.to_lowercase() == *address)
+        }) else {
             return false;
         };
         let group = self.groups.entry(sender.id.clone()).or_default();

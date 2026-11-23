@@ -265,6 +265,7 @@ export function startCore(
     },
     query: (query) => within(`an update to ${query.view}`, client.query(query)),
     command: (command, change) => within(`an answer to ${command.kind}`, client.command(command, change)),
+    forget: (change) => client.forget(change),
     settled: (change) => within(`settled for ${change}`, client.settled(change)),
     request: (request) => within(`the response to ${request.method}`, client.request(request)),
     begin: (request) => {

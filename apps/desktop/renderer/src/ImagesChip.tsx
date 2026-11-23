@@ -11,6 +11,7 @@
 import type { Message, ShowImages } from '@letterbox/protocol'
 import { ChevronDown, Image as ImageIcon, ImageOff } from 'lucide-react'
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { visibleBounds } from './bounds.ts'
 import { cx } from './cx.ts'
 import { setImages, SHOW_IMAGES_KEY, trackerNote } from './images.ts'
 import { Key } from './Key.tsx'
@@ -20,14 +21,6 @@ const INSET = 8
 
 /** The gap between the chip's box and the menu: its 20 px plus 8 px, as `top-7` places it below. */
 const GAP = 28
-
-/** The box of the nearest element around `element` that scrolls: the reader's visible part. */
-function visibleBounds(element: Element) {
-  for (let at = element.parentElement; at; at = at.parentElement) {
-    if (/auto|scroll/.test(getComputedStyle(at).overflowY)) return at.getBoundingClientRect()
-  }
-  return document.documentElement.getBoundingClientRect()
-}
 
 export function ImagesChip({ message }: { message: Message }) {
   const { body } = message

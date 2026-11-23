@@ -5,6 +5,7 @@
 
 import { fileURLToPath } from 'node:url'
 import type { Dialect, Seed, SeedMessage } from './contract.ts'
+import type { WebAnswer } from './web.ts'
 import type { Time } from '@letterbox/protocol'
 import { many } from './seeds/many.ts'
 import { peopleFirst } from './seeds/people-first.ts'
@@ -22,6 +23,17 @@ export type PersonConversation = {
 /** A remote image a seed's mail names, and the file under seeds/images the dev host's fake web answers it with. */
 export type SeedImage = { url: string; mime: 'image/png' | 'image/jpeg'; file: string }
 
+/**
+ * What the dev host's fake web answers for a seed's mail besides its images: TXT records, such
+ * as a DKIM key, the addresses a name resolves to, and what a URL answers, such as an
+ * unsubscribe page a one-click POST goes to.
+ */
+export type DevWeb = {
+  txt: readonly { name: string; records: readonly string[] }[]
+  resolve: readonly { name: string; addresses: readonly string[] }[]
+  serve: readonly { url: string; answer: WebAnswer }[]
+}
+
 export type DevSeed = {
   dialect: Dialect
   /** The time core-sim starts at (its --now). The UI measures ages from it, so captures stay the same. */
@@ -33,6 +45,8 @@ export type DevSeed = {
   conversations: readonly PersonConversation[]
   /** The remote images its mail names that the dev host's fake web serves. Every other URL answers 404. */
   images: readonly SeedImage[]
+  /** The rest of what the fake web answers for its mail. */
+  web: DevWeb
 }
 
 /** Where a seed image's file is on disk. */

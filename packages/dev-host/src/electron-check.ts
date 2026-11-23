@@ -103,7 +103,7 @@ const builtRun = (renderer: string) =>
         node: [typeof Reflect.get(window, 'require'), typeof Reflect.get(window, 'process')],
       })),
       {
-        bridge: ['connect', 'onOpenConversation', 'openAttachment', 'platform', 'saveAttachment'],
+        bridge: ['connect', 'onOpenConversation', 'openAttachment', 'openPage', 'platform', 'saveAttachment'],
         platform: process.platform,
         node: ['undefined', 'undefined'],
       },
@@ -326,7 +326,10 @@ async function insecureRun() {
             secure: isSecureContext,
             bridge: Object.keys(window.letterbox ?? {}).toSorted(),
           })),
-          { secure: false, bridge: ['connect', 'onOpenConversation', 'openAttachment', 'platform', 'saveAttachment'] },
+          {
+            secure: false,
+            bridge: ['connect', 'onOpenConversation', 'openAttachment', 'openPage', 'platform', 'saveAttachment'],
+          },
           'insecure: on plain http that is not loopback, the page still gets the bridge',
         )
         checkQuit('insecure', run, await quit(run))

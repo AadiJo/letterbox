@@ -6,18 +6,25 @@
 
 import type { Account, Mailbox, MailboxId, SenderId, SenderSummary } from '@letterbox/protocol'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
-import { commandFor, send } from './actions.ts'
-import { lostReason, useView } from './core.ts'
+import { useView } from './core.ts'
 import { LostCore } from './LostCore.tsx'
 import { OVERSCAN, rangeFor } from './MailScreen.tsx'
 import { ROW_HEIGHT, SenderRow } from './Row.tsx'
 import { type Chrome, ListPane, namesIn, typing } from './Screen.tsx'
+import { actOnSender } from './sender-actions.ts'
 import { SenderReader } from './SenderReader.tsx'
 import { type Range, type SenderSlice, useSenderWindow } from './senders.ts'
 import { undoSend } from './sending.ts'
-import { threadsOf } from './threads.ts'
 import { Toast } from './Toast.tsx'
-import { hasNotice, notifySender, undo, UNDO_KEY } from './undo.ts'
+import { hasNotice, undo, UNDO_KEY } from './undo.ts'
+import {
+  claimConfirm,
+  closeConfirm,
+  confirmOpen,
+  requestConfirm,
+  undoFromToast,
+  UNSUBSCRIBE_KEY,
+} from './unsubscribe.ts'
 import { busiest } from './Volume.tsx'
 
 /** The inbox Updates covers: the first account's. Undefined until the core lists it. */
@@ -44,27 +51,19 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
   const generation = useRef(0)
   const openSender = (sender: SenderSummary | null) => {
     generation.current += 1
+    // An open unsubscribe confirm was about the sender before, so it closes.
+    if (sender?.id !== open?.id) closeConfirm()
     setOpen(sender)
   }
   const select = (id: SenderId) => openSender(senders.find((sender) => sender.id === id) ?? null)
 
   /**
-   * Marks all of a sender's mail read, or archives all of it: one command naming every
-   * conversation the core lists for it, built as the toolbar's would be for the first.
+   * Marks all of a sender's mail read, or archives all of it (sender-actions.ts), in `where`:
+   * this screen's inbox, or the one an unsubscribe toast's sender is in.
    */
-  const act = async (sender: SenderSummary, kind: 'read' | 'archive') => {
-    // Off while the core is lost, as the toolbar's actions are (LostCore.tsx).
-    if (lostReason() !== null) return
+  const act = async (sender: SenderSummary, kind: 'read' | 'archive', where = inbox) => {
     const started = generation.current
-    const filter = { mailboxId: inbox, sender: sender.id, ...(kind === 'read' && { unread: true }) }
-    const threads = await threadsOf(filter, kind === 'read' ? sender.unread : sender.threads)
-    const [first] = threads
-    const command = first && commandFor(kind === 'read' ? 'unread' : 'archive', first, chrome.mail)
-    if (!first || (command?.kind !== 'set-flags' && command?.kind !== 'set-mailboxes')) return
-    const threadIds = threads.map((thread) => thread.id)
-    const change = await send({ ...command, threadIds })
-    if (!change) return
-    notifySender(kind === 'read' ? 'Marked read' : 'Archived', sender.name ?? sender.address, first.id, change)
+    if (!(await actOnSender(sender, kind, where, chrome.mail))) return
     // Archiving the open sender takes it out of the list, so the next one opens in its place.
     if (kind === 'archive' && sender.id === open?.id && generation.current === started) {
       const index = senders.findIndex((one) => one.id === sender.id)
@@ -74,15 +73,24 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
 
   /** Undoes what the toast shows: the last action's notice, or else a reply in its undo window (sending.ts). */
   const undoLast = async () => {
+    // An unsubscribe on the toast takes z and Undo, and they go no further (unsubscribe.ts).
+    if (undoFromToast()) return
     // z counts as moving on, so an action still waiting on the core opens nothing after it.
     generation.current += 1
     await (hasNotice() ? undo(namesIn(chrome.mail)) : undoSend())
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return
+    // An open unsubscribe confirm takes the keyboard until it closes.
+    if (event.metaKey || event.ctrlKey || event.altKey || typing(event.target) || confirmOpen()) return
     if (event.key === UNDO_KEY) {
       void undoLast()
+      event.preventDefault()
+      return
+    }
+    if (event.key === UNSUBSCRIBE_KEY && event.shiftKey) {
+      // ⇧U opens the open sender's confirm, if its Unsubscribe is up and can start one.
+      claimConfirm('sender')
       event.preventDefault()
       return
     }
@@ -111,11 +119,16 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
       <ListPane title="Updates" subtitle={subtitle} chrome={chrome} accounts={accounts}>
         <SenderList
           slice={slice}
+          inbox={inbox}
           show={show}
           selected={selected?.id ?? null}
           most={most}
           onSelect={select}
           onAct={(sender, kind) => void act(sender, kind)}
+          onUnsubscribe={(sender) => {
+            openSender(sender)
+            requestConfirm('sender', sender)
+          }}
         />
       </ListPane>
       <section aria-label="Reader" className="relative flex min-w-0 flex-1 flex-col bg-reader">
@@ -129,7 +142,7 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
           onMarkRead={(one) => void act(one, 'read')}
           onArchive={(one) => void act(one, 'archive')}
         />
-        <Toast onUndo={undoLast} />
+        <Toast onUndo={undoLast} onArchiveAll={(row, where) => void act(row, 'archive', where)} />
       </section>
     </>
   )
@@ -137,18 +150,21 @@ export function UpdatesScreen({ chrome, accounts, inbox }: Props) {
 
 type ListProps = {
   slice: SenderSlice | undefined
+  inbox: MailboxId
   show: (range: Range) => void
   selected: SenderId | null
   most: number
   onSelect: (id: SenderId) => void
   onAct: (sender: SenderSummary, kind: 'read' | 'archive') => void
+  /** Opens the sender with its unsubscribe confirm up: the hovered row's third button. */
+  onUnsubscribe: (sender: SenderSummary) => void
 }
 
 /**
  * The senders on screen plus a small overscan, with spacers standing in for the rest, as
  * MailScreen's list does. It subscribes only to the range on screen.
  */
-function SenderList({ slice, show, selected, most, onSelect, onAct }: ListProps) {
+function SenderList({ slice, inbox, show, selected, most, onSelect, onAct, onUnsubscribe }: ListProps) {
   const list = useRef<HTMLDivElement>(null)
   const [first, setFirst] = useState(0)
   const [fits, setFits] = useState(0)
@@ -202,12 +218,14 @@ function SenderList({ slice, show, selected, most, onSelect, onAct }: ListProps)
           <SenderRow
             key={sender.id}
             sender={sender}
+            inbox={inbox}
             most={most}
             selected={sender.id === selected}
             divider={index > 0 && sender.id !== selected && at(index - 1)?.id !== selected}
             onSelect={onSelect}
             onMarkRead={(one) => onAct(one, 'read')}
             onArchive={(one) => onAct(one, 'archive')}
+            onUnsubscribe={onUnsubscribe}
           />
         )
       })}
