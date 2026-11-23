@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AccountId, MailboxId, SenderId, Time, Turn, present};
+use crate::{AccountId, MailboxId, SenderId, Time, Turn, Unsubscribe, present};
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +62,9 @@ pub struct SenderSummary {
     /// last entry today. Days are the user's, in the query's `zone`, on the core's clock, which
     /// moves them on at the zone's midnight.
     pub days: Vec<SenderDay>,
+    /// How to unsubscribe, from the message the row's name and address come from: its
+    /// List-Unsubscribe header, or else a link in its body if that has loaded.
+    pub unsubscribe: Option<Unsubscribe>,
 }
 
 /// One day of a sender's mail in Updates: how many messages were sent that day, and how many

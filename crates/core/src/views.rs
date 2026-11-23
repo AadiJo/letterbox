@@ -1,15 +1,13 @@
 //! Builds the answers to the live views a client subscribes to, from the world and the
 //! rows kept between commits (see rows.rs). Everything here is a pure read.
 
-use std::sync::LazyLock;
-
 use letterbox_protocol::{
     Account, AccountId, AccountStatus, Attachment, Body, Mailbox, Message, Person, SignInOption, ThreadDetail,
     ThreadFilter, ThreadId, ThreadPage, Time, Unavailable,
 };
-use regex::Regex;
 
 use crate::adapter::{BodyResult, RemoteAddress};
+use crate::body;
 use crate::changes::Pending;
 use crate::outbox::delivery;
 use crate::rows::{Listed, Rows};
@@ -37,11 +35,6 @@ pub fn person(address: &RemoteAddress, me: &str) -> Person {
         is_me: same(&address.address, me),
     }
 }
-
-static REMOTE_CONTENT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\b(src|srcset|background|poster)\s*=\s*["']?\s*https?:|url\(\s*["']?\s*https?:"#)
-        .expect("a valid pattern")
-});
 
 /// True when a thread's row passes a list's filter. `retired` reads the clock, so the
 /// list applies it to the threads that pass here (see `window` in live_view.rs).
@@ -92,11 +85,7 @@ fn message<'a>(world: &World, record: &'a MessageRecord, pending: &Pending<'a>, 
         Some(BodyResult::Gone) => Body::Unavailable {
             reason: Unavailable::Gone,
         },
-        Some(BodyResult::Body { body }) => Body::Ready {
-            text: body.text.clone(),
-            html: body.html.clone(),
-            has_remote_content: body.html.as_deref().is_some_and(|html| REMOTE_CONTENT.is_match(html)),
-        },
+        Some(BodyResult::Body { body }) => body::ready(world, record, body),
     };
     let attachments = match &record.body {
         Some(BodyResult::Body { body }) => body.attachments.as_slice(),
@@ -110,6 +99,7 @@ fn message<'a>(world: &World, record: &'a MessageRecord, pending: &Pending<'a>, 
         sent_at: record.facts.sent_at.clone(),
         unread: pending.view_state(record).unread,
         body,
+        unsubscribe: body::unsubscribe_of(record),
         attachments: attachments
             .iter()
             .enumerate()
@@ -196,12 +186,19 @@ pub fn thread(world: &World, rows: &Rows, thread_id: &ThreadId, live: &dyn Live)
     })
 }
 
-/// What a conversation shows for each of its messages that has no stored body. Besides
-/// the conversation's own records, this is the one thing its answer reads.
-pub fn missing_bodies(world: &World, thread_id: &ThreadId, live: &dyn Live) -> Vec<Body> {
-    messages_of(world, thread_id)
-        .into_iter()
-        .filter(|record| record.body.is_none())
-        .map(|record| live.missing_body(record))
-        .collect()
+/// What a conversation's answer reads besides its own records: what it shows for each of its
+/// messages that has no stored body.
+#[derive(Debug, PartialEq)]
+pub struct Outside {
+    missing: Vec<Body>,
+}
+
+pub fn outside(world: &World, thread_id: &ThreadId, live: &dyn Live) -> Outside {
+    Outside {
+        missing: messages_of(world, thread_id)
+            .into_iter()
+            .filter(|record| record.body.is_none())
+            .map(|record| live.missing_body(record))
+            .collect(),
+    }
 }

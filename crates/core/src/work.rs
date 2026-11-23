@@ -14,6 +14,8 @@ pub struct Work {
     pub matched: u64,
     /// People a recipients view folded and ranked (see suggestions.rs).
     pub ranked: u64,
+    /// Bodies the body pipeline processed (see body/mod.rs).
+    pub processed: u64,
 }
 
 impl Sub for Work {
@@ -23,6 +25,7 @@ impl Sub for Work {
             summarized: self.summarized - earlier.summarized,
             matched: self.matched - earlier.matched,
             ranked: self.ranked - earlier.ranked,
+            processed: self.processed - earlier.processed,
         }
     }
 }
@@ -54,6 +57,14 @@ impl Meter {
         let work = self.work.get();
         self.work.set(Work {
             ranked: work.ranked + 1,
+            ..work
+        });
+    }
+
+    pub fn processed(&self) {
+        let work = self.work.get();
+        self.work.set(Work {
+            processed: work.processed + 1,
             ..work
         });
     }

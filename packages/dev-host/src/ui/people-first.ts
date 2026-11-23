@@ -29,8 +29,10 @@ const retired = seed.conversations
 const conversations = seed.seed.messages.filter((message) => (message.replyTo ?? []).length === 0).length
 
 const htmlMessage = seed.seed.messages.find(
-  (message): message is SeedMessage & { html: string } => message.html !== undefined,
+  (message): message is SeedMessage & { html: string } =>
+    message.key === 'html-newsletter' && message.html !== undefined,
 )
+const withheldMessage = seed.seed.messages.find((message) => message.key === 'withheld-newsletter')
 
 /** One field of every row in a People section, top to bottom. */
 const column = (page: Page, section: string, field: string) =>
@@ -191,14 +193,27 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
   await page.locator('[data-message="open"] [data-field="body"]').waitFor()
   await capture(page, 'all-mail')
 
+  // A message whose HTML the core withheld, with no plain text, says so in the reader.
+  if (!withheldMessage) throw new Error('people-first has no withheld message')
+  await page.locator('[data-list="mail"] [role="option"]', { hasText: withheldMessage.subject }).click()
+  const said = page.locator('[data-message="open"] [data-field="body"]')
+  await said.filter({ hasText: 'shown safely' }).waitFor()
+  equal(
+    await said.textContent(),
+    "This message's formatting couldn't be shown safely.",
+    'a body whose html the core withheld, with no plain text, says its formatting could not be shown safely',
+  )
+
   // An HTML body renders, and nothing in it runs or loads from the network.
   if (!htmlMessage) throw new Error('people-first has no HTML message')
   await page.evaluate(() => {
     window.addEventListener('message', (event) => document.body.setAttribute('data-got-message', String(event.data)))
   })
-  // Every remote URL the body names. Each must be refused before it reaches the network.
-  const remoteLoads = [...htmlMessage.html.matchAll(/(?:<link [^>]*href="|src="|url\()(https:[^")]+)/g)].flatMap(
-    (match) => (match[1] ? [match[1]] : []),
+  // Every remote font the body names. Each must be refused before it reaches the network. The
+  // core's body pipeline takes the tracking pixel and every <link> (stylesheet, dns-prefetch,
+  // preconnect) out first, so they never reach the frame.
+  const remoteLoads = [...htmlMessage.html.matchAll(/url\((https:[^")]+)/g)].flatMap((match) =>
+    match[1] ? [match[1]] : [],
   )
   const refused = Promise.all(
     remoteLoads.map((load) => page.waitForEvent('requestfailed', (request) => request.url() === load)),
@@ -218,7 +233,19 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     'the body frame is sandboxed without scripts',
   )
   await refused
-  equal(blocked.toSorted(), remoteLoads.toSorted(), "the body frame's policy blocked its stylesheet, font and pixel")
+  equal(blocked.toSorted(), remoteLoads.toSorted(), "the body frame's policy blocked its font")
+  equal(await frame.locator('img[width="1"]').count(), 0, 'the tracking pixel never reached the frame')
+  equal(
+    await frame.locator('link').count(),
+    0,
+    'no <link>, so no stylesheet, dns-prefetch or preconnect, reached the frame',
+  )
+  equal(await frame.locator('iframe').count(), 0, 'no iframe, so no srcdoc document and its hints, reached the frame')
+  equal(
+    await frame.locator('meta[http-equiv="x-dns-prefetch-control"]').getAttribute('content'),
+    'off',
+    "the frame's document turns DNS prefetching off",
+  )
   equal(remote, [], 'the page never reached past 127.0.0.1')
   await page.screenshot({ path: join(ARTIFACTS, 'html-body.png') })
 

@@ -103,6 +103,10 @@ export type RemoteFacts = {
     listId: boolean
     precedence: string
     autoSubmitted: string
+    /** List-Unsubscribe's value (RFC 2369), which the core reads its unsubscribe targets from. Left out when absent. */
+    listUnsubscribeValue?: string
+    /** List-Unsubscribe-Post's value (RFC 8058). Left out when absent. */
+    listUnsubscribePost?: string
   }
   /** The provider's own verdict that this is bulk mail. Null when it gives none. */
   bulk: boolean | null
@@ -112,7 +116,7 @@ export type RemoteMessage = RemoteState & RemoteFacts
 
 export type RemoteBody = {
   text: string
-  /** Untrusted. The core passes it on unchanged and the UI sandboxes it. */
+  /** Untrusted. The core keeps it as it came, and its body pipeline makes what the UI shows. */
   html: string | null
   attachments: { name: string; mime: string; size: number; inline: boolean }[]
 }

@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, ThreadSummary};
+use letterbox_protocol::{AccountId, MailboxId, Person, SenderId, ThreadId, ThreadSummary, Unsubscribe};
 
 use crate::changes::Pending;
 use crate::clock::parse;
@@ -47,6 +47,8 @@ pub struct Sender {
     /// whether it is unread, oldest first. Updates sums them per sender and counts them by the
     /// user's days for its volume strip (senders.rs).
     pub sent: Vec<(i64, bool)>,
+    /// How to unsubscribe, from the message the sender comes from (see body/mod.rs).
+    pub unsubscribe: Option<Unsubscribe>,
 }
 
 /// What one thread adds to the views.
@@ -247,6 +249,7 @@ fn sender_of(
         name: from.name.clone(),
         address: from.address.clone(),
         sent,
+        unsubscribe: crate::body::unsubscribe_of(newest),
     })
 }
 

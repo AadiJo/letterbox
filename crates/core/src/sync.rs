@@ -71,12 +71,15 @@ impl Inner {
                 self.commit(|_, _, _| {});
             }
             Ok(body) => {
+                // Processed here, in the fetch's own job, so it is stored ready (body/mod.rs).
+                let reading = self.processed_now(&body, current.reading.clone());
                 self.commit(|world, tx, _| {
                     put_message(
                         world,
                         tx,
                         MessageRecord {
                             body: Some(body),
+                            reading,
                             ..current
                         },
                     );

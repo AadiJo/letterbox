@@ -95,10 +95,12 @@ impl Inner {
         self.flush();
     }
 
-    /// Sends an update to every subscription whose answer changed, then starts loading bodies someone is looking at.
+    /// Sends an update to every subscription whose answer changed, then starts loading bodies
+    /// someone is looking at, and queues the body pipeline for stored bodies it has not run on (body/mod.rs).
     pub(crate) fn flush(self: &Rc<Self>) {
         let rev = self.store.rev();
         let mut fetches = Vec::new();
+        let mut unprocessed = Vec::new();
         let wake = {
             let mut state = self.state.borrow_mut();
             let State {
@@ -156,6 +158,9 @@ impl Inner {
                     continue;
                 };
                 for record in messages_of(world, thread_id) {
+                    if crate::body::unprocessed(record) {
+                        unprocessed.push((record.account_id.clone(), record.id.clone()));
+                    }
                     if record.body.is_some()
                         || loading_bodies.contains(&record.id)
                         || unreachable_bodies.contains(&record.id)
@@ -176,6 +181,9 @@ impl Inner {
         for (account_id, id) in fetches {
             self.background(&account_id, Rc::clone(self).fetch_body(id));
         }
+        // Queued, never run here: a flush answers a client, and the pipeline costs a parse.
+        // `reprocess` queues each message once, however many open views name it.
+        self.reprocess(unprocessed);
     }
 
     /// Flushes again at `at`, when a conversation crosses a list's cut (see live_view.rs), unless

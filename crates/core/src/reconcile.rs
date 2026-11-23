@@ -14,6 +14,7 @@ use letterbox_protocol::{AccountId, ChangeResult, MailboxId, MessageId, Rev, Thr
 use regex::Regex;
 
 use crate::adapter::{MessageRef, RemoteFacts, RemoteMailbox, RemoteMessage, RemoteState};
+use crate::body::Reading;
 use crate::maps::{HashMap, HashSet, IndexMap, IndexSet};
 use crate::outbox::Arrived;
 use crate::store::Transaction;
@@ -312,6 +313,7 @@ pub fn reconcile(
                 facts: remote.facts,
                 server,
                 body: None,
+                reading: Reading::default(),
                 round: incoming.page_of.unwrap_or(0),
             },
         );

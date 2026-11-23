@@ -34,7 +34,8 @@ pub fn generate() -> String {
     declare!(
         AccountId, MailboxId, ThreadId, MessageId, BlobId, SignInOptionId, SubscriptionId, ChangeId, RequestId,
         Account, Capabilities, AccountStatus, AccountErrorReason, Mailbox, Role, Person, Turn, TurnReason, TurnState,
-        ThreadSummary, ThreadDetail, Message, Body, Unavailable, Attachment,
+        ThreadSummary, ThreadDetail, Message, Body, Unavailable, Images, ShowImages, Tracker, TrackerReason, Quote,
+        Unsubscribe, UnsubscribeSource, ImageFile, ImageError, Attachment,
         ThreadFilter, Query, Update, ThreadPage, SenderId, SenderSummary, SenderDay, SenderPage, Recipient, ChangeHolder,
         Command, TurnChoice, Draft, Delivery, Refusal, ChangeResult, UndoConflict, UndoField,
         SignInOption, SignInMethod, Request, PasswordInput, Response, Answer<Empty, Never>, True, False, Empty, Never,

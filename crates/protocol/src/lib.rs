@@ -25,6 +25,7 @@
 
 mod answer;
 mod attachment;
+mod body;
 mod command;
 mod holder;
 mod ids;
@@ -39,6 +40,10 @@ mod your_turn;
 
 pub use answer::{Answer, Empty, False, Never, True};
 pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
+pub use body::{
+    Body, ImageError, ImageFile, Images, Quote, ShowImages, Tracker, TrackerReason, Unavailable, Unsubscribe,
+    UnsubscribeSource,
+};
 pub use command::{Command, TurnChoice};
 pub use holder::ChangeHolder;
 pub use ids::{
@@ -219,34 +224,11 @@ pub struct Message {
     pub sent_at: Time,
     pub unread: bool,
     pub body: Body,
+    /// From the List-Unsubscribe header, or else a link in the body once it has loaded.
+    pub unsubscribe: Option<Unsubscribe>,
     pub attachments: Vec<Attachment>,
     /// Set only on a message the user sent that the provider does not hold yet, or refused.
     pub delivery: Option<Delivery>,
-}
-
-/// Bodies download on demand, so one can be missing while offline.
-/// `html` is hostile input. The UI must render it sandboxed, with scripts and
-/// network off. The core never fetches remote content named in a message.
-#[derive(Clone, Debug, PartialEq, Serialize, TS)]
-#[serde(tag = "state", rename_all = "kebab-case", rename_all_fields = "camelCase")]
-pub enum Body {
-    Ready {
-        text: String,
-        html: Option<String>,
-        has_remote_content: bool,
-    },
-    Loading,
-    Unavailable {
-        reason: Unavailable,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-pub enum Unavailable {
-    Offline,
-    TooLarge,
-    Gone,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS)]
@@ -292,6 +274,9 @@ pub enum Request {
     /// instead of after the rest of its backoff. Other accounts are left as they are, so a host
     /// may send it on every such event. Answers at once.
     NetworkBack,
+    /// The bytes of a message's remote image `index` (`Images::remote`), which the core fetches
+    /// once the message's images are shown. They come in `chunk` messages, in order, then the response.
+    Image { message_id: MessageId, index: u64 },
 }
 
 /// The answer to one request, by method.
@@ -305,6 +290,7 @@ pub enum Response {
     Attachment(Answer<AttachmentFile, AttachmentError>),
     Position(Answer<Position, Never>),
     NetworkBack(Answer<Empty, Never>),
+    Image(Answer<ImageFile, ImageError>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]

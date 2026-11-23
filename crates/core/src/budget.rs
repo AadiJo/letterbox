@@ -6,6 +6,10 @@
 //! on age, Updates, which groups automated mail by sender, one conversation, and a recipient
 //! field's suggestions for a typed prefix, and where a send is), then counts the work (see work.rs) of each step a
 //! person causes. It counts instead of timing, so it gives the same answer on every machine.
+//! The body pipeline counts too: a step may process at most one body per thread it touched,
+//! since only a conversation someone has open has its bodies processed (body/mod.rs). Each
+//! body it processes may rebuild its thread's row once more, as what the pipeline finds (an
+//! unsubscribe link) can change the row.
 //!
 //! `pnpm bench:scale` times the same steps at 100k messages, for people to read.
 
@@ -109,6 +113,8 @@ fn message(index: usize, conversation: usize, place: usize) -> RemoteMessage {
                 list_id: false,
                 precedence: String::new(),
                 auto_submitted: String::new(),
+                list_unsubscribe_value: String::new(),
+                list_unsubscribe_post: String::new(),
             },
             bulk: None,
         },
@@ -163,6 +169,7 @@ fn start(folder: &std::path::Path) -> (Core, Rc<RefCell<Vec<CoreMessage>>>) {
         env: Box::new(FixedEnvironment::new("2026-01-01T00:00:00.000Z").expect("a valid start time")),
         secrets: Box::new(NoSecrets),
         factories: vec![],
+        web: Box::new(crate::web::NoWeb),
         undo_window: std::time::Duration::from_secs(10),
         confirm_window: std::time::Duration::from_secs(120),
         send: Box::new(move |message| sink.borrow_mut().push(message)),
@@ -181,17 +188,19 @@ struct Step {
 impl Step {
     fn over_budget(&self) -> Option<String> {
         let allowed = Work {
-            summarized: self.touched,
+            summarized: self.touched + self.work.processed,
             matched: self.touched * LISTS,
             ranked: MATCHED,
+            processed: self.touched,
         };
         let over = self.work.summarized > allowed.summarized
             || self.work.matched > allowed.matched
-            || self.work.ranked > allowed.ranked;
+            || self.work.ranked > allowed.ranked
+            || self.work.processed > allowed.processed;
         over.then(|| {
             format!(
-                "{}: touched {} thread(s), summarized {} (budget {}), matched {} against list filters (budget {}) \
-                 and ranked {} people (budget {})",
+                "{}: touched {} thread(s), summarized {} (budget {}), matched {} against list filters (budget {}), \
+                 ranked {} people (budget {}) and processed {} bodies (budget {})",
                 self.name,
                 self.touched,
                 self.work.summarized,
@@ -199,7 +208,9 @@ impl Step {
                 self.work.matched,
                 allowed.matched,
                 self.work.ranked,
-                allowed.ranked
+                allowed.ranked,
+                self.work.processed,
+                allowed.processed
             )
         })
     }
@@ -367,13 +378,15 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
             .messages_by_thread
             .get(&newest)
             .and_then(|ids| ids.first().cloned());
+        // The open conversation's subject, so the reply joins it and its body is processed there.
+        let subject = format!("Re: Topic {}", conversations - 1);
         measure("send a reply", 1, &|| {
             receive(json!({
                 "kind": "command",
                 "change": "change_2",
                 "command": { "kind": "send", "draft": {
                     "accountId": account_id, "to": ["person1@example.com"], "cc": [], "bcc": [],
-                    "subject": "Re: a topic", "text": "Yes.", "html": null, "inReplyTo": answered,
+                    "subject": subject, "text": "Yes.", "html": null, "inReplyTo": answered,
                 } },
             }));
         });
@@ -417,6 +430,12 @@ fn a_commit_costs_what_it_touched_not_the_mailbox() {
     });
     let _ = std::fs::remove_dir_all(&folder);
 
+    let reply = steps.iter().find(|step| step.name == "send a reply");
+    assert_eq!(
+        reply.map(|step| step.work.processed),
+        Some(1),
+        "the reply joined the open conversation and its body was processed, so the budget measured real processing"
+    );
     let over: Vec<String> = steps.iter().filter_map(Step::over_budget).collect();
     assert!(
         over.is_empty(),

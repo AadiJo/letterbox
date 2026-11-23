@@ -16,6 +16,7 @@
 
 import { type Mutation, runBreaks } from './breaks.ts'
 import { ATTACHMENT_MUTATIONS } from './mutations-attachments.ts'
+import { BODY_MUTATIONS } from './mutations-body.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { YOUR_TURN_MUTATIONS } from './mutations-your-turn.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
@@ -212,21 +213,19 @@ const MUTATIONS: Mutation[] = [
     name: 'a body is fetched again every time the conversation opens',
     file: core('sync.rs'),
     find: [
-      '            Ok(body) => {',
       '                self.commit(|world, tx, _| {',
       '                    put_message(',
       '                        world,',
       '                        tx,',
       '                        MessageRecord {',
       '                            body: Some(body),',
+      '                            reading,',
       '                            ..current',
       '                        },',
       '                    );',
       '                });',
-      '            }',
     ].join('\n'),
-    replace:
-      '            Ok(body) => {\n                drop((body, current));\n                self.commit(|_, _, _| {});\n            }',
+    replace: '                drop((body, reading, current));\n                self.commit(|_, _, _| {});',
     scenarios: 'opened, once',
   },
   {
@@ -340,7 +339,7 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'an open conversation shows a body loading after the fetch failed',
     file: core('live_view.rs'),
-    find: 'touched || loading_changed',
+    find: 'touched || outside_changed',
     replace: 'touched',
     scenarios: 'cannot load offline',
   },
@@ -429,4 +428,5 @@ await runBreaks([
   ...POSITION_MUTATIONS,
   ...SCHEDULE_MUTATIONS,
   ...NETWORK_MUTATIONS,
+  ...BODY_MUTATIONS,
 ])

@@ -60,7 +60,15 @@ export type SeedMessage = {
   messageId?: string
   /** Keys of earlier messages this one answers, oldest first. */
   replyTo?: string[]
-  headers?: { listUnsubscribe?: boolean; listId?: boolean; precedence?: string; autoSubmitted?: string }
+  headers?: {
+    /** List-Unsubscribe: true for a stock mailto target, or the value as written, for example "<https://list.example/u>". */
+    listUnsubscribe?: boolean | string
+    /** List-Unsubscribe-Post's value, for example "List-Unsubscribe=One-Click". */
+    listUnsubscribePost?: string
+    listId?: boolean
+    precedence?: string
+    autoSubmitted?: string
+  }
   /** The provider's own bulk verdict. Only the labels dialect reports it. Defaults to false. */
   bulk?: boolean
   /** Its attachments: a number of placeholder files, or files as named. Defaults to 0. */

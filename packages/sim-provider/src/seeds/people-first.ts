@@ -190,8 +190,11 @@ const automated = (index: number, sentAt: string): SeedMessage => {
 
 /**
  * An HTML newsletter that tries what hostile mail tries: a script, an inline handler, a
- * tracking pixel, a remote stylesheet, a remote font and a link to a remote page. The `probe` paragraph keeps its
- * text only if none of it ran, and the dev host's UI check reads it.
+ * tracking pixel, a remote stylesheet, DNS-prefetch and preconnect hints (one in a noscript, one
+ * in an iframe's srcdoc), a remote font and a link to a remote page. The `probe` paragraph keeps its
+ * text only if none of it ran, and the dev host's UI check reads it. A preconnect also hides in text
+ * around a deleted element, which must never join into a tag. The core takes the pixel out, blocks the
+ * cover image until the user shows images, and reads the one-click unsubscribe from its headers.
  */
 const htmlNewsletter: SeedMessage = {
   key: 'html-newsletter',
@@ -202,17 +205,47 @@ const htmlNewsletter: SeedMessage = {
   text: 'Five essays for the weekend. Read them in your browser.',
   html: [
     '<link rel="stylesheet" href="https://styles.longread.example/mail.css">',
+    '<link rel="dns-prefetch" href="//prefetch.longread.example"><link rel="preconnect" href="https://connect.longread.example">',
+    '<noscript><link rel="preconnect" href="https://noscript.longread.example"></noscript>',
+    '<iframe srcdoc="&lt;link rel=preconnect href=https://srcdoc.longread.example&gt;"></iframe>',
+    '<<iframe></iframe>link rel=dns-prefetch href=//joined.longread.example>',
     '<style>@font-face{font-family:Remote;src:url(https://fonts.longread.example/serif.woff2)}h1{font-family:Remote,Georgia,serif}</style>',
     '<h1>Five essays for the weekend</h1>',
+    '<img src="https://images.longread.example/cover.jpg" width="560" height="280" alt="This week\'s cover">',
     '<p id="probe">Nothing in this message ran.</p>',
     '<p>On slow mornings, small gardens and the quiet web.</p>',
     '<p><a id="out" href="https://read.longread.example/essays">Read in your browser</a></p>',
+    '<p><a href="https://longread.example/unsubscribe?u=1">Unsubscribe</a></p>',
     '<img src="https://pixel.longread.example/open.gif" width="1" height="1" alt="">',
     '<img src="missing.png" alt="" onerror="document.getElementById(\'probe\').textContent=\'A handler ran.\'">',
     "<script>document.getElementById('probe').textContent='A script ran.';top.postMessage('script ran','*')</script>",
   ].join(''),
   sentAt: ago(40 * 60_000),
   unread: true,
+  headers: {
+    listUnsubscribe: '<mailto:leave@longread.example>, <https://longread.example/unsubscribe?u=1>',
+    listUnsubscribePost: 'List-Unsubscribe=One-Click',
+    listId: true,
+    precedence: 'bulk',
+  },
+  bulk: true,
+}
+
+/**
+ * HTML the core withholds, with no plain part: its one image is an SVG feImage, which the core's
+ * rewrite does not placeholder, so the check on its output keeps the HTML from the reader. The
+ * reader says so instead of showing nothing.
+ */
+const withheldNewsletter: SeedMessage = {
+  key: 'withheld-newsletter',
+  mailboxes: ['inbox'],
+  from: { name: 'The Long Read', address: 'newsletter@longread.example' },
+  to: [ME],
+  subject: 'A layout we could not show',
+  text: '',
+  html: '<svg><filter><feImage href="https://images.longread.example/f.png"/></filter></svg><p>Hidden.</p>',
+  sentAt: ago(41 * 60_000),
+  unread: false,
   headers: { listUnsubscribe: true, listId: true, precedence: 'bulk' },
   bulk: true,
 }
@@ -238,7 +271,9 @@ export const peopleFirst: DevSeed = {
       { key: 'receipts', name: 'Receipts', role: null },
       { key: 'travel', name: 'Travel', role: null },
     ],
-    messages: [...people, ...machines, htmlNewsletter].toSorted((a, b) => a.sentAt.localeCompare(b.sentAt)),
+    messages: [...people, ...machines, htmlNewsletter, withheldNewsletter].toSorted((a, b) =>
+      a.sentAt.localeCompare(b.sentAt),
+    ),
   },
   delivery: (n) => automated(AUTOMATED + n, NOW),
   conversations: CONVERSATIONS.map((spec): PersonConversation => ({

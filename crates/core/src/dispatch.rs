@@ -73,9 +73,11 @@ impl Inner {
         }
 
         let Some((thread_ids, edit)) = Edit::of(&command) else {
-            // Set-turn was answered above. Sends belong to the outbox, and undos to undo.rs.
+            // Set-turn was answered above. Sends belong to the outbox, undos to undo.rs, and
+            // set-images to the body pipeline (body/mod.rs).
             return match &command {
                 Command::Send { draft } => self.send_draft(change, draft),
+                Command::SetImages { message_id, show } => self.set_images(change, message_id, *show),
                 Command::Undo { change: target } => self.undo(change, target),
                 _ => self.reject(change, Refusal::NotSupported),
             };
@@ -188,6 +190,7 @@ impl Inner {
             Request::Attachment { blob_id } => self.attachment(id, blob_id),
             Request::Position { filter, thread_id } => self.position(id, &filter, &thread_id),
             Request::NetworkBack => self.network_back(id),
+            Request::Image { message_id, index } => self.image(id, &message_id, index),
         }
     }
 

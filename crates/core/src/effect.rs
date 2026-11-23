@@ -38,6 +38,8 @@ pub enum Effect {
     Send(Outbound),
     /// An undo that cancelled `of` before the provider had any of it. It alters nothing itself.
     Cancel { of: ChangeId },
+    /// A choice to show or block a message's images, which never leaves the device (body/mod.rs).
+    Images { message_id: MessageId },
     /// Accepted by a core from before changes recorded what they altered. It still reaches
     /// the provider, but cannot be undone. Only stores written back then hold one.
     Unrecorded { op: Option<Op> },
@@ -49,7 +51,7 @@ impl Effect {
         match self {
             Effect::Messages(effect) => &effect.ops,
             Effect::Unrecorded { op } => op.as_slice(),
-            Effect::Turns(_) | Effect::Send(_) | Effect::Cancel { .. } => &[],
+            Effect::Turns(_) | Effect::Send(_) | Effect::Cancel { .. } | Effect::Images { .. } => &[],
         }
     }
 
@@ -68,7 +70,7 @@ impl Effect {
             Effect::Messages(effect) => effect.undoes.as_ref(),
             Effect::Turns(effect) => effect.undoes.as_ref(),
             Effect::Cancel { of } => Some(of),
-            Effect::Send(_) | Effect::Unrecorded { .. } => None,
+            Effect::Send(_) | Effect::Unrecorded { .. } | Effect::Images { .. } => None,
         }
     }
 
@@ -103,7 +105,7 @@ impl Effect {
                 .map(|altered| UndoField::Turn {
                     thread_id: altered.thread_id.clone(),
                 }),
-            Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } => None,
+            Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } | Effect::Images { .. } => None,
         }
     }
 }

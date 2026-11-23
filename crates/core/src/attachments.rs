@@ -97,6 +97,17 @@ impl Inner {
         });
     }
 
+    /// Sends bytes a request asked for as `chunk` messages of at most CHUNK_BYTES each, in
+    /// order. An attachment's and a remote image's (body/fetch.rs) go this way.
+    pub(crate) fn send_chunks(&self, id: &RequestId, data: &[u8]) {
+        for chunk in data.chunks(CHUNK_BYTES) {
+            self.send(CoreMessage::Chunk {
+                id: id.clone(),
+                data: STANDARD.encode(chunk),
+            });
+        }
+    }
+
     /// Sends what one fetch brought: the bytes in chunks, then the response.
     fn send_attachment(&self, id: RequestId, listed: RemoteAttachment, result: Outcome<AttachmentResult>) {
         let answer = match result {
@@ -107,12 +118,7 @@ impl Inner {
             // The provider listed it as smaller. What came is in memory already, but goes no further.
             Ok(AttachmentResult::Bytes(data)) if data.len() as u64 > MAX_BYTES => Err(AttachmentError::TooLarge),
             Ok(AttachmentResult::Bytes(data)) => {
-                for chunk in data.chunks(CHUNK_BYTES) {
-                    self.send(CoreMessage::Chunk {
-                        id: id.clone(),
-                        data: STANDARD.encode(chunk),
-                    });
-                }
+                self.send_chunks(&id, &data);
                 Ok(AttachmentFile {
                     name: listed.name,
                     mime: listed.mime,

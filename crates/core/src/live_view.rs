@@ -14,7 +14,7 @@ use std::collections::btree_set::Range;
 
 use chrono::TimeDelta;
 use letterbox_protocol::{
-    AccountId, Body, ChangeHolder, ChangeId, Query, Recipient, ThreadFilter, ThreadId, ThreadSummary, Time, Update,
+    AccountId, ChangeHolder, ChangeId, Query, Recipient, ThreadFilter, ThreadId, ThreadSummary, Time, Update,
 };
 
 use crate::clock::{iso, parse};
@@ -22,7 +22,7 @@ use crate::effect::Effect;
 use crate::rows::{Refresh, Rows};
 use crate::senders::{Senders, zone_of};
 use crate::suggestions::People;
-use crate::views::{Live, accounts, mailboxes, matches, missing_bodies, page, thread};
+use crate::views::{Live, Outside, accounts, mailboxes, matches, outside, page, thread};
 use crate::work::Meter;
 use crate::world::World;
 
@@ -50,8 +50,8 @@ pub enum LiveView {
     },
     Thread {
         thread_id: ThreadId,
-        /// What the last answer showed for each of its messages that has no stored body.
-        missing: Vec<Body>,
+        /// What the last answer read besides the conversation's own records.
+        outside: Outside,
     },
     Senders(Box<Senders>),
     Recipients {
@@ -178,7 +178,7 @@ impl LiveView {
             }
             Query::Thread { thread_id } => LiveView::Thread {
                 thread_id: thread_id.clone(),
-                missing: missing_bodies(world, thread_id, live),
+                outside: outside(world, thread_id, live),
             },
             Query::Senders {
                 account_id,
@@ -269,15 +269,18 @@ impl LiveView {
                 *edge = now;
                 moved
             }
-            LiveView::Thread { thread_id, missing } => {
+            LiveView::Thread {
+                thread_id,
+                outside: before,
+            } => {
                 let touched = match refresh {
                     Refresh::Everything => true,
                     Refresh::Threads { touched, .. } => touched.contains(thread_id),
                 };
-                let now = missing_bodies(world, thread_id, live);
-                let loading_changed = now != *missing;
-                *missing = now;
-                touched || loading_changed
+                let now = outside(world, thread_id, live);
+                let outside_changed = now != *before;
+                *before = now;
+                touched || outside_changed
             }
             LiveView::Senders(senders) => senders.catch_up(refresh, rows, live, meter),
             LiveView::Recipients {

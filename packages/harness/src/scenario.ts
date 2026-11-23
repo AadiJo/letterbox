@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { isDeepStrictEqual } from 'node:util'
 import type { Dialect, SimMailbox, SimProvider, Seed } from '@letterbox/sim-provider/contract'
 import { startSimProvider } from '@letterbox/sim-provider/server'
@@ -19,6 +20,7 @@ import { type GmailFake, startFakeGmail } from '@letterbox/sim-provider/gmail'
 import type { Options } from '@letterbox/client'
 import { type CoreClient, startCore, type TranscriptEntry } from './client.ts'
 import { type Edge, leaks, lifecycle, SIM_KEYCHAIN, storeLeaks } from './invariants.ts'
+import { type FakeWeb, startFakeWeb } from './web.ts'
 
 /** What one run of a scenario talks to: a sim dialect, or the fake Gmail. */
 export type Run = Dialect | 'gmail'
@@ -38,6 +40,13 @@ export type Scenario = {
   keychain(): string[]
   /** Locks or unlocks core-sim's stand-in keychain. While locked, every call to it fails, and what it held is kept for the unlock. */
   lockKeychain(locked: boolean): void
+  /** The fake web the core fetches remote images from (web.ts). */
+  web: Pick<FakeWeb, 'serve' | 'resolve' | 'hold' | 'requested'>
+  /**
+   * Runs one SQL statement on the core's store and returns its rows. Only while no core runs:
+   * a scenario uses it to make the store look like one an older core wrote.
+   */
+  sql(statement: string): Record<string, unknown>[]
   /** Fails the scenario unless `ok` is true. `what` says what should hold. */
   check(ok: boolean, what: string): void
   /** Fails the scenario unless the two values are deeply equal. */
@@ -199,6 +208,7 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
     if (entry.from === 'core') scanStore()
   }
   const backend = await startBackend(dialect, folder, record)
+  const web = await startFakeWeb()
   function scanStore() {
     for (const leak of storeLeaks(data, backend.secrets())) leftInStore.add(leak)
   }
@@ -233,7 +243,8 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
         ...(options.gmailTimeouts === undefined ? [] : ['--gmail-timeouts', options.gmailTimeouts.join(',')]),
       ]
       const clock = join(folder, `clock-${cores.length}.sock`)
-      const core = startCore(data, [...backend.args, ...flags], clock, record, newId, backend.reachable)
+      const args = [...backend.args, '--web', web.url, ...flags]
+      const core = startCore(data, args, clock, record, newId, backend.reachable)
       cores.push(core)
       return core
     },
@@ -255,6 +266,16 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
       }
       record({ from: 'scenario', note: `the keychain is ${locked ? 'locked' : 'unlocked'}` })
     },
+    web: { serve: web.serve, resolve: web.resolve, hold: web.hold, requested: web.requested },
+    sql: (statement) => {
+      record({ from: 'scenario', note: `the store runs: ${statement}` })
+      const store = new DatabaseSync(join(data, 'letterbox.sqlite'))
+      try {
+        return store.prepare(statement).all()
+      } finally {
+        store.close()
+      }
+    },
     check: (ok, what) => {
       record({ from: 'scenario', note: `${ok ? 'ok' : 'FAILED'}: ${what}` })
       if (!ok) throw new Error(what)
@@ -275,6 +296,7 @@ export async function runOne(definition: Definition, dialect: Run): Promise<Resu
   } finally {
     await Promise.all(cores.map((core) => core.stop().catch(() => undefined)))
     await backend.close()
+    await web.close()
     // Once more before the folder goes, after every core has written its last.
     scanStore()
     rmSync(folder, { recursive: true, force: true })

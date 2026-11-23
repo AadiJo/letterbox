@@ -3,7 +3,7 @@
 //!
 //!   core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>]
 //!            [--gmail-timeouts <call>,<transfer>,<stall>] [--now <time>] [--undo-window <seconds>]
-//!            [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]
+//!            [--confirm-window <seconds>] [--hold-waits] [--clock <socket>] [--web <url>]
 //!
 //! `--sim` lists the two sim provider options. `--gmail` adds the Gmail option, pointed at
 //! the fake Gmail server at `<url>` (packages/sim-provider/src/gmail). Its consent URLs must
@@ -29,6 +29,9 @@
 //! been moved by then, to stderr, and SCHEDULE_NOTED with each decision the schedule makes. Only unix
 //! has `--clock`. The harness runs scenarios there.
 //!
+//! `--web` names the harness's fake web: every remote image the core fetches goes there, over
+//! plain http, instead of to its host (see `HttpsWeb`). Without it, every fetch fails.
+//!
 //! packages/harness builds it and starts one per scenario, or more to test a restart.
 //! The real app's program is `letterbox-core` in crates/host, which owns the stdio loop
 //! both run through. Nothing here is test logic inside the core: this file only chooses
@@ -53,14 +56,15 @@ use letterbox_core::adapter::{AdapterFactory, LocalFuture};
 #[cfg(unix)]
 use letterbox_core::clock::ClockHand;
 use letterbox_core::clock::FixedEnvironment;
+use letterbox_core::web::NoWeb;
 #[cfg(unix)]
 use letterbox_gmail::{GOOGLE_TIMEOUTS, GmailConfig, Loopback, Timeouts, gmail_factory};
-use letterbox_host::{Parts, run_stdio};
+use letterbox_host::{HttpsWeb, Parts, run_stdio};
 use letterbox_sim_client::{FileKeychain, sim_adapter_factories};
 
 const USAGE: &str = "usage: core-sim --data <folder> [--sim <socket>] [--gmail <url> --gmail-redirects <folder>] \
                      [--gmail-timeouts <call>,<transfer>,<stall>] [--now <time>] [--undo-window <seconds>] \
-                     [--confirm-window <seconds>] [--hold-waits] [--clock <socket>]";
+                     [--confirm-window <seconds>] [--hold-waits] [--clock <socket>] [--web <url>]";
 
 /// The file in the data folder that stands in for the keychain. The harness reads it by
 /// this name (SIM_KEYCHAIN in packages/harness/src/invariants.ts).
@@ -104,6 +108,8 @@ struct Args {
     confirm_window: Duration,
     hold_waits: bool,
     clock: Option<PathBuf>,
+    /// The harness's fake web, which every image request goes to instead (see `HttpsWeb`).
+    web: Option<String>,
 }
 
 fn parse_args() -> Option<Args> {
@@ -117,6 +123,7 @@ fn parse_args() -> Option<Args> {
     let mut confirm_window = Duration::from_secs(60);
     let mut hold_waits = false;
     let mut clock = None;
+    let mut web = None;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         if flag == "--hold-waits" {
@@ -137,6 +144,7 @@ fn parse_args() -> Option<Args> {
             "--undo-window" => undo_window = Duration::from_secs(value.parse().ok()?),
             "--confirm-window" => confirm_window = Duration::from_secs(value.parse().ok()?),
             "--clock" => clock = Some(PathBuf::from(value)),
+            "--web" => web = Some(value),
             _ => return None,
         }
     }
@@ -154,6 +162,7 @@ fn parse_args() -> Option<Args> {
         confirm_window,
         hold_waits,
         clock,
+        web,
     })
 }
 
@@ -314,6 +323,11 @@ fn main() -> ExitCode {
             data_path: args.data,
             env: Box::new(env),
             factories,
+            // Never the real web: the harness's fake, or nothing.
+            web: match args.web {
+                Some(route) => Box::new(HttpsWeb::new(Some(route))),
+                None => Box::new(NoWeb),
+            },
             undo_window: args.undo_window,
             confirm_window: args.confirm_window,
         },

@@ -86,6 +86,10 @@ const summaryFields = {
   pending: 'boolean',
 } as const
 
+const unsubscribe = type({ method: "'one-click'", url: 'string', verified: 'boolean' })
+  .or({ method: "'mailto'", to: 'string', uri: 'string' })
+  .or({ method: "'web'", url: 'string', from: "'header' | 'body'" })
+
 const sender = type({
   id: 'string',
   accountId: 'string',
@@ -97,9 +101,24 @@ const sender = type({
   subject: 'string',
   lastMessageAt: 'string',
   days: type({ messages: 'number', unread: 'number' }).array(),
+  unsubscribe: unsubscribe.or('null'),
 })
 
-const body = type({ state: "'ready'", text: 'string', html: 'string | null', hasRemoteContent: 'boolean' })
+const images = type({
+  shown: "'blocked' | 'message'",
+  remote: 'string[]',
+  trackers: type({ host: 'string', reason: "'known-host' | 'tiny' | 'hidden' | 'beacon'" }).array(),
+})
+
+const body = type({
+  state: "'ready'",
+  text: 'string',
+  html: 'string | null',
+  htmlWithheld: 'boolean',
+  images,
+  quote: type({ text: 'number | null', html: 'number | null', inConversation: 'boolean' }).or('null'),
+  preview: 'string',
+})
   .or({ state: "'loading'" })
   .or({ state: "'unavailable'", reason: "'offline' | 'too-large' | 'gone'" })
 
@@ -115,6 +134,7 @@ const message = type({
   sentAt: 'string',
   unread: 'boolean',
   body,
+  unsubscribe: unsubscribe.or('null'),
   attachments: type({ blobId: 'string', name: 'string', mime: 'string', size: 'number', inline: 'boolean' }).array(),
   delivery: delivery.or('null'),
 })
@@ -152,6 +172,8 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
   .or({ method: "'position'", ok: 'false', error: 'never' })
   .or({ method: "'network-back'", ok: 'true', result: { '[string]': 'never' } })
   .or({ method: "'network-back'", ok: 'false', error: 'never' })
+  .or({ method: "'image'", ok: 'true', result: { mime: 'string', size: 'number' } })
+  .or({ method: "'image'", ok: 'false', error: "'gone' | 'blocked' | 'refused' | 'too-large' | 'unreachable'" })
 
 const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' })
   .or(type({ kind: "'update'", sub: 'string', rev: 'number' }).and(update))

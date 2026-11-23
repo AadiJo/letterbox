@@ -3,10 +3,10 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
-use crate::{ChangeId, Draft, MailboxId, ThreadId, Turn, present};
+use crate::{ChangeId, Draft, MailboxId, MessageId, ShowImages, ThreadId, Turn, present};
 
-/// A user intent. Every command acts on whole threads.
-/// Only set-turn works with read-only access, because it never leaves the device.
+/// A user intent. Every command but set-images acts on whole threads.
+/// Only set-turn and set-images work with read-only access, because they never leave the device.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
@@ -38,6 +38,13 @@ pub enum Command {
     },
     Send {
         draft: Draft,
+    },
+    /// Shows or blocks one message's remote images, and settles at once: it never leaves the
+    /// device. The message then reports `show` in `body.images.shown`, and no other message
+    /// changes. Refused `not-supported` for an undo.
+    SetImages {
+        message_id: MessageId,
+        show: ShowImages,
     },
     /// Takes back one change, exactly. A change the provider has none of is cancelled: it
     /// never goes out, it settles `undone`, and the undo settles `done`. A change the provider
