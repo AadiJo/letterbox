@@ -10,7 +10,9 @@
 // One break run at a time per checkout: a run holds LOCK from start to exit, since a second run
 // would put back files under the first one's break, or build over its core. A break whose core
 // build broke for a reason that is not its own source, such as the compiler being killed by the
-// out-of-memory killer, is an ERROR: the machine failed, not the break's entry.
+// out-of-memory killer, is an ERROR: the machine failed, not the break's entry. So is one whose
+// scenarios failed only on a tool outside the system, such as a browser that would not launch
+// (`ToolFailure` in scenario.ts): no check ran, so nothing was caught.
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import {
@@ -28,7 +30,7 @@ import {
 import { constants, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
-import { BUILD_BROKE, CORE_DID_NOT_BUILD } from './client.ts'
+import { BUILD_BROKE, CORE_DID_NOT_BUILD, TOOL_FAILED } from './client.ts'
 
 export type Edit = {
   file: string
@@ -309,7 +311,8 @@ function runScenarios(filter: string): Promise<{ status: number | null; stdout: 
 /** Applies one mutation, runs its scenarios, restores the files. `ok` is true when the scenarios failed, as they should. */
 /**
  * How one break went: caught, missed (its scenarios still pass, or its entry no longer fits the
- * code), or error (its core build broke for a reason that is not its source).
+ * code), or error (its core build broke for a reason that is not its source, or a tool its
+ * scenarios use, such as the browser, failed before a check could run).
  */
 type Outcome = { outcome: 'caught' | 'missed' | 'error'; why: string }
 
@@ -346,6 +349,8 @@ async function caught(mutation: Mutation): Promise<Outcome> {
         why: `the broken code does not compile. Update the entry so it builds.\n${run.stderr}`,
       }
     if (run.status === BUILD_BROKE) return { outcome: 'error', why: summary }
+    // A tool the scenario needs, such as the browser, failed before any check could run.
+    if (run.status === TOOL_FAILED) return { outcome: 'error', why: summary }
     if (run.status === 0) return { outcome: 'missed', why: `the scenarios still pass: ${summary}` }
     return { outcome: 'caught', why: summary }
   } finally {
@@ -391,7 +396,7 @@ export async function runBreaks(all: Mutation[]): Promise<never> {
   console.log(`\n${count.caught} of ${mutations.length} breaks were caught.`)
   if (count.error > 0)
     console.log(
-      `${count.error} could not be tried, because the core build broke on this machine, not in the break. Free memory or wait for other checks to end, then run them again.`,
+      `${count.error} could not be tried, because this machine failed, not the break: the core build broke, or a tool the scenarios need, such as the browser, did not start. Free memory or install what is missing, then run them again.`,
     )
   rmSync(SCRATCH, { recursive: true, force: true })
   process.exit(count.missed + count.error === 0 ? 0 : 1)

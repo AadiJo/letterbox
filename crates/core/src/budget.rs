@@ -28,8 +28,9 @@ use crate::adapter::{
 use crate::clock::FixedEnvironment;
 use crate::reconcile::{Incoming, reconcile};
 use crate::secrets::{Secrets, SecretsError};
+use crate::sync::Health;
 use crate::work::Work;
-use crate::world::{AccountRecord, ChangeOutcome, Health, MessageRecord, put_account, put_change, put_message};
+use crate::world::{AccountRecord, ChangeOutcome, MessageRecord, put_account, put_change, put_message};
 use crate::{Core, CoreOptions};
 
 /// Large enough that a view which reads every thread costs thousands of rows per commit.

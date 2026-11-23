@@ -3,10 +3,10 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
-use crate::{ChangeId, Draft, MailboxId, MessageId, ShowImages, ThreadId, Turn, present};
+use crate::{ChangeId, ColorScheme, Draft, MailboxId, MessageId, ShowImages, ThreadId, Turn, present};
 
-/// A user intent. Every command but set-images and unsubscribe acts on whole threads.
-/// Only set-turn and set-images work with read-only access, because they never leave the device.
+/// A user intent. Every command but set-images, set-colors and unsubscribe acts on whole threads.
+/// Only set-turn, set-images and set-colors work with read-only access, because they never leave the device.
 #[derive(Clone, Debug, PartialEq, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
@@ -45,6 +45,15 @@ pub enum Command {
     SetImages {
         message_id: MessageId,
         show: ShowImages,
+    },
+    /// Sets how the sender of one message has its HTML colored (`Colors::scheme`): by that
+    /// message's From address, in its account, for all of that sender's mail, new mail too. It
+    /// settles at once: it never leaves the device. Refused `unknown-target` for a message that
+    /// is not there, `not-permitted` for one whose From has no address (a provider gives an empty
+    /// one for a From it could not read), and `not-supported` for an undo.
+    SetColors {
+        message_id: MessageId,
+        scheme: ColorScheme,
     },
     /// Unsubscribes from the sender of `message_id`, by the way the message's `unsubscribe`
     /// names, once the user has confirmed: doing it tells the sender the address is read. The

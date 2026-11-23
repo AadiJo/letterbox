@@ -93,6 +93,12 @@ export const CORE_DID_NOT_BUILD = 2
  * break test reports it as the machine's failure, not the break's.
  */
 export const BUILD_BROKE = 3
+/**
+ * The exit code of a scenario run whose every failure was a tool's, outside the system the
+ * scenarios check (`ToolFailure` in scenario.ts), such as a browser that would not launch. The
+ * break test reports it as the machine's failure, not a caught break.
+ */
+export const TOOL_FAILED = 4
 
 /** How a build of the core ended. `why` says, in a few words, what broke a build that is not the source's fault. */
 export type Build = { kind: 'built' } | { kind: 'does-not-compile' } | { kind: 'broke'; why: string }

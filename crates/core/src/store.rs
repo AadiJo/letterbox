@@ -29,7 +29,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-const TABLES: [&str; 5] = ["accounts", "mailboxes", "messages", "threads", "changes"];
+const TABLES: [&str; 6] = ["accounts", "mailboxes", "messages", "threads", "changes", "senders"];
 
 /// The panic message when SQLite refuses a write. The panic ends the program, so what
 /// is on disk stays a state the core was really in (see the crate docs in lib.rs).

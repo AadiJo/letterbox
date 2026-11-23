@@ -54,7 +54,8 @@ export const readFrame = (page: Page, where: Where) =>
         loaded: image instanceof view.HTMLImageElement && image.complete && image.naturalWidth > 0,
       })),
       css: {
-        drawn: background('body [style*="var(--letterbox-"], .paper'),
+        // An image's variable (`<cssPrefix>image-i`), not a color's, which most inline styles now name.
+        drawn: background('body [style*="var(--letterbox-"][style*="-image-"], .paper'),
         decoys: background('.decoy-plain, .decoy-escaped'),
       },
       formBackground: all(doc, 'form[background]').map((form) =>

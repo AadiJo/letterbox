@@ -41,6 +41,8 @@ pub enum Effect {
     Cancel { of: ChangeId },
     /// A choice to show or block a message's images, which never leaves the device (body/mod.rs).
     Images { message_id: MessageId },
+    /// A choice of colors for the sender of a message, which never leaves the device (body/mod.rs).
+    Colors { message_id: MessageId },
     /// An unsubscribe from a sender (unsubscribe/). It names no message: it changes none, and
     /// the sender's row in Updates shows it. One that goes out as mail becomes a `Send`.
     Unsubscribe(Unsubscription),
@@ -59,6 +61,7 @@ impl Effect {
             | Effect::Send(_)
             | Effect::Cancel { .. }
             | Effect::Images { .. }
+            | Effect::Colors { .. }
             | Effect::Unsubscribe(_) => &[],
         }
     }
@@ -78,7 +81,11 @@ impl Effect {
             Effect::Messages(effect) => effect.undoes.as_ref(),
             Effect::Turns(effect) => effect.undoes.as_ref(),
             Effect::Cancel { of } => Some(of),
-            Effect::Send(_) | Effect::Unrecorded { .. } | Effect::Images { .. } | Effect::Unsubscribe(_) => None,
+            Effect::Send(_)
+            | Effect::Unrecorded { .. }
+            | Effect::Images { .. }
+            | Effect::Colors { .. }
+            | Effect::Unsubscribe(_) => None,
         }
     }
 
@@ -127,6 +134,7 @@ impl Effect {
             | Effect::Cancel { .. }
             | Effect::Unrecorded { .. }
             | Effect::Images { .. }
+            | Effect::Colors { .. }
             | Effect::Unsubscribe(_) => None,
         }
     }

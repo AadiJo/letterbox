@@ -161,6 +161,7 @@ impl<'a> Edit<'a> {
             Command::Trash { thread_ids } => Some((thread_ids, Edit::Trash)),
             Command::SetTurn { .. }
             | Command::SetImages { .. }
+            | Command::SetColors { .. }
             | Command::Send { .. }
             | Command::Unsubscribe { .. }
             | Command::Undo { .. } => None,

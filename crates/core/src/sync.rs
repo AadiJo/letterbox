@@ -9,15 +9,39 @@ use std::rc::Rc;
 
 use letterbox_protocol::{AccountId, Answer, Empty, MessageId, RequestId, Response, SyncNowError};
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::adapter::{AdapterFailure, ChangesResult};
 use crate::reconcile::{Incoming, reconcile};
 use crate::snapshot::Pulled;
-use crate::world::{AccountRecord, Health, MessageRecord, put_account, put_message};
+use crate::world::{AccountRecord, MessageRecord, put_account, put_message};
 use crate::{Inner, Linked, State};
 
 pub(crate) type PassResult = Result<(), AdapterFailure>;
+
+/// How a sync pass ended: `ok`, or the adapter failure that stopped it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Health {
+    Ok,
+    Offline,
+    NeedsSignIn,
+    ProviderError,
+}
+
+impl From<Result<(), AdapterFailure>> for Health {
+    fn from(result: Result<(), AdapterFailure>) -> Self {
+        match result {
+            Ok(()) => Health::Ok,
+            Err(AdapterFailure::Offline) => Health::Offline,
+            Err(AdapterFailure::NeedsSignIn) => Health::NeedsSignIn,
+            // The core answers page-expired itself (see snapshot.rs), so it ends a pass only
+            // when an adapter breaks rule 8 by sending it for the first page.
+            Err(AdapterFailure::ProviderError | AdapterFailure::PageExpired) => Health::ProviderError,
+        }
+    }
+}
 
 /// How an account's pulls have ended since the core started (see `note_pull`).
 #[derive(Clone, Copy, Default)]

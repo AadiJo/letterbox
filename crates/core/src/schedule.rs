@@ -45,8 +45,8 @@ use tokio::sync::oneshot;
 
 use crate::adapter::{AdapterFailure, LocalFuture};
 use crate::clock::Noted;
+use crate::sync::Health;
 use crate::sync::{Joined, PassResult, Pull};
-use crate::world::Health;
 use crate::{Inner, Linked};
 
 /// How long an account waits between pulls while they go well. A pull that finds nothing new

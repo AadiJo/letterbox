@@ -90,8 +90,9 @@ use crate::snapshot::Backfill;
 use crate::store::Store;
 pub use crate::store::{StoreError, store_id};
 use crate::suggestions::People;
+use crate::sync::Health;
 use crate::work::Meter;
-use crate::world::{AccountRecord, Health, World, load_world, put_account};
+use crate::world::{AccountRecord, World, load_world, put_account};
 
 pub struct CoreOptions {
     /// The folder that holds the store.

@@ -42,8 +42,8 @@ mod your_turn;
 pub use answer::{Answer, Empty, False, Never, True};
 pub use attachment::{AttachmentError, AttachmentFile, BlobError, BlobUrl};
 pub use body::{
-    Body, ImageError, ImageFile, Images, Quote, ShowImages, Tracker, TrackerReason, Unavailable, Unsubscribe,
-    UnsubscribeSource,
+    Body, ColorRole, ColorScheme, Colors, HtmlLook, ImageError, ImageFile, Images, Quote, ShowImages, Swatch, Tracker,
+    TrackerReason, Unavailable, Unsubscribe, UnsubscribeSource,
 };
 pub use command::{Command, TurnChoice};
 pub use holder::ChangeHolder;
