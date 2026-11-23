@@ -27,6 +27,8 @@ const SHOP = { name: 'Shop News', address: 'news@shop.example' }
  *   <link> dns-prefetch, preconnect, stylesheet    hints a browser acts on outside the image policy
  *   <meta http-equiv>                              which would turn prefetching back on
  *   a preconnect and a refresh in a <noscript>     which become markup once the noscript is unwrapped
+ *   iframe srcdoc, object, embed, portal, applet   documents of their own, which no pass reads
+ *   a preconnect in an SVG foreignObject and in a template, which lol_html reads as markup
  *   US1.LIST-MANAGE.COM., ｍａｉｌｔｒａｃｋ.io       known hosts in capitals with a trailing dot, and in full-width letters
  */
 const NEWSLETTER = [
@@ -34,6 +36,11 @@ const NEWSLETTER = [
   '<link rel="stylesheet" href="https://cdn.shop.example/mail.css">',
   '<meta http-equiv="x-dns-prefetch-control" content="on">',
   '<noscript><link rel="preconnect" href="https://cdn.shop.example"><meta http-equiv="refresh" content="0;url=https://evil.example"></noscript>',
+  '<iframe srcdoc="&lt;link rel=preconnect href=https://srcdoc.shop.example&gt;"></iframe>',
+  '<object data="https://object.shop.example/x"></object><embed src="https://embed.shop.example/x">',
+  '<portal src="https://portal.shop.example/"></portal><applet code="x"></applet>',
+  '<svg><foreignObject><link rel="preconnect" href="https://foreign.shop.example"></foreignObject></svg>',
+  '<template><link rel="preconnect" href="https://template.shop.example"></template>',
   '<base href="https://evil.example/">',
   '<table><tr><td background="https://cdn.shop.example/bg.png">',
   '<img src="https://cdn.shop.example/hero.jpg" width="600" alt="Winter sale">',
@@ -82,6 +89,7 @@ const REMOTE = [
 
 /** The html a UI shows, in every state: each remote image a placeholder that names its place in REMOTE. */
 const HTML = [
+  '<svg><foreignObject></foreignObject></svg><template></template>',
   '<table><tr><td data-letterbox-background="0">',
   '<span data-letterbox-image="1" data-letterbox-width="600">Winter sale</span>',
   '<img src="cid:logo" alt="Shop">',
@@ -130,6 +138,14 @@ const seed = (): Seed => ({
       SHOP,
       '<p>Spring is here.</p><img src="https://cdn.shop.example/spring.jpg" alt="Spring">',
       '2025-12-02T09:00:00.000Z',
+    ),
+    // A frameset, apart: lol_html refuses one beside the newsletter's noscript as ambiguous.
+    newsletter(
+      'framed',
+      'Framed',
+      SHOP,
+      '<p>Framed.</p><frameset><frame src="https://frame.shop.example/"></frameset>',
+      '2025-12-02T11:00:00.000Z',
     ),
     // Images that point inside the network: an IP literal, one in IPv6 form, a name the fake
     // web resolves to loopback, one to a public and a private address, and a redirect to one.
@@ -209,7 +225,13 @@ scenario('trackers leave an html body for good, and its remote images wait until
     { shown: 'blocked', remote: REMOTE, trackers: TRACKERS },
     'it lists the remote images and the trackers taken out, the one in a noscript and the one in a src beside a srcset too',
   )
-  t.equal(first.body.html, HTML, 'each remote image is a placeholder, and the base and every tracker are gone')
+  t.equal(
+    first.body.html,
+    HTML,
+    'each remote image is a placeholder, and the base, every embedded document, every hint and every tracker are gone',
+  )
+  const framed = bodyOf(await openThread(core, (await thread(core, 'Framed')).id))
+  t.equal(framed.body.html, '<p>Framed.</p>', 'a frameset goes too')
 
   await done(t, core, show(first.message, 'message'), 'show this message')
   t.equal(
@@ -420,6 +442,15 @@ scenario(
           sentAt: '2025-12-01T09:00:00.000Z',
         },
         {
+          key: 'spaced',
+          mailboxes: ['inbox'],
+          from: 'Jane(her work address)Doe  <jane@example.com>',
+          to: [ME],
+          subject: 'Spaced sender',
+          text: 'Hello.',
+          sentAt: '2025-12-03T09:00:00.000Z',
+        },
+        {
           key: 'quoted',
           mailboxes: ['inbox'],
           from: '"Bank <alerts@bank.example>" <news@shop.example>',
@@ -445,6 +476,12 @@ scenario(
         [null, ME],
       ],
       'nor one written inside its quoted display name',
+    )
+    const spaced = await thread(core, 'Spaced sender')
+    t.equal(
+      spaced.people[0],
+      { name: 'Jane Doe', address: 'jane@example.com', isMe: false },
+      'a comment in a display name separates words as a space does, and runs of space are one',
     )
   },
   ['gmail'],

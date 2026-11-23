@@ -227,6 +227,7 @@ export async function checkPeopleFirst(browser: Browser, url: string) {
     0,
     'no <link>, so no stylesheet, dns-prefetch or preconnect, reached the frame',
   )
+  equal(await frame.locator('iframe').count(), 0, 'no iframe, so no srcdoc document and its hints, reached the frame')
   equal(
     await frame.locator('meta[http-equiv="x-dns-prefetch-control"]').getAttribute('content'),
     'off',

@@ -50,7 +50,7 @@ use crate::effect::Effect;
 use crate::world::{ChangeOutcome, ChangeRecord, MessageRecord, World, put_change, put_message, scoped};
 
 /// The version of the rules. Raise it whenever a change to them would change a `Processed`.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// The most characters a preview holds.
 const PREVIEW: usize = 200;

@@ -52,9 +52,11 @@ fn message_ids(value: &str) -> impl Iterator<Item = String> + '_ {
         .filter(|id| !id.is_empty())
 }
 
-/// An address header's value without its comments (RFC 5322 section 3.2.2): parenthesized text
-/// outside a quoted string, which may nest and escape a character with a backslash. A comment
-/// is not part of any address, so `x@shop.example (<y@evil.example>)` is shop.example's.
+/// An address header's value with each comment (RFC 5322 section 3.2.2), parenthesized text
+/// outside a quoted string that may nest and escape a character with a backslash, made one
+/// space. A comment is not part of any address, so `x@shop.example (<y@evil.example>)` is
+/// shop.example's, and it separates words as space does (section 3.2.3), so
+/// `Jane(comment)Doe` is Jane Doe.
 fn without_comments(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let (mut depth, mut quoted, mut escaped) = (0_u32, false, false);
@@ -68,10 +70,12 @@ fn without_comments(value: &str) -> String {
             ')' if in_comment => depth -= 1,
             _ => {}
         }
-        // A quoted string is kept whole. Outside one, a comment goes with its parentheses.
+        // A quoted string is kept whole. Outside one, a comment and its parentheses become one space.
         let kept = quoted || !in_comment && depth == 0 && c != ')';
         if kept {
             out.push(c);
+        } else if in_comment && depth == 0 {
+            out.push(' ');
         }
     }
     out
@@ -104,6 +108,11 @@ fn split_addresses(value: &str) -> Vec<&str> {
         .collect()
 }
 
+/// A mailbox as written, without the space a comment or folding left in it: an address has none.
+fn mailbox(text: &str) -> String {
+    text.split_whitespace().collect()
+}
+
 /// One `Name <address>` or bare address. Encoded words (RFC 2047) are left as they are.
 fn address(text: &str) -> RemoteAddress {
     // The angle bracket that opens the address is the first one outside a quoted display name,
@@ -122,20 +131,18 @@ fn address(text: &str) -> RemoteAddress {
     let Some((name, rest)) = open.map(|index| (&text[..index], &text[index + 1..])) else {
         return RemoteAddress {
             name: None,
-            address: text.to_owned(),
+            address: mailbox(text),
         };
     };
-    let address = rest
-        .split_once('>')
-        .map_or(rest, |(address, _)| address)
-        .trim()
-        .to_owned();
+    let address = mailbox(rest.split_once('>').map_or(rest, |(address, _)| address));
     let name = name.trim();
+    // A quoted name is the sender's own text. Any other has its runs of space made one, which
+    // includes the space a comment left.
     let name = name
         .strip_prefix('"')
         .and_then(|inner| inner.strip_suffix('"'))
         .map_or_else(
-            || name.to_owned(),
+            || name.split_whitespace().collect::<Vec<_>>().join(" "),
             |inner| inner.replace("\\\"", "\"").replace("\\\\", "\\"),
         );
     RemoteAddress {

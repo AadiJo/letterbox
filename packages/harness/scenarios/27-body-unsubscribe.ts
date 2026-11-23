@@ -89,6 +89,12 @@ const seed = (): Seed => ({
     mail('quoted-link', 'ben@example.com', 'Seen this?', '2025-12-01T09:00:00.000Z', {
       text: 'Did you see this one?\n\nOn Sun, Nov 30, 2025 at 9:00 AM Lists <lists@list.example> wrote:\n> Unsubscribe: https://quoted.example/u\n',
     }),
+    // A noscript nested deeper than the core unwraps, inside a link: the frame never shows its
+    // text, so neither the preview nor the link may read it.
+    mail('deep-noscript', 'ben@example.com', 'Deep noscript', '2025-11-30T09:00:00.000Z', {
+      text: '',
+      html: `<p>Hi.</p><a href="https://deals.example/x">${'<noscript>'.repeat(5)}Unsubscribe${'</noscript>'.repeat(5)}</a>`,
+    }),
   ],
 })
 
@@ -142,6 +148,12 @@ scenario(
     )
     t.equal(await opened(core, 'Notes'), TEXT_LINK, 'in plain text, the URL on the line after "unsubscribe"')
     t.equal(await opened(core, 'Seen this?'), null, 'a link in the quoted part is not offered for the message')
+    const deep = await openWithBody(core, (await thread(core, 'Deep noscript')).id)
+    t.equal(
+      [deep.unsubscribe, deep.body.state === 'ready' && deep.body.preview],
+      [null, 'Hi.'],
+      'the text of a noscript too deep to unwrap reaches neither the preview nor the link it sits in',
+    )
     t.equal(
       rows(await core.query(query)).slice(7),
       [

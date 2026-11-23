@@ -111,9 +111,13 @@ pub struct Scan {
     block_text: String,
     first_content: Option<u32>,
     last_content: Option<u32>,
-    /// The Border candidates whose text may still be read, innermost last. Elements close
-    /// innermost first, so one that closed or holds BORDER_TEXT bytes leaves from the top.
-    reading: Vec<usize>,
+    /// The Border candidates with no text yet, innermost last. A chunk that is not blank moves
+    /// every open one to `collecting` and drops the closed ones, so a blank chunk visits none.
+    waiting: Vec<usize>,
+    /// The Border candidates with some text and less than BORDER_TEXT, innermost last. Each was
+    /// open when `waiting` last emptied, so all are older than any in `waiting`. Elements close
+    /// innermost first, so one that closed or is full leaves from the top.
+    collecting: Vec<usize>,
 }
 
 /// How much of a Border candidate's text the rules read: enough for "From:".
@@ -182,7 +186,7 @@ impl Scan {
         });
         let index = self.candidates.len() - 1;
         if kind == Kind::Border {
-            self.reading.push(index);
+            self.waiting.push(index);
         }
         Some(index)
     }
@@ -195,14 +199,17 @@ impl Scan {
         self.drop_finished();
     }
 
-    /// Takes the Border candidates off the top of `reading` that closed or hold enough text.
+    /// Takes the Border candidates that closed or hold enough text off the top of both lists.
     fn drop_finished(&mut self) {
-        while let Some(&index) = self.reading.last() {
-            let candidate = &self.candidates[index];
-            if candidate.end == u32::MAX && candidate.text.len() < BORDER_TEXT {
-                return;
+        let candidates = &self.candidates;
+        let finished = |index: &usize| {
+            let candidate = &candidates[*index];
+            candidate.end != u32::MAX || candidate.text.len() >= BORDER_TEXT
+        };
+        for list in [&mut self.waiting, &mut self.collecting] {
+            while list.last().is_some_and(finished) {
+                list.pop();
             }
-            self.reading.pop();
         }
     }
 
@@ -220,20 +227,23 @@ impl Scan {
             let kept = tail(&self.block_text, BLOCK_TEXT).len();
             self.block_text.drain(..self.block_text.len() - kept);
         }
-        // A candidate's text starts at its first character that is not space, so a chunk is
-        // trimmed once, and one of only space adds nothing to a candidate with no text yet.
-        let trimmed = text.trim_start();
-        for &index in &self.reading {
+        for &index in &self.collecting {
             let candidate = &mut self.candidates[index];
-            let open = candidate.end == u32::MAX && pos >= candidate.start.pos;
-            if !open || candidate.text.len() >= BORDER_TEXT {
-                continue;
+            if candidate.end == u32::MAX && candidate.text.len() < BORDER_TEXT {
+                candidate.text.push_str(head(text, BORDER_TEXT - candidate.text.len()));
             }
-            let piece = if candidate.text.is_empty() { trimmed } else { text };
-            if piece.is_empty() {
-                continue;
+        }
+        // A candidate's text starts at its first character that is not space, so a blank chunk
+        // leaves `waiting` alone, and any other is trimmed once for all of them.
+        let trimmed = text.trim_start();
+        if !trimmed.is_empty() {
+            for index in std::mem::take(&mut self.waiting) {
+                let candidate = &mut self.candidates[index];
+                if candidate.end == u32::MAX && pos >= candidate.start.pos {
+                    candidate.text.push_str(head(trimmed, BORDER_TEXT));
+                    self.collecting.push(index);
+                }
             }
-            candidate.text.push_str(head(piece, BORDER_TEXT - candidate.text.len()));
         }
         self.drop_finished();
     }

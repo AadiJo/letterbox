@@ -9,8 +9,12 @@
 //!      relative URL resolves against a sender's address, every `<link>`, since a browser acts
 //!      on DNS-prefetch, preconnect and prefetch hints outside the frame's image policy and a
 //!      hint would tell a sender's resolver the mail was opened, and every `<meta http-equiv>`,
-//!      which could turn prefetching back on or set a refresh. It runs on pass 0's result, so a
-//!      hint that was inside a `<noscript>` goes too. Then: trackers taken out (trackers.rs), each remote
+//!      which could turn prefetching back on or set a refresh. It drops every element that embeds
+//!      a document of its own (`iframe`, `frame`, `frameset`, `object`, `embed`, `portal`,
+//!      `applet`): no pass reads an iframe's `srcdoc`, and a browser acts on hints in it apart from
+//!      this document's opt-outs. It runs on pass 0's result, so a hint that was inside a
+//!      `<noscript>` goes too, and lol_html reads what an SVG `<foreignObject>` or a `<template>`
+//!      holds as markup, so a hint there goes the same way. Then: trackers taken out (trackers.rs), each remote
 //!      image a placeholder that names its index in `Html::remote`, any `data-letterbox-`
 //!      attribute the sender wrote dropped, and a marker comment before the element where the
 //!      quote starts, which `take_marker` turns into an offset.
@@ -75,13 +79,14 @@ pub fn process(input: &str) -> Option<Html> {
 }
 
 /// How many times pass 0 takes the tags off `<noscript>`s nested in each other. A noscript left
-/// after that goes whole in pass 2.
+/// after that goes whole, in pass 0 too.
 const NOSCRIPT_DEPTH: usize = 4;
 
 /// Pass 0: every `<noscript>` without its tags. lol_html reads a noscript's content as text, so
 /// one nested in another only becomes markup once the outer one is unwrapped: the pass runs
-/// again while a noscript is left, up to NOSCRIPT_DEPTH times. The hints in what this uncovers
-/// (`<base>`, `<link>`, `<meta http-equiv>`) go in pass 2, which reads the result as markup.
+/// again while a noscript is left, up to NOSCRIPT_DEPTH times, and drops one left after that. The
+/// hints in what this uncovers (`<base>`, `<link>`, `<meta http-equiv>`, embedded documents) go
+/// in pass 2, which reads the result as markup.
 fn unwrap(input: &str) -> Option<String> {
     let mut html = input.to_owned();
     for _ in 0..NOSCRIPT_DEPTH {
@@ -90,6 +95,15 @@ fn unwrap(input: &str) -> Option<String> {
         }
         let settings = RewriteStrSettings::new().append_element_content_handler(element!("noscript", |el| {
             el.remove_and_keep_content();
+            Ok(())
+        }));
+        html = rewrite_str(&html, settings).ok()?;
+    }
+    // A noscript still left goes whole here, before the scan, so the scan and the frame see the
+    // same content: its raw text never reaches a preview or an enclosing link's text.
+    if html.to_ascii_lowercase().contains("<noscript") {
+        let settings = RewriteStrSettings::new().append_element_content_handler(element!("noscript", |el| {
+            el.remove();
             Ok(())
         }));
         html = rewrite_str(&html, settings).ok()?;

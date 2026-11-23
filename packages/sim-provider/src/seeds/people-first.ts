@@ -190,8 +190,8 @@ const automated = (index: number, sentAt: string): SeedMessage => {
 
 /**
  * An HTML newsletter that tries what hostile mail tries: a script, an inline handler, a
- * tracking pixel, a remote stylesheet, DNS-prefetch and preconnect hints, a remote font and a
- * link to a remote page. The `probe` paragraph keeps its
+ * tracking pixel, a remote stylesheet, DNS-prefetch and preconnect hints (one in a noscript, one
+ * in an iframe's srcdoc), a remote font and a link to a remote page. The `probe` paragraph keeps its
  * text only if none of it ran, and the dev host's UI check reads it. The core takes the pixel out, blocks the
  * cover image until the user shows images, and reads the one-click unsubscribe from its headers.
  */
@@ -206,6 +206,7 @@ const htmlNewsletter: SeedMessage = {
     '<link rel="stylesheet" href="https://styles.longread.example/mail.css">',
     '<link rel="dns-prefetch" href="//prefetch.longread.example"><link rel="preconnect" href="https://connect.longread.example">',
     '<noscript><link rel="preconnect" href="https://noscript.longread.example"></noscript>',
+    '<iframe srcdoc="&lt;link rel=preconnect href=https://srcdoc.longread.example&gt;"></iframe>',
     '<style>@font-face{font-family:Remote;src:url(https://fonts.longread.example/serif.woff2)}h1{font-family:Remote,Georgia,serif}</style>',
     '<h1>Five essays for the weekend</h1>',
     '<img src="https://images.longread.example/cover.jpg" width="560" height="280" alt="This week\'s cover">',

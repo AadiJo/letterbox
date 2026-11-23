@@ -103,16 +103,38 @@ export const BODY_MUTATIONS: Mutation[] = [
   {
     name: "a sender's link stays, so its prefetch and preconnect hints reach the resolver",
     file: body('rewrite.rs'),
-    find: 'matches!(name.as_str(), "base" | "link" | "noscript")',
-    replace: 'matches!(name.as_str(), "base" | "noscript")',
+    find: '"base" | "link" | "iframe"',
+    replace: '"base" | "iframe"',
     scenarios: IMAGES,
   },
   {
     name: "a sender's base href stays, so relative images point at the sender",
     file: body('rewrite.rs'),
-    find: 'matches!(name.as_str(), "base" | "link" | "noscript")',
-    replace: 'matches!(name.as_str(), "link" | "noscript")',
+    find: '"base" | "link" | "iframe"',
+    replace: '"link" | "iframe"',
     scenarios: IMAGES,
+  },
+  {
+    name: "an iframe's srcdoc reaches the frame, hints and all",
+    file: body('rewrite.rs'),
+    find: '"base" | "link" | "iframe" | "frame"',
+    replace: '"base" | "link" | "frame"',
+    scenarios: IMAGES,
+  },
+  {
+    name: 'a noscript too deep to unwrap is read as text, into the preview and the link around it',
+    file: body('html.rs'),
+    find: '    if html.to_ascii_lowercase().contains("<noscript") {\n        let settings = RewriteStrSettings::new().append_element_content_handler(element!("noscript", |el| {\n            el.remove();',
+    replace:
+      '    if false {\n        let settings = RewriteStrSettings::new().append_element_content_handler(element!("noscript", |el| {\n            el.remove();',
+    scenarios: UNSUBSCRIBE,
+  },
+  {
+    name: 'a body read by the earlier rules reaches the frame with its old html',
+    file: body('mod.rs'),
+    find: 'const VERSION: u32 = 3;',
+    replace: 'const VERSION: u32 = 2;',
+    scenarios: PROCESSING,
   },
   {
     name: 'a blocked image shows without its alt text',
@@ -239,6 +261,13 @@ export const BODY_MUTATIONS: Mutation[] = [
     file: 'crates/gmail/src/message.rs',
     find: "            '<' if !quoted => return Some(index),",
     replace: "            '<' => return Some(index),",
+    scenarios: FROM,
+  },
+  {
+    name: 'a comment in a display name runs the words around it together',
+    file: 'crates/gmail/src/message.rs',
+    find: "        } else if in_comment && depth == 0 {\n            out.push(' ');",
+    replace: '        } else if in_comment && depth == 0 {\n            out.push_str("");',
     scenarios: FROM,
   },
   {

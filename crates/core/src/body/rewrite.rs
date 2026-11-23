@@ -135,10 +135,14 @@ pub(super) fn rewrite(input: &str, boundary: Option<u32>, marker: Option<&str>, 
         {
             el.before(marker, ContentType::Html);
         }
-        // Hints a browser acts on outside the image policy, and a noscript pass 0 left (see html.rs).
+        // Hints a browser acts on outside the image policy, and every element that embeds a
+        // document of its own, whose content (an iframe's `srcdoc`, an object's data) no pass
+        // reads and which a browser acts on apart from this document's opt-outs (see html.rs).
         let name = el.tag_name();
-        let hint =
-            matches!(name.as_str(), "base" | "link" | "noscript") || name == "meta" && el.has_attribute("http-equiv");
+        let hint = matches!(
+            name.as_str(),
+            "base" | "link" | "iframe" | "frame" | "frameset" | "object" | "embed" | "portal" | "applet"
+        ) || name == "meta" && el.has_attribute("http-equiv");
         if hint {
             el.remove();
             return Ok(());

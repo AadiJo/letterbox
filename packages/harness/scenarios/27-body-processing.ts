@@ -82,8 +82,10 @@ scenario('a stored reading survives a restart, and a rules change reprocesses on
     'after a restart the body is ready at once, from its stored reading: nothing was processed again',
   )
   await warm.stop()
+  // Version 2 is what the rules wrote before hints in noscripts and embedded documents were
+  // stripped, so a reading from then must not reach the frame.
   t.sql(
-    `update messages set record = json_set(record, '$.reading.processed.version', 1) where json_extract(record, '$.reading.processed') is not null`,
+    `update messages set record = json_set(record, '$.reading.processed.version', 2) where json_extract(record, '$.reading.processed') is not null`,
   )
 
   const changed = t.startCore()
@@ -101,8 +103,8 @@ scenario('a stored reading survives a restart, and a rules change reprocesses on
       ),
     ),
     [
-      ['First', 2],
-      ['Second', 1],
+      ['First', 3],
+      ['Second', 2],
     ],
     'only the body that opened was processed again: the other keeps its old reading until it opens',
   )
