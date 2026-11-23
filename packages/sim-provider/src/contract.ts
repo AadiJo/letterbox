@@ -73,6 +73,11 @@ export type SeedMessage = {
   bulk?: boolean
   /** Its attachments: a number of placeholder files, or files as named. Defaults to 0. */
   attachments?: number | readonly SeedAttachment[]
+  /**
+   * Signs its raw source with the sim's DKIM key (raw.ts) as `domain` and `selector`, over the
+   * headers `signs` names, lowercase, or over SIGNED_HEADERS. Unsigned when left out.
+   */
+  dkim?: { domain: string; selector: string; signs?: readonly string[] }
 }
 
 /** One attachment a seed names, as a mail client would show it. */
@@ -105,6 +110,8 @@ export type CallCounts = {
   changes: number
   body: number
   attachment: number
+  /** Whole messages fetched, as an unsubscribe's DKIM check does. */
+  raw: number
   apply: number
   send: number
   find: number

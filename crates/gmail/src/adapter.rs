@@ -5,8 +5,8 @@
 use indexmap::IndexMap;
 use letterbox_core::adapter::{
     Adapter, AdapterCapabilities, AdapterFailure, ApplyResult, AttachmentResult, BodyResult, ChangeSet, ChangesResult,
-    Cursor, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RemoteMailbox,
-    RemoteMessage, SendResult, SnapshotPage,
+    Cursor, Found, LocalFuture, MessageRef, Mutation, Outcome, Outgoing, PageToken, ProviderRefusal, RawResult,
+    RemoteMailbox, RemoteMessage, SendResult, SnapshotPage,
 };
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{Api, CallError};
 use crate::labels;
 use crate::message::{METADATA_HEADERS, attachment_part, decode_bytes, remote_body, remote_message};
-use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, PartBody, Profile};
+use crate::wire::{HistoryList, LabelList, Message, MessageList, Modify, PartBody, Profile, RawMessage};
 
 /// messages.list allows up to 500. 100 is its default.
 const PAGE_SIZE: &str = "100";
@@ -242,6 +242,17 @@ impl GmailAdapter {
         }
     }
 
+    /// The whole message, from a format=raw get on the transfer budget: it is as large as the
+    /// message, attachments and all. Only an unsubscribe asks for it (crates/core/src/unsubscribe).
+    async fn raw_of(&self, r#ref: MessageRef) -> Outcome<RawResult> {
+        let path = format!("messages/{}?format=raw", r#ref.as_str());
+        match self.api.get_transfer::<RawMessage>(&path).await {
+            Ok(message) => Ok(RawResult::Raw(decode_bytes(&message.raw))),
+            Err(error) if error.is_not_found() => Ok(RawResult::Gone),
+            Err(error) => Err(error.failure()),
+        }
+    }
+
     /// Changes one message's labels. Gmail answers 404 when it no longer has the message.
     async fn modify_one(&self, id: &str, add: &[String], remove: &[String]) -> Result<(), CallError> {
         let body = Modify {
@@ -391,6 +402,10 @@ impl Adapter for GmailAdapter {
 
     fn attachment(&self, r#ref: MessageRef, index: usize) -> LocalFuture<'_, Outcome<AttachmentResult>> {
         Box::pin(self.attachment_of(r#ref, index))
+    }
+
+    fn raw(&self, r#ref: MessageRef) -> LocalFuture<'_, Outcome<RawResult>> {
+        Box::pin(self.raw_of(r#ref))
     }
 
     fn apply(&self, mutation: Mutation) -> LocalFuture<'_, Outcome<ApplyResult>> {

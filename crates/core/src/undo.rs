@@ -2,7 +2,8 @@
 //! It trusts only what the provider confirmed: a change's answers, or a sync after them.
 //!
 //!   - A send follows its undo window (outbox.rs): inside it the send is cancelled, and after
-//!     it the undo is refused `conflict`, since mail cannot be unsent.
+//!     it the undo is refused `conflict`, since mail cannot be unsent. So does an unsubscribe
+//!     (unsubscribe/): once it has gone out, the sender knows the address is read.
 //!   - An undo of a change a pass is carrying waits until the pass settles it or lets go of
 //!     it, then is answered by the rules below, so an undo pressed while its change is on its
 //!     way reverses it once it lands.
@@ -47,6 +48,8 @@ use crate::world::{ChangeOutcome, ChangeRecord, Op, World, put_change};
 enum Answer {
     /// A send: its window decides (see `undo_send` in outbox.rs).
     Window,
+    /// An unsubscribe: its window decides too (see `undo_unsubscribe` in unsubscribe/).
+    Unsubscribe,
     Cancel,
     /// Accept these Ops as the undo, a change of its own.
     Reverse(Vec<Op>),
@@ -66,6 +69,9 @@ fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
     }
     if let Effect::Send(_) = target.effect {
         return Ok(Answer::Window);
+    }
+    if let Effect::Unsubscribe(_) = target.effect {
+        return Ok(Answer::Unsubscribe);
     }
     let failed = matches!(
         target.outcome.map(|outcome| outcome.result),
@@ -113,9 +119,11 @@ fn answer(world: &World, target: &ChangeRecord) -> Result<Answer, Refused> {
                 reversal.map_err(|gone| (Refusal::Conflict, Some(gone)))?,
             ))
         }
-        Effect::Send(_) | Effect::Cancel { .. } | Effect::Unrecorded { .. } | Effect::Images { .. } => {
-            refuse(Refusal::NotSupported)
-        }
+        Effect::Send(_)
+        | Effect::Cancel { .. }
+        | Effect::Unrecorded { .. }
+        | Effect::Images { .. }
+        | Effect::Unsubscribe(_) => refuse(Refusal::NotSupported),
     }
 }
 
@@ -186,6 +194,7 @@ impl Inner {
                 conflict,
             }),
             Ok(Answer::Window) => self.undo_send(change, record),
+            Ok(Answer::Unsubscribe) => self.undo_unsubscribe(change, record),
             Ok(Answer::Cancel) => self.cancel(change, record, |_, _| {}),
             Ok(Answer::Reverse(ops)) => self.accept_messages(change, account_id, ops, Some(target.clone())),
             Ok(Answer::ReverseTurns(sets)) => self.set_turns(change, account_id, &sets, Some(target.clone())),

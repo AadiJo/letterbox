@@ -163,6 +163,9 @@ export type AttachmentCall = { ref: MessageRef; index: number }
 /** An attachment's content in base64, or `gone` when the message or that attachment is. */
 export type AttachmentResult = { kind: 'bytes'; base64: string } | { kind: 'gone' }
 
+/** A whole message (RFC 5322) in base64, or `gone`. */
+export type RawResult = { kind: 'raw'; base64: string } | { kind: 'gone' }
+
 /** One change to push. Values are absolute: "set unread to false", never "toggle". */
 export type Mutation =
   | { kind: 'flags'; refs: MessageRef[]; unread?: boolean; flagged?: boolean }
@@ -220,6 +223,8 @@ export interface Adapter {
    * when it forwards the message, and when a UI asks for the file to open or save it.
    */
   attachment(call: AttachmentCall): Promise<Outcome<AttachmentResult>>
+  /** The whole message as the provider holds it. The core asks only when the user unsubscribes. */
+  raw(ref: MessageRef): Promise<Outcome<RawResult>>
   /** Pushes one change. The core calls this one at a time, in the order the user acted. */
   apply(mutation: Mutation): Promise<Outcome<ApplyResult>>
   /** Delivers one message (rule 10). The core calls it in the account's order, like `apply`. */

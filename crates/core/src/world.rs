@@ -22,6 +22,9 @@ use crate::effect::{Effect, effect_or_earlier};
 use crate::maps::{HashMap, IndexMap, IndexSet};
 use crate::store::{Record, Store, Transaction};
 
+mod lookups;
+use lookups::{forget_unsubscribe, index, note_unsubscribe, unindex};
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRecord {
@@ -260,6 +263,8 @@ pub struct World {
     pub messages_by_message_id: Table<HashMap<String, IndexSet<MessageId>>>,
     /// Messages by each Message-ID they reply to.
     pub messages_by_reference: Table<HashMap<String, IndexSet<MessageId>>>,
+    /// The newest unsubscribe from each sender, by `sender_key` (see unsubscribe/).
+    pub unsubscribes: Table<HashMap<String, ChangeId>>,
     touched: Touched,
 }
 
@@ -271,6 +276,9 @@ pub struct Touched {
     /// True when something every row reads changed: which accounts exist or their addresses,
     /// or which mailboxes exist. True after loading too, before the views have read anything.
     pub everything: bool,
+    /// True when an unsubscribe was stored or moved on: what Updates shows of a sender changed,
+    /// and no thread did (see `state` in unsubscribe/).
+    pub unsubscribes: bool,
 }
 
 impl World {
@@ -299,65 +307,6 @@ pub fn scoped(account_id: &AccountId, value: &str) -> String {
     format!("{account_id}\n{value}")
 }
 
-fn add_to<K: std::hash::Hash + Eq>(index: &mut HashMap<K, IndexSet<MessageId>>, key: K, id: &MessageId) {
-    index.entry(key).or_default().insert(id.clone());
-}
-
-fn drop_from<K: std::hash::Hash + Eq>(index: &mut HashMap<K, IndexSet<MessageId>>, key: &K, id: &MessageId) {
-    let Some(set) = index.get_mut(key) else { return };
-    set.shift_remove(id);
-    if set.is_empty() {
-        index.remove(key);
-    }
-}
-
-fn index(world: &mut World, record: &MessageRecord) {
-    let account = &record.account_id;
-    if let Some(r#ref) = record.provider_ref() {
-        world
-            .message_by_ref
-            .0
-            .insert(scoped(account, r#ref.as_str()), record.id.clone());
-    }
-    add_to(&mut world.messages_by_thread.0, record.thread_id.clone(), &record.id);
-    if let Some(message_id) = &record.facts.message_id {
-        add_to(
-            &mut world.messages_by_message_id.0,
-            scoped(account, message_id),
-            &record.id,
-        );
-    }
-    for reference in &record.facts.references {
-        add_to(
-            &mut world.messages_by_reference.0,
-            scoped(account, reference),
-            &record.id,
-        );
-    }
-}
-
-fn unindex(world: &mut World, record: &MessageRecord) {
-    let account = &record.account_id;
-    if let Some(r#ref) = record.provider_ref() {
-        world.message_by_ref.0.remove(&scoped(account, r#ref.as_str()));
-    }
-    drop_from(&mut world.messages_by_thread.0, &record.thread_id, &record.id);
-    if let Some(message_id) = &record.facts.message_id {
-        drop_from(
-            &mut world.messages_by_message_id.0,
-            &scoped(account, message_id),
-            &record.id,
-        );
-    }
-    for reference in &record.facts.references {
-        drop_from(
-            &mut world.messages_by_reference.0,
-            &scoped(account, reference),
-            &record.id,
-        );
-    }
-}
-
 /// Loads every record from the store and builds the lookup tables.
 pub fn load_world(store: &Store) -> World {
     fn by_id<R: Record>(store: &Store) -> Table<IndexMap<R::Id, R>>
@@ -383,6 +332,7 @@ pub fn load_world(store: &Store) -> World {
         messages_by_thread: Table(HashMap::default()),
         messages_by_message_id: Table(HashMap::default()),
         messages_by_reference: Table(HashMap::default()),
+        unsubscribes: Table(HashMap::default()),
         touched: Touched {
             everything: true,
             ..Touched::default()
@@ -397,6 +347,10 @@ pub fn load_world(store: &Store) -> World {
     let messages: Vec<MessageRecord> = world.messages.values().cloned().collect();
     for record in &messages {
         index(&mut world, record);
+    }
+    let changes: Vec<ChangeRecord> = world.changes.values().cloned().collect();
+    for change in &changes {
+        note_unsubscribe(&mut world, change);
     }
     world
 }
@@ -470,14 +424,18 @@ pub fn remove_thread(world: &mut World, tx: &Transaction<'_>, id: &ThreadId) {
 pub fn put_change(world: &mut World, tx: &Transaction<'_>, record: ChangeRecord) {
     tx.put(&record);
     let old = world.changes.get(&record.id).map(|old| &old.effect);
+    world.touched.unsubscribes |= old.and_then(Effect::unsubscribes).is_some();
+    world.touched.unsubscribes |= record.effect.unsubscribes().is_some();
     touch_effect(&mut world.touched, &world.messages, old);
     touch_effect(&mut world.touched, &world.messages, Some(&record.effect));
+    note_unsubscribe(world, &record);
     world.changes.0.insert(record.id.clone(), record);
 }
 
 pub fn remove_change(world: &mut World, tx: &Transaction<'_>, id: &ChangeId) {
     if let Some(record) = world.changes.0.shift_remove(id) {
         touch_effect(&mut world.touched, &world.messages, Some(&record.effect));
+        forget_unsubscribe(world, &record);
     }
     tx.remove::<ChangeRecord>(id);
 }

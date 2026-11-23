@@ -35,7 +35,7 @@ const turnReason = type(
   "'they-wrote-last' | 'i-wrote-last' | 'automated' | 'not-addressed-to-me' | 'asks-nothing' | 'set-by-user'",
 )
 const refusal = type(
-  "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed'",
+  "'not-permitted' | 'not-supported' | 'unknown-target' | 'conflict' | 'refused-by-provider' | 'invalid' | 'unconfirmed' | 'not-public'",
 )
 const undoField = type({ kind: "'mailbox'", messageId: 'string', mailboxId: 'string' })
   .or({ kind: "'unread'", messageId: 'string' })
@@ -90,6 +90,11 @@ const unsubscribe = type({ method: "'one-click'", url: 'string', verified: 'bool
   .or({ method: "'mailto'", to: 'string', uri: 'string' })
   .or({ method: "'web'", url: 'string', from: "'header' | 'body'" })
 
+const method = type("'one-click' | 'mailto' | 'web'")
+const unsubscribed = type({ state: "'held'", change: 'string', until: 'string', method })
+  .or({ state: "'sending'", change: 'string', method })
+  .or({ state: "'done'", change: 'string', method })
+
 const sender = type({
   id: 'string',
   accountId: 'string',
@@ -102,6 +107,7 @@ const sender = type({
   lastMessageAt: 'string',
   days: type({ messages: 'number', unread: 'number' }).array(),
   unsubscribe: unsubscribe.or('null'),
+  unsubscribed: unsubscribed.or('null'),
 })
 
 const images = type({
@@ -182,6 +188,7 @@ const coreMessage = type({ kind: "'welcome'", protocol: 'number', rev: 'number' 
   .or({ kind: "'settled'", change: 'string', rev: 'number', result: type("'done' | 'undone'").or({ failed: refusal }) })
   .or(type({ kind: "'response'", id: 'string' }).and(response))
   .or({ kind: "'open-url'", id: 'string', url: 'string' })
+  .or({ kind: "'open-url'", change: 'string', url: 'string' })
   .or({ kind: "'chunk'", id: 'string', data: 'string' })
   .or({ kind: "'your-turn'", threadId: 'string', from: person, subject: 'string' })
   .or({ kind: "'protocol-error'", reason: "'version-mismatch' | 'malformed'", detail: 'string' })

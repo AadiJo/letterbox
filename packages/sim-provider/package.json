@@ -9,7 +9,8 @@
     "./gmail": "./src/gmail/server.ts",
     "./seeds": "./src/seeds.ts",
     "./sent": "./src/sent.ts",
-    "./store": "./src/store.ts"
+    "./store": "./src/store.ts",
+    "./raw": "./src/raw.ts"
   },
   "dependencies": {
     "@letterbox/protocol": "workspace:*"

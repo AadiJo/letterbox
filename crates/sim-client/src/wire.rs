@@ -10,7 +10,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use letterbox_core::adapter::{
     AdapterFailure, ApplyResult, AttachmentResult, Cursor, MessageRef, Mutation, Outcome, Outgoing, PageToken,
-    SendResult, SignInFailure,
+    RawResult, SendResult, SignInFailure,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,8 @@ pub enum Call {
     Changes(Cursor),
     Body(MessageRef),
     Attachment(AttachmentCall),
+    /// The whole message, for an unsubscribe's DKIM check.
+    Raw(MessageRef),
     Apply(Mutation),
     Send(Outgoing),
     /// A Message-ID, without angle brackets.
@@ -38,6 +40,7 @@ impl Call {
             Call::Changes(_) => "changes",
             Call::Body(_) => "body",
             Call::Attachment(_) => "attachment",
+            Call::Raw(_) => "raw",
             Call::Apply(_) => "apply",
             Call::Send(_) => "send",
             Call::Find(_) => "find",
@@ -164,6 +167,23 @@ pub fn apply_outcome(value: Value) -> Outcome<ApplyResult> {
             failure: AdapterFailure::Offline,
         },
     )
+}
+
+/// Reads the outcome of a raw call: `{"kind": "raw", "base64": ...}` or `{"kind": "gone"}`.
+pub fn raw_outcome(value: Value) -> Outcome<RawResult> {
+    #[derive(Deserialize)]
+    #[serde(tag = "kind", rename_all = "kebab-case")]
+    enum Found {
+        Raw { base64: String },
+        Gone,
+    }
+    Ok(match outcome::<Found>(value)? {
+        Found::Raw { base64 } => {
+            let bytes = STANDARD.decode(base64);
+            RawResult::Raw(bytes.unwrap_or_else(|error| panic!("sim provider: raw message is not base64: {error}")))
+        }
+        Found::Gone => RawResult::Gone,
+    })
 }
 
 /// Reads the outcome of an attachment call: `{"kind": "bytes", "base64": ...}` or `{"kind": "gone"}`.

@@ -34,7 +34,7 @@ mod html;
 mod quote;
 mod rewrite;
 mod trackers;
-mod unsubscribe;
+pub(crate) mod unsubscribe;
 
 use std::rc::Rc;
 
