@@ -83,6 +83,12 @@ export const INVALID_HTML = [
   '<p class="kept" style="color:#0563c1;color:red #var(--x)">Blue past a hash</p>',
   '<p class="outlined" style="outline:2px solid #cc0000;outline:2px hidden #0000cc">Red outline past hidden</p>',
   '<p style="border-color:red red red red red;text-decoration:underline underline #cc0000">Five colors, two underlines</p>',
+  // Widths a browser drops: a negative one that rounds to -0, and one with no unit that is not 0.
+  '<p class="bordered" style="border:1px solid #cc0000;border:-1e-50px solid #0000cc">Red past a negative width</p>',
+  '<p class="bordered" style="border:1px solid #cc0000;border:1e-50 solid #0000cc">Red past a unitless width</p>',
+  // Rules nested in a style rule (CSS nesting), which the core leaves unread and as written.
+  '<style>.outer{span:hover{color:#ff0000} color:#0000ff}.outer-media{@media all{color:#ff0000;span{color:#ff0000}}}</style>',
+  '<p class="outer as-written">Nested rule</p><p class="outer-media as-written">Nested media</p>',
 ].join('')
 
 /**

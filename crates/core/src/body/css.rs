@@ -15,7 +15,7 @@ use std::ops::Range;
 
 use cssparser::{
     AtRuleParser, CowRcStr, DeclarationParser, ParseError, Parser, ParserInput, ParserState, QualifiedRuleParser,
-    RuleBodyItemParser, RuleBodyParser, StyleSheetParser, Token, parse_important,
+    RuleBodyItemParser, RuleBodyParser, StyleSheetParser, Token,
 };
 use letterbox_protocol::ColorRole;
 
@@ -56,23 +56,30 @@ impl Reading {
 pub fn style_attribute(css: &str) -> Vec<Declaration> {
     let mut input = ParserInput::new(css);
     let mut parser = Parser::new(&mut input);
-    let mut reader = Reader::default();
+    // A style attribute is a rule's body: an at-rule in it is no rule a browser reads.
+    let mut reader = Reader {
+        in_rule: true,
+        ..Reader::default()
+    };
     for _ in RuleBodyParser::new(&mut parser, &mut reader) {}
     reader.found
 }
 
-/// Every declaration of a style sheet, in order, each with its rule: in style rules, nested
-/// ones, and the rules inside `@media`, `@supports`, `@layer` and the other group rules.
+/// Every declaration of a style sheet, in order, each with its rule: in style rules, and in the
+/// rules inside `@media`, `@supports`, `@layer` and the other group rules, at most DEPTH blocks
+/// deep. A style rule's own nested rules and group rules (CSS nesting) are not read: they stay as
+/// written, and nothing in them is a color the pass names or a background it pairs with.
 pub fn style_sheet(css: &str) -> Vec<Declaration> {
     let mut input = ParserInput::new(css);
     let mut parser = Parser::new(&mut input);
-    let mut reader = Reader {
-        nested: true,
-        ..Reader::default()
-    };
+    let mut reader = Reader::default();
     for _ in StyleSheetParser::new(&mut parser, &mut reader) {}
     reader.found
 }
+
+/// How many blocks deep the pass reads a style sheet, group rules and style rules together. A
+/// deeper block stays as written, unread, so a hostile sheet cannot run the core's stack out.
+const DEPTH: usize = 8;
 
 /// Reads declarations for cssparser's rule and declaration parsers.
 #[derive(Default)]
@@ -81,17 +88,26 @@ struct Reader {
     /// The rule being read, and the last number given out.
     rule: usize,
     rules: usize,
-    /// True in a style sheet, whose rules hold rules of their own (CSS nesting).
-    nested: bool,
+    /// How many blocks deep the reading is.
+    depth: usize,
+    /// True inside a style rule's block, whose nested rules and group rules stay unread.
+    in_rule: bool,
 }
 
 impl Reader {
-    /// Reads a rule's block as a rule of its own.
+    /// Reads a style rule's block as a rule of its own, unless it is deeper than DEPTH.
     fn rule_block(&mut self, input: &mut Parser<'_, '_>) {
-        let outer = self.rule;
+        if self.depth >= DEPTH {
+            return;
+        }
+        let (outer, was_in_rule) = (self.rule, self.in_rule);
         self.rules += 1;
         self.rule = self.rules;
+        self.depth += 1;
+        self.in_rule = true;
         for _ in RuleBodyParser::new(input, self) {}
+        self.depth -= 1;
+        self.in_rule = was_in_rule;
         self.rule = outer;
     }
 }
@@ -173,10 +189,12 @@ impl<'i> AtRuleParser<'i> for Reader {
         _start: &ParserState,
         input: &mut Parser<'i, 't>,
     ) -> Result<(), ParseError<'i, ()>> {
-        // Other at-rules (`@font-face`, `@keyframes`, `@page`) hold descriptors and frames,
-        // which the pass leaves as written.
-        if group {
+        // Other at-rules (`@font-face`, `@keyframes`, `@page`) hold descriptors and frames, and a
+        // group rule nested in a style rule holds declarations: the pass leaves them as written.
+        if group && !self.in_rule && self.depth < DEPTH {
+            self.depth += 1;
             for _ in StyleSheetParser::new(input, self) {}
+            self.depth -= 1;
         }
         Ok(())
     }
@@ -187,8 +205,10 @@ impl<'i> RuleBodyItemParser<'i, (), ()> for Reader {
         true
     }
 
+    /// False: a rule nested in a style rule is not read. Its selector then reads as a declaration
+    /// of an unknown property, which names no color.
     fn parse_qualified(&self) -> bool {
-        self.nested
+        false
     }
 }
 
@@ -220,19 +240,24 @@ fn classify(name: &str, input: &mut Parser<'_, '_>) -> (Range<usize>, Reading) {
     let mut parts = Vec::new();
     let mut important = false;
     loop {
-        if input
-            .try_parse(|input| parse_important(input).and_then(|()| input.expect_exhausted()))
-            .is_ok()
-        {
-            important = true;
-            break;
-        }
         let at = input.position().byte_index();
         let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
             break;
         };
         let part = match token {
             Token::WhiteSpace(_) | Token::Comment(_) => continue,
+            // `!important` ends the value. Tried only at a `!`, so a long run of comments is read once.
+            Token::Delim('!')
+                if input
+                    .try_parse(|input| {
+                        input.expect_ident_matching("important")?;
+                        input.expect_exhausted()
+                    })
+                    .is_ok() =>
+            {
+                important = true;
+                break;
+            }
             Token::Hash(digits) | Token::IDHash(digits) => {
                 color::hex(&digits).map_or(Part::Other, |rgba| Part::Color(at..input.position().byte_index(), rgba))
             }
@@ -257,8 +282,14 @@ fn classify(name: &str, input: &mut Parser<'_, '_>) -> (Range<usize>, Reading) {
                 });
                 Part::Other
             }
-            Token::Number { value: 0.0, .. } => Part::Length,
-            Token::Dimension { value, unit, .. } if value >= 0.0 && length_unit(&unit) => Part::Length,
+            // A width with no unit is 0 alone, written as an integer: `1e-50` rounds to 0 as a
+            // float, and a browser drops it. A sign bit catches `-1e-50px`, which rounds to -0.
+            Token::Number {
+                int_value: Some(0),
+                value,
+                ..
+            } if !value.is_sign_negative() => Part::Length,
+            Token::Dimension { value, unit, .. } if !value.is_sign_negative() && length_unit(&unit) => Part::Length,
             _ => Part::Other,
         };
         parts.push(part);

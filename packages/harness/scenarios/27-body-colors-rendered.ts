@@ -58,8 +58,11 @@ async function paint(page: Page, { html, palette, prefix }: Painted, scheme: Sch
 }
 
 /** The computed `property` of each element `selector` finds. */
-const computed = (page: Page, selector: string, property: 'color' | 'backgroundColor' | 'outlineColor') =>
-  page.$$eval(selector, (elements, name) => elements.map((element) => getComputedStyle(element)[name]), property)
+const computed = (
+  page: Page,
+  selector: string,
+  property: 'color' | 'backgroundColor' | 'outlineColor' | 'borderTopColor',
+) => page.$$eval(selector, (elements, name) => elements.map((element) => getComputedStyle(element)[name]), property)
 
 /** A computed CSS color as its four channels, alpha from 0 to 1. */
 function rgba(css: string): readonly [number, number, number, number] {
@@ -149,6 +152,8 @@ scenario(
     const originalBlue = await computed(page, 'p.kept', 'color')
     const originalNavy = await computed(page, 'p.shorthand', 'backgroundColor')
     const originalOutline = await computed(page, 'p.outlined', 'outlineColor')
+    const originalBorders = await computed(page, 'p.bordered', 'borderTopColor')
+    const originalNested = await computed(page, 'p.outer, p.outer-media', 'color')
     await paint(page, invalid, 'dark')
     t.equal(
       [originalBlue, await computed(page, 'p.kept', 'color')],
@@ -159,6 +164,19 @@ scenario(
       [originalOutline, await computed(page, 'p.outlined', 'outlineColor')],
       [['rgb(204, 0, 0)'], ['rgb(220, 35, 25)']],
       'an outline a browser drops (hidden is no outline style) leaves the red before it in effect, in both schemes',
+    )
+    t.equal(
+      [originalBorders, await computed(page, 'p.bordered', 'borderTopColor')],
+      [Array(2).fill('rgb(204, 0, 0)'), Array(2).fill('rgb(220, 35, 25)')],
+      'a border width a browser drops (-1e-50px, or 1e-50 with no unit) leaves the red border before it in effect, in both schemes',
+    )
+    t.equal(
+      [originalNested, await computed(page, 'p.outer, p.outer-media', 'color')],
+      [
+        ['rgb(0, 0, 255)', 'rgb(255, 0, 0)'],
+        ['rgb(0, 0, 255)', 'rgb(255, 0, 0)'],
+      ],
+      'rules nested in a style rule paint as the sender wrote them, in both schemes: the core reads and wraps nothing in them',
     )
     t.equal(
       [originalNavy, await computed(page, 'p.shorthand', 'backgroundColor')],

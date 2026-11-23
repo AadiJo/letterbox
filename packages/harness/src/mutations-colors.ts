@@ -10,6 +10,7 @@ const COLORS = 'html colors are named'
 const SEEDS = "every dev seed's html"
 const RENDERED = 'the colour pass paints as a browser reads it'
 const ACCOUNTS = "a sender's choice stays in its account"
+const DEEP = 'a sheet nested 100,000 blocks deep'
 
 export const COLOR_MUTATIONS: Mutation[] = [
   {
@@ -276,8 +277,8 @@ export const COLOR_MUTATIONS: Mutation[] = [
   {
     name: '!important is not read, so text is read on the white a later plain background names, not the important navy painted',
     file: body('css.rs'),
-    find: '            important = true;\n            break;',
-    replace: '            important = false;\n            break;',
+    find: '                important = true;\n                break;',
+    replace: '                important = false;\n                break;',
     scenarios: RENDERED,
   },
   {
@@ -301,5 +302,48 @@ export const COLOR_MUTATIONS: Mutation[] = [
     find: '"media" | "supports" | "layer"',
     replace: '"supports" | "layer"',
     scenarios: COLORS,
+  },
+  {
+    name: 'a style sheet is read however deep it nests, so a deep one runs the core out of stack',
+    file: body('css.rs'),
+    find: 'const DEPTH: usize = 8;',
+    replace: 'const DEPTH: usize = usize::MAX;',
+    scenarios: DEEP,
+  },
+  {
+    name: 'every token tries for !important, which reads the comments after it again each time, so a long comment run stalls the core',
+    file: body('css.rs'),
+    find: '    loop {\n        let at = input.position().byte_index();',
+    replace:
+      '    loop {\n        let _ = input.try_parse(|input| cssparser::parse_important(input).and_then(|()| input.expect_exhausted()));\n        let at = input.position().byte_index();',
+    scenarios: DEEP,
+  },
+  {
+    name: 'rules nested in a style rule are read, so their colors and the declaration after them are wrapped',
+    file: body('css.rs'),
+    find: 'fn parse_qualified(&self) -> bool {\n        false',
+    replace: 'fn parse_qualified(&self) -> bool {\n        true',
+    scenarios: COLORS,
+  },
+  {
+    name: 'a group rule nested in a style rule is read as a sheet, so a rule in it is wrapped',
+    file: body('css.rs'),
+    find: 'if group && !self.in_rule && self.depth < DEPTH {',
+    replace: 'if group && self.depth < DEPTH {',
+    scenarios: COLORS,
+  },
+  {
+    name: 'a negative border width that rounds to -0 passes for 0, so a border a browser drops hides the one before it',
+    file: body('css.rs'),
+    find: 'if !value.is_sign_negative() && length_unit(&unit) => Part::Length,',
+    replace: 'if value >= 0.0 && length_unit(&unit) => Part::Length,',
+    scenarios: RENDERED,
+  },
+  {
+    name: 'a border width with no unit passes when it rounds to 0, so 1e-50, which a browser drops, hides the border before it',
+    file: body('css.rs'),
+    find: '                int_value: Some(0),',
+    replace: '                int_value: _,',
+    scenarios: RENDERED,
   },
 ]
