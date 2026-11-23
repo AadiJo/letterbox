@@ -20,6 +20,7 @@ import { BODY_MUTATIONS } from './mutations-body.ts'
 import { FORWARD_MUTATIONS } from './mutations-forward.ts'
 import { YOUR_TURN_MUTATIONS } from './mutations-your-turn.ts'
 import { GMAIL_MUTATIONS } from './mutations-gmail.ts'
+import { NETWORK_MUTATIONS } from './mutations-network.ts'
 import { PEOPLE_MUTATIONS } from './mutations-people.ts'
 import { POSITION_MUTATIONS } from './mutations-position.ts'
 import { SCHEDULE_MUTATIONS } from './mutations-schedule.ts'
@@ -426,5 +427,6 @@ await runBreaks([
   ...ATTACHMENT_MUTATIONS,
   ...POSITION_MUTATIONS,
   ...SCHEDULE_MUTATIONS,
+  ...NETWORK_MUTATIONS,
   ...BODY_MUTATIONS,
 ])

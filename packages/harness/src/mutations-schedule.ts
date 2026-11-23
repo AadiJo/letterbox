@@ -148,7 +148,7 @@ export const SCHEDULE_MUTATIONS: Mutation[] = [
   {
     name: 'a scheduled pull runs though a push queued ahead of it already pulled',
     file: core('schedule.rs'),
-    find: 'if core.pulls_ended_well(&id) != ticked {',
+    find: 'if core.pulls_ended(&id).well != ticked {',
     replace: 'if false {',
     scenarios: 'push queued ahead of it',
   },

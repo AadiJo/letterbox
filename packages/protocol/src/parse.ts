@@ -170,6 +170,8 @@ const response = type({ method: "'sign-in'", ok: 'true', result: { accountId: 's
   .or({ method: "'attachment'", ok: 'false', error: "'offline' | 'gone' | 'too-large'" })
   .or({ method: "'position'", ok: 'true', result: { offset: 'number | null' } })
   .or({ method: "'position'", ok: 'false', error: 'never' })
+  .or({ method: "'network-back'", ok: 'true', result: { '[string]': 'never' } })
+  .or({ method: "'network-back'", ok: 'false', error: 'never' })
   .or({ method: "'image'", ok: 'true', result: { mime: 'string', size: 'number' } })
   .or({ method: "'image'", ok: 'false', error: "'gone' | 'blocked' | 'refused' | 'too-large' | 'unreachable'" })
 

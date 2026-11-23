@@ -6,7 +6,8 @@
 //   built     the built renderer on app://. The first row paints, the core's messages go
 //             over the MessagePort and nothing opens a WebSocket, the page runs in the OS
 //             sandbox with no switch turning it off, and its policy blocks inline script.
-//             Quitting lets the idle core finish. How the sandbox is proven depends on the
+//             A stubbed wake and screen unlock tell the core once that the network may be
+//             back. Quitting lets the idle core finish. How the sandbox is proven depends on the
 //             OS: see sandboxGaps in electron-app.ts.
 //   busy      the Vite renderer, as `pnpm dev:desktop` runs it. Two reloads while main stops
 //             a busy core leave the newest page with a live core of its own. Then the app
@@ -73,6 +74,9 @@ import { type RunningSim, startSim } from './sim.ts'
 
 let failure: string | null = null
 
+/** The line main logs when the core answers its `network-back` (core.ts in the shell). */
+const heardNetwork = (line: string) => line.endsWith('the core heard that the network may be back')
+
 /** The built run: cold start, the MessagePort, the sandbox and the policy, and a clean quit. */
 const builtRun = (renderer: string) =>
   withApp('built', renderer, async (run) => {
@@ -115,6 +119,13 @@ const builtRun = (renderer: string) =>
       [],
       "built: the page's renderer runs in the OS sandbox, with no switch turning it off",
     )
+    // The machine wakes and its screen unlocks, stubbed as main's powerMonitor events. Main
+    // tells the core the network may be back, once for both (network.ts in the shell).
+    await run.app.evaluate(({ powerMonitor }) => {
+      powerMonitor.emit('resume')
+      powerMonitor.emit('unlock-screen')
+    })
+    await untilLogged(run, (lines) => lines.some(heardNetwork), 'built: the core to hear that the network may be back')
     equal(errors, [], 'built: the page logged no errors')
     equal(sockets, [], 'built: the page opened no WebSocket')
     // The policy allows no inline script, so this one never runs. Its refusal logs an error, so it goes last.
@@ -139,6 +150,7 @@ const builtRun = (renderer: string) =>
       true,
       'built: the idle core finished on its own when its input closed',
     )
+    equal(run.lines().filter(heardNetwork).length, 1, 'built: a wake and an unlock together tell the core once')
     return coldStart
   })
 
